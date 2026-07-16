@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-16
+
+### Changed
+
+- **Minimum Node is now 20** (was 18). The library is built on the Web Crypto
+  global (`globalThis.crypto`), which is only available by default on Node 19+ —
+  so 0.1.0's `engines.node: ">=18"` was wrong and `crypto.subtle`/`randomUUID`
+  threw on Node 18 (now end-of-life). Edge runtimes, Deno, Bun, and browsers are
+  unaffected. CI now runs on Node 20, 22, and 24.
+
 ## [0.1.0] - 2026-07-16
 
 ### Added

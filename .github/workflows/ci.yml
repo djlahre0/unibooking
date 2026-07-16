@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [18, 20, 22]
+        node: [20, 22, 24]
     steps:
       # Pinned to full commit SHAs (see .github/workflows/publish.yml) so a moved
       # action tag can't alter CI behavior.

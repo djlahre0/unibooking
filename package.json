@@ -1,6 +1,6 @@
 {
   "name": "unibooking",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stateless, unified CRUD for booking & calendar providers (Google, Outlook, Square, Acuity, Apple/CalDAV, and more).",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "calendar",

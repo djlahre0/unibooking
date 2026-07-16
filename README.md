@@ -7,7 +7,7 @@ Boulevard, Phorest, Zenoti, Vagaro, and any Apple/CalDAV server — behind one
 small, strongly-typed API.
 
 - **Zero runtime dependencies.** Uses global `fetch`, `AbortController`, and Web
-  Crypto. Runs on Node 18+, edge runtimes, Deno, and Bun.
+  Crypto. Runs on Node 20+, edge runtimes, Deno, and Bun.
 - **Stateless & refresh-aware.** Credentials can be a value *or* an async
   function that's called fresh per request, so token refresh is handled and no
   token is retained.
