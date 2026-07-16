@@ -1,0 +1,31 @@
+# Mindbody (public API v6)
+
+```ts
+import { mindbody } from 'unibooking/adapters/mindbody';
+const client = mindbody({ apiKey, siteId, accessToken, locationId?, timezone: 'America/Los_Angeles' });
+```
+
+**Credentials:** `{ apiKey, siteId, accessToken, locationId?, timezone?, utcOffset? }`.
+Auth is three headers: `Api-Key`, `SiteId`, and the staff/user token as
+`Authorization`. Obtain the user token via `/usertoken/issue` yourself and pass
+it in (this package never stores it — a refresh function works well here).
+
+**Capabilities:** availability, staff, services.
+
+**Gotchas**
+- ⚠️ **Site-local times.** Mindbody returns datetimes without an offset. Provide
+  the site's IANA `timezone` (e.g. `America/Los_Angeles`) so canonical instants
+  are correct year-round — it is DST-aware. A fixed `utcOffset` (e.g. `-08:00`) is
+  also accepted, but it is wrong for half the year in DST-observing zones; prefer
+  `timezone`. With neither, times are treated as UTC. (`timezone` wins if both are set.)
+- `createBooking` requires `customer.id` (ClientId), `staffId` (StaffId), and
+  `serviceId` (SessionTypeId).
+- The public API has **no appointment-cancel endpoint**, so `cancelBooking`
+  throws `UNSUPPORTED`.
+- Endpoint shapes vary by account/version — validate against a live sandbox
+  before relying on this in production.
+
+**Webhooks:** Mindbody webhooks are a separate subscription product
+(`capabilities.webhooks` is `true`). Verify signatures with
+`verifyMindbodySignature` from `unibooking/webhooks/mindbody` — it HMAC-SHA256s
+the raw request body against your webhook signature key.

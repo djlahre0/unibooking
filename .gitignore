@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+*.tgz
+# Internal planning artifacts (not shipped, not on GitHub).
+docs/superpowers/
+# Anchored to root so it doesn't swallow docs/comparison.md, which the README links to.
+/comparison.md
