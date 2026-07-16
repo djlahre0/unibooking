@@ -29,8 +29,17 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
       - run: npm ci
-      # `prepublishOnly` runs typecheck + lint + tests + build before packing,
-      # so a broken release never reaches the registry.
-      - run: npm publish --provenance --access public
+      # Publish only when package.json's version isn't already on the registry, so
+      # re-running (or re-triggering a release) is idempotent instead of failing.
+      # `prepublishOnly` runs typecheck + lint + tests + build before packing, so a
+      # broken release never reaches the registry.
+      - name: Publish to npm (skip if version already published)
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "unibooking@${VERSION}" version >/dev/null 2>&1; then
+            echo "unibooking@${VERSION} is already published — skipping."
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
