@@ -16,8 +16,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Third-party actions pinned to a full commit SHA (not a mutable tag) so a
+      # moved/compromised tag can't inject code into a job that holds NPM_TOKEN
+      # and id-token. `persist-credentials: false` drops the GITHUB_TOKEN we
+      # never use (this job only reads and publishes to npm, it doesn't push).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
