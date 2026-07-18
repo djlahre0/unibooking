@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-19
+
+### Added
+
+- Interactive **demo app** (`demo/`) — a Next.js "Try-It" explorer that exercises
+  all 16 adapters against the published package: direct client-side calls for
+  CORS-friendly providers, and a strict-allowlist `/api/call` proxy (with an SSRF
+  guard on the Apple/CalDAV URL) for the ones that block browser calls. It lives
+  in the repo only and is not shipped in the npm tarball.
+
+The library's public API, types, and runtime behavior are unchanged from 0.1.1.
+
 ## [0.1.1] - 2026-07-16
 
 ### Changed
