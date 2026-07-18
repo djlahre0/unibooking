@@ -43,6 +43,22 @@ describe('ical: all-day / missing DTEND defaults', () => {
   });
 });
 
+describe('ical: DURATION forms', () => {
+  it('derives DTEND from a timed DURATION (PT45M)', () => {
+    const ics = vcal('UID:d1', 'DTSTART:20260720T220000Z', 'DURATION:PT45M');
+    const ev = parseICS(ics)[0]!;
+    expect(ev.end).toBe('2026-07-20T22:45:00Z');
+  });
+
+  it('handles the RFC5545 week form (P1W) instead of emitting a zero-length range', () => {
+    const ics = vcal('UID:d2', 'DTSTART:20260720T220000Z', 'DURATION:P1W');
+    const ev = parseICS(ics)[0]!;
+    // 1 week = 7 days later, not end === start.
+    expect(ev.end).toBe('2026-07-27T22:00:00Z');
+    expect(ev.end).not.toBe(ev.start);
+  });
+});
+
 describe('ical: folding', () => {
   it('folds lines to <= 75 octets even for multibyte content', () => {
     const summary = '你'.repeat(100); // 100 CJK chars = 300 UTF-8 bytes

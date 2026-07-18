@@ -222,7 +222,10 @@ separate Client cart API). `mangomint` is a registered stub whose methods throw
 `UNSUPPORTED` pending a public API. See
 [docs/comparison.md](./docs/comparison.md) for the per-provider status.
 
-See the tiered access notes and per-provider setup in [docs/](./docs/).
+See the tiered access notes and per-provider setup in [docs/](./docs/). The
+calendar providers (Google, Outlook, Apple/CalDAV) were last audited against the
+current provider specs on 2026-07-19 —
+[docs/audits/2026-07-19-calendar.md](./docs/audits/2026-07-19-calendar.md).
 
 ## What this package does not do
 

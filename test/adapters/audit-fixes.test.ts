@@ -6,7 +6,9 @@ import { vagaro } from '../../src/adapters/vagaro';
 import { setmore } from '../../src/adapters/setmore';
 import { square } from '../../src/adapters/square';
 import { mindbody } from '../../src/adapters/mindbody';
+import { google } from '../../src/adapters/google';
 import { patchICS, parseICS } from '../../src/ical';
+import { codeForStatus, isRetryable } from '../../src/errors';
 
 /**
  * Regression tests for the bugs found in the July 2026 audit. Each asserts the
@@ -286,6 +288,81 @@ describe('AUDIT square: listBookings forwards customerId', () => {
       customerId: 'CUST1',
     });
     expect(customerId).toBe('CUST1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Calendar-integration audit (2026-07-19)
+// ---------------------------------------------------------------------------
+
+// A 412 Precondition Failed is how CalDAV signals an If-Match (lost-update) or
+// If-None-Match:* (create collision) failure. It must map to CONFLICT — a
+// NON-retryable code — so withRetry can't silently re-run the write and clobber
+// the concurrent edit the ETag guard was protecting against.
+describe('AUDIT calendar: 412 Precondition Failed is a non-retryable CONFLICT', () => {
+  it('codeForStatus(412) is CONFLICT and therefore not retryable', () => {
+    expect(codeForStatus(412)).toBe('CONFLICT');
+    expect(isRetryable(codeForStatus(412))).toBe(false);
+  });
+
+  it('apple updateBooking surfaces a concurrent-edit 412 as CONFLICT (was UPSTREAM)', async () => {
+    const ORIGIN = 'https://caldav.icloud.com';
+    const CAL = 'https://caldav.icloud.com/123/calendars/home/';
+    const ICS = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:evt-1',
+      'DTSTART:20260720T220000Z',
+      'DTEND:20260720T224500Z',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: (p) => p.startsWith('/123/calendars/home/evt-1.ics'), method: 'GET' })
+      .reply(200, ICS, { headers: { 'content-type': 'text/calendar', etag: '"v1"' } });
+    pool
+      .intercept({ path: (p) => p.startsWith('/123/calendars/home/evt-1.ics'), method: 'PUT' })
+      .reply(412, ''); // If-Match failed: someone else edited it first
+
+    const err = await apple({ username: 'u', appPassword: 'p', calendarUrl: CAL })
+      .updateBooking('evt-1', { title: 'Renamed' })
+      .catch((e) => e);
+    expect(err.code).toBe('CONFLICT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Google: updateBooking maps a canonical status onto the event status
+// (previously only 'cancelled' was honored; 'pending'/'confirmed' were dropped)
+// ---------------------------------------------------------------------------
+describe('AUDIT google: updateBooking maps canonical status onto event status', () => {
+  async function patchBodyFor(status: 'pending' | 'confirmed'): Promise<any> {
+    let body: any;
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'), method: 'PATCH' })
+      .reply(200, (opts) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({
+          id: 'ev1',
+          summary: 'x',
+          start: { dateTime: '2026-07-20T15:00:00-07:00' },
+          end: { dateTime: '2026-07-20T15:45:00-07:00' },
+          status: 'confirmed',
+        });
+      }, { headers: JSON_HEADERS });
+    await google({ accessToken: 't', calendarId: 'primary' }).updateBooking('ev1', { status });
+    return body;
+  }
+
+  it('sends status:tentative for a pending update', async () => {
+    expect((await patchBodyFor('pending')).status).toBe('tentative');
+  });
+
+  it('sends status:confirmed for a confirmed update', async () => {
+    expect((await patchBodyFor('confirmed')).status).toBe('confirmed');
   });
 });
 

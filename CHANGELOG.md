@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-19
+
+### Fixed
+
+- **Calendar-integration audit (2026-07-19).** Findings verified against the
+  current Google Calendar v3, Microsoft Graph v1.0, and CalDAV (RFC 4791 / RFC
+  5545) specs. See [docs/audits/2026-07-19-calendar.md](./docs/audits/2026-07-19-calendar.md).
+  - **HTTP `412 Precondition Failed` now maps to `CONFLICT`, not `UPSTREAM`.**
+    412 is how CalDAV signals an `If-Match` (lost-update) or `If-None-Match:*`
+    (create-collision) failure. Mapping it to the retryable `UPSTREAM` meant
+    `withRetry` would silently re-run the write and clobber the concurrent edit
+    the Apple/CalDAV `ETag` guard was there to protect. `CONFLICT` is
+    non-retryable, so the optimistic-concurrency guard now holds under retry.
+  - **iCalendar `DURATION` week form (`P1W`) is now parsed.** A valid RFC 5545
+    week-form duration previously failed to match, collapsing the event to a
+    zero-length range (`end === start`); it now sizes correctly (`P1W` = 7 days).
+  - **Google `updateBooking` now maps a canonical `status`.** `pending` →
+    `tentative` and `confirmed`/`completed` → `confirmed` on the event `status`
+    field (previously only `cancelled` was honored; other statuses were dropped),
+    matching how the Outlook and Apple adapters already map status on update.
+
+### Documented
+
+- Known limitations surfaced by the audit (behavior unchanged, now called out in
+  the provider docs): Apple/CalDAV `listBookings` returns recurring events as the
+  **unexpanded master** (its `DTSTART` can fall outside the queried window, and a
+  series yields one booking, not one per instance) — Google and Outlook expand
+  recurrences; Outlook `cancelBooking` with `notify`/`reason` uses Graph's
+  organizer-only `/cancel` action, which returns `400` for a non-organizer or an
+  attendee-less personal event; Google/Outlook do not notify attendees on
+  `createBooking` by default.
+
 ## [0.1.2] - 2026-07-19
 
 ### Added

@@ -23,6 +23,10 @@ describe('codeForStatus mapping', () => {
     [404, 'NOT_FOUND'],
     [410, 'NOT_FOUND'],
     [409, 'CONFLICT'],
+    // 412 Precondition Failed = an If-Match/If-None-Match failure (CalDAV
+    // optimistic-concurrency / create-only), i.e. a version conflict — and it
+    // must be non-retryable so withRetry can't clobber a concurrent edit.
+    [412, 'CONFLICT'],
     [429, 'RATE_LIMIT'],
     [500, 'UPSTREAM'],
     [502, 'UPSTREAM'],

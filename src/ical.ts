@@ -197,13 +197,20 @@ export function parseICS(text: string): VEvent[] {
   return events;
 }
 
-/** Apply an RFC5545 DURATION (e.g. `PT45M`, `PT1H`, `P1D`) to an instant. */
+/** Apply an RFC5545 DURATION (e.g. `PT45M`, `PT1H`, `P1D`, `P1W`) to an instant.
+ *  The week form (`dur-week`, e.g. `P1W`) is a standalone RFC5545 alternative —
+ *  omitting it made a valid week-long DURATION unparseable and collapse to a
+ *  zero-length range. */
 function applyDuration(start: string, dur: string): string | undefined {
-  const m = /^([+-]?)P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(dur);
+  const m = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(dur);
   if (!m) return undefined;
   const sign = m[1] === '-' ? -1 : 1;
   const mins =
-    (Number(m[2] ?? 0) * 1440 + Number(m[3] ?? 0) * 60 + Number(m[4] ?? 0) + Number(m[5] ?? 0) / 60) *
+    (Number(m[2] ?? 0) * 10_080 + // weeks → minutes (7 * 1440)
+      Number(m[3] ?? 0) * 1440 +
+      Number(m[4] ?? 0) * 60 +
+      Number(m[5] ?? 0) +
+      Number(m[6] ?? 0) / 60) *
     sign;
   const epoch = Date.parse(start) + mins * 60_000;
   return formatWithOffset(epoch, 0);

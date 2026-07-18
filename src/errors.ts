@@ -9,7 +9,7 @@ export type ErrorCode =
   | 'AUTH' // 401 — missing/invalid/expired credentials
   | 'FORBIDDEN' // 403 — authenticated but not allowed / missing scope
   | 'NOT_FOUND' // 404/410 — booking or resource does not exist
-  | 'CONFLICT' // 409 — slot already taken / duplicate / version conflict
+  | 'CONFLICT' // 409/412 — slot already taken / duplicate / version (ETag) conflict
   | 'RATE_LIMIT' // 429 — throttled; see retryAfterMs
   | 'INVALID_INPUT' // 400/422 — the request was malformed or rejected
   | 'UNSUPPORTED' // capability not offered by this provider
@@ -73,7 +73,12 @@ export function codeForStatus(status: number): ErrorCode {
     case 404:
     case 410:
       return 'NOT_FOUND';
+    // 412 Precondition Failed: a CalDAV If-Match (lost-update) or If-None-Match:*
+    // (create-collision) guard fired. It's a version conflict, and mapping it to
+    // CONFLICT (not the retryable UPSTREAM) keeps withRetry from re-running the
+    // write and clobbering the concurrent edit the ETag was protecting.
     case 409:
+    case 412:
       return 'CONFLICT';
     case 429:
       return 'RATE_LIMIT';

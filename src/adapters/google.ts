@@ -49,6 +49,23 @@ function mapStatus(s: unknown): BookingStatus {
   }
 }
 
+/** Canonical status → Google event `status` (Google only writes these three).
+ *  Returns undefined for statuses with no Google equivalent so `updateBooking`
+ *  leaves the field untouched rather than sending something invalid. */
+function toGoogleStatus(s: BookingStatus | undefined): string | undefined {
+  switch (s) {
+    case 'confirmed':
+    case 'completed':
+      return 'confirmed';
+    case 'pending':
+      return 'tentative';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return undefined;
+  }
+}
+
 function toBooking(raw: unknown): Booking {
   const e = asRecord(raw, 'google', 'event');
   const start = pointToInstant(e.start);
@@ -146,6 +163,10 @@ export const google = defineAdapter<GoogleCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'google');
       const c = await http.resolve();
+      // Google models tentative/confirmed/cancelled as the event `status`, so a
+      // canonical status update maps straight onto it (a status with no Google
+      // form leaves the field untouched).
+      const status = toGoogleStatus(input.status);
       const res = await http.request(c, {
         method: 'PATCH',
         path: `calendars/${calId(c)}/events/${encodeURIComponent(id)}`,
@@ -157,7 +178,7 @@ export const google = defineAdapter<GoogleCredentials>({
                 end: point(input.range.end, input.range.timezone),
               }
             : {}),
-          ...(input.status === 'cancelled' ? { status: 'cancelled' } : {}),
+          ...(status !== undefined ? { status } : {}),
           ...input.providerOptions,
         },
       });
