@@ -10,5 +10,6 @@ coverage/
 *.tgz
 # Internal planning artifacts (not shipped, not on GitHub).
 docs/superpowers/
+.superpowers/
 # Anchored to root so it doesn't swallow docs/comparison.md, which the README links to.
 /comparison.md
