@@ -86,6 +86,9 @@ function mapStatus(s: unknown): BookingStatus {
     case 'Confirmed':
     case 'Arrived':
       return 'confirmed';
+    case 'Requested':
+      // An unconfirmed/requested booking is pending, not unknown.
+      return 'pending';
     case 'Completed':
       return 'completed';
     case 'Cancelled':
@@ -173,8 +176,9 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           ClientId: required(input.customer?.id, 'customer.id (ClientId)'),
           StaffId: required(input.staffId, 'staffId (StaffId)'),
           SessionTypeId: required(input.serviceId, 'serviceId (SessionTypeId)'),
+          // LocationId is REQUIRED by AddAppointment (not optional).
+          LocationId: required(c.locationId, 'locationId (LocationId)'),
           StartDateTime: toSiteLocal(input.range.start, tz),
-          ...(c.locationId ? { LocationId: c.locationId } : {}),
           ...input.providerOptions,
         },
       });
@@ -199,8 +203,9 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       if (input.range) assertValidRange(input.range, 'mindbody');
       const c = await http.resolve();
       const tz = siteTz(c);
+      // Mindbody's UpdateAppointment is a POST (there is no PUT form).
       const res = await http.request(c, {
-        method: 'PUT',
+        method: 'POST',
         path: 'appointment/updateappointment',
         body: {
           AppointmentId: id,

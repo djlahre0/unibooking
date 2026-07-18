@@ -114,6 +114,13 @@ function splitName(name: string): { firstName: string; lastName?: string } {
   return { firstName: first ?? name, ...(rest.length ? { lastName: rest.join(' ') } : {}) };
 }
 
+/** CRM Contacts v4 `info.name` shape ({ first, last }) — distinct from the
+ *  booking `contactDetails` shape ({ firstName, lastName }). */
+function contactName(name: string): { first: string; last?: string } {
+  const [first, ...rest] = name.trim().split(/\s+/);
+  return { first: first ?? name, ...(rest.length ? { last: rest.join(' ') } : {}) };
+}
+
 /** Resolve a canonical customer to a Wix CRM contact id, creating one if needed. */
 async function findOrCreateContact(
   http: HttpContext<WixCredentials>,
@@ -132,7 +139,10 @@ async function findOrCreateContact(
     if (found?.id) return String(found.id);
   }
   const info = {
-    ...(customer.name ? { name: splitName(customer.name) } : {}),
+    // CRM Contacts v4 `info.name` is { first, last } — NOT { firstName, lastName }
+    // (that shape is right for booking.contactDetails, but wrong here, so the
+    // contact's name was being silently dropped).
+    ...(customer.name ? { name: contactName(customer.name) } : {}),
     ...(customer.email ? { emails: { items: [{ email: customer.email }] } } : {}),
     ...(customer.phone ? { phones: { items: [{ phone: customer.phone }] } } : {}),
   };

@@ -29,8 +29,8 @@ export type CalendlyCredentials = {
 };
 
 const BASE = 'https://api.calendly.com/';
-// TODO: verify against live API — exact Scheduling API create endpoint.
-const CREATE_PATH = 'scheduling/event_invitees';
+// The Scheduling API "Create Event Invitee" endpoint (GA Oct 2025).
+const CREATE_PATH = 'invitees';
 
 function enc(id: string): string {
   return encodeURIComponent(id);
@@ -114,7 +114,13 @@ async function getEvent(
 async function createEventInvitee(
   http: HttpContext<CalendlyCredentials>,
   c: CalendlyCredentials,
-  args: { eventType: string; start: string; customer: Customer | undefined; timezone?: string },
+  args: {
+    eventType: string;
+    start: string;
+    customer: Customer | undefined;
+    timezone?: string;
+    providerOptions?: Record<string, unknown>;
+  },
 ): Promise<Booking> {
   if (!args.customer?.email) {
     throw new UnibookingError({
@@ -128,12 +134,18 @@ async function createEventInvitee(
     path: CREATE_PATH,
     body: {
       event_type: args.eventType,
+      // Calendly wants a UTC instant that is a currently-open slot.
       start_time: args.start,
       invitee: {
         email: args.customer.email,
-        ...(args.customer.name ? { name: args.customer.name } : {}),
+        // `name` and `timezone` are required by the Create Event Invitee API and
+        // live INSIDE the invitee object (not at the top level).
+        name: args.customer.name ?? args.customer.email,
+        ...(args.timezone ? { timezone: args.timezone } : {}),
       },
-      ...(args.timezone ? { timezone: args.timezone } : {}),
+      // Event types with a location require `location: { kind, ... }` on create;
+      // pass it (and anything else the API needs) through providerOptions.
+      ...args.providerOptions,
     },
   });
   const resource = asRecord(res?.resource, 'calendly', 'create.resource');
@@ -167,6 +179,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         start: input.range.start,
         customer: input.customer,
         ...(input.range.timezone ? { timezone: input.range.timezone } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
     },
 
@@ -199,6 +212,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
           start: input.range.start,
           customer,
           ...(input.range.timezone ? { timezone: input.range.timezone } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
         await http.request(c, {
           method: 'POST',

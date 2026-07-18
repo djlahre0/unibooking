@@ -22,8 +22,11 @@ function base(c: MicrosoftBookingsCredentials): string {
 
 function toBooking(raw: unknown): Booking {
   const a = asRecord(raw, 'microsoft_bookings', 'appointment');
-  const start = graphToInstant(a.startDateTime);
-  const end = graphToInstant(a.endDateTime);
+  // Graph's bookingAppointment exposes the times as `start`/`end` (each a
+  // dateTimeTimeZone) — NOT `startDateTime`/`endDateTime`. Reading the wrong
+  // names made every read throw "missing start/end times".
+  const start = graphToInstant(a.start);
+  const end = graphToInstant(a.end);
   if (start === undefined || end === undefined) {
     throw new UnibookingError({
       provider: 'microsoft_bookings',
@@ -93,8 +96,8 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         headers: PREFER_UTC,
         body: {
           '@odata.type': '#microsoft.graph.bookingAppointment',
-          startDateTime: graphDateTime(input.range.start),
-          endDateTime: graphDateTime(input.range.end),
+          start: graphDateTime(input.range.start),
+          end: graphDateTime(input.range.end),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
           customers: customerInfo(input),
@@ -116,19 +119,22 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'microsoft_bookings');
       const c = await http.resolve();
-      const res = await http.request(c, {
+      const path = `${base(c)}/appointments/${encodeURIComponent(id)}`;
+      // Graph's appointment PATCH returns 204 No Content, so there is no body to
+      // map — issue the update, then re-GET to return the current appointment.
+      await http.request(c, {
         method: 'PATCH',
-        path: `${base(c)}/appointments/${encodeURIComponent(id)}`,
+        path,
         headers: PREFER_UTC,
         body: {
-          ...(input.range
-            ? { startDateTime: graphDateTime(input.range.start), endDateTime: graphDateTime(input.range.end) }
-            : {}),
+          ...(input.range ? { start: graphDateTime(input.range.start), end: graphDateTime(input.range.end) } : {}),
           ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...input.providerOptions,
         },
+        parse: 'none',
       });
+      const res = await http.request(c, { path, headers: PREFER_UTC });
       return toBooking(res);
     },
 

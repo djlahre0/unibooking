@@ -222,10 +222,13 @@ separate Client cart API). `mangomint` is a registered stub whose methods throw
 `UNSUPPORTED` pending a public API. See
 [docs/comparison.md](./docs/comparison.md) for the per-provider status.
 
-See the tiered access notes and per-provider setup in [docs/](./docs/). The
-calendar providers (Google, Outlook, Apple/CalDAV) were last audited against the
-current provider specs on 2026-07-19 —
-[docs/audits/2026-07-19-calendar.md](./docs/audits/2026-07-19-calendar.md).
+See the tiered access notes and per-provider setup in [docs/](./docs/). All 16
+adapters were audited against the current provider specs on 2026-07-19 —
+[calendar providers](./docs/audits/2026-07-19-calendar.md) (Google, Outlook,
+Apple/CalDAV) and [booking platforms](./docs/audits/2026-07-19-booking-providers.md)
+(Square, Microsoft Bookings, Acuity, Calendly, Wix, Mindbody, Bookeo, Zenoti, …).
+The Wix adapter is flagged as needing a live-tenant rewrite; see its
+[provider doc](./docs/providers/wix.md).
 
 ## What this package does not do
 

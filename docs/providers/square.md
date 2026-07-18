@@ -32,8 +32,17 @@ idempotency, customers.
 - `updateBooking` needs the booking `version` (optimistic concurrency). Provide
   it via `providerOptions.version` to skip an extra GET; otherwise the adapter
   fetches the current version first.
-- `listBookings` forwards `staffId` as `team_member_id`. `customerId` is not a
-  supported Square list filter and is ignored.
+- **A real `createBooking` needs a `staffId` and the service-variation version.**
+  Square's `appointment_segments` require `team_member_id`, and an appointment
+  booking needs `service_variation_version` — pass a `staffId` and inject the full
+  `appointment_segments` (with `service_variation_version`) via `providerOptions`.
+- `cancelBooking` takes **no reason** — Square's CancelBooking body carries only
+  `idempotency_key`/`booking_version`, so `options.reason`/`notify` are ignored
+  (set a seller note via `updateBooking` instead).
+- `listBookings` forwards `staffId` as `team_member_id` and `customerId` as
+  `customer_id` (both are supported Square list filters).
+- The adapter pins `Square-Version: 2025-10-16` (valid and non-deprecated, though
+  not the latest `2026-07-15`). It's a fixed header in the adapter.
 
 **Webhooks:** `unibooking/webhooks/square → verifySquareSignature` (HMAC-SHA256
 over `notificationUrl + rawBody`, header `x-square-hmacsha256-signature`).

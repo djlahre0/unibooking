@@ -112,7 +112,11 @@ export const acuity = defineAdapter<AcuityCredentials>({
       const res = await http.request(c, {
         method: 'POST',
         path: 'appointments',
-        query: { admin: true },
+        // `admin=true` bypasses availability checks and unlocks `notes`, but Acuity
+        // REQUIRES a valid `calendarID` in admin mode — so only enable it when a
+        // staffId (calendarID) is present; otherwise Acuity picks the calendar and
+        // validates availability normally.
+        query: input.staffId ? { admin: true } : {},
         body: {
           appointmentTypeID: requireService(input.serviceId),
           datetime: input.range.start,
@@ -155,6 +159,9 @@ export const acuity = defineAdapter<AcuityCredentials>({
       const res = await http.request(c, {
         method: 'PUT',
         path: `appointments/${encodeURIComponent(id)}`,
+        // `notes` may only be written by an admin — without admin=true Acuity
+        // silently drops it.
+        query: { admin: true },
         body: {
           ...(input.title !== undefined ? { notes: input.title } : {}),
           ...input.providerOptions,

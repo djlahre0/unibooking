@@ -6,6 +6,56 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-19
+
+### Fixed
+
+- **Full provider audit (2026-07-19)** — all 16 adapters reviewed and verified
+  against each vendor's *current* API docs (Square, Microsoft Graph/Bookings,
+  Acuity, Calendly, Wix, Mindbody, Bookeo, Zenoti, and the gated tier). Report:
+  [docs/audits/2026-07-19-booking-providers.md](./docs/audits/2026-07-19-booking-providers.md).
+  - **Microsoft Bookings was broken on every read/write.** The `bookingAppointment`
+    resource carries its times as `start`/`end` (`dateTimeTimeZone`), but the
+    adapter read and sent `startDateTime`/`endDateTime` — so every
+    `getBooking`/`listBookings` threw "appointment is missing start/end times" and
+    create/update sent fields Graph ignores. Now uses `start`/`end`. `updateBooking`
+    also handles the `204 No Content` Graph returns on PATCH by re-GETting the
+    appointment (it was trying to parse an empty body).
+  - **Mindbody `updateBooking` used `PUT`; the v6 method is `POST`** on
+    `appointment/updateappointment`. Also, `LocationId` is **required** by
+    `AddAppointment` (was only sent when set) — `createBooking` now rejects a
+    missing `locationId` client-side, and the `Requested` status maps to `pending`
+    (was `unknown`).
+  - **Calendly `createBooking` posted to a non-existent path.** The Scheduling API
+    "Create Event Invitee" is `POST /invitees`, and `name`/`timezone` belong
+    *inside* the `invitee` object. Fixed the path and placement; `providerOptions`
+    now flows into the create body so event types that require a `location` can
+    supply one.
+  - **Acuity silently dropped `notes` on non-reschedule updates** — Acuity only
+    lets an admin write `notes`, so that PUT now sends `admin=true`. And
+    `createBooking` sends `admin=true` **only** when a `staffId` (calendarID) is
+    present, because Acuity rejects admin-mode creates without a calendarID.
+  - **Square `cancelBooking` sent an invalid `seller_note`** field (not part of
+    CancelBooking) — removed. Square's cancel endpoint carries no reason field.
+  - **Wix created CRM contacts with the wrong name shape** — Contacts v4
+    `info.name` is `{ first, last }`, not `{ firstName, lastName }`, so a new
+    contact's name was silently dropped.
+
+### Documented
+
+- Confirmed-against-docs limitations now called out in the provider docs + report:
+  **the Wix adapter's `getBooking`/`listBookings`/`searchAvailability` use
+  endpoints/shapes that don't match the current Bookings V2 API** (Reader V2 has
+  no GET-by-id; availability is Time Slots V2 with local-time fields), and
+  create/reschedule/cancel omit the required `totalParticipants`/`revision` — it
+  needs a live-tenant rewrite; **Square** appointment creates require a `staffId`
+  (team_member_id) plus a service-variation version; **Bookeo** creates require
+  `participants` (and `eventId` for fixed products) via `providerOptions`;
+  **Acuity** `listBookings` truncates at `max` (no cursor) and availability is
+  single-date. **Zenoti**, **Vagaro** (read-only), and the **Mangomint** stub were
+  verified correct; **Boulevard**/**Phorest**/**Setmore** carry small unverified
+  notes (mutation casing, cancel-param shape, and API host, respectively).
+
 ## [0.1.3] - 2026-07-19
 
 ### Fixed

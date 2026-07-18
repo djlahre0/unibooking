@@ -18,12 +18,16 @@ it in (this package never stores it — a refresh function works well here).
   are correct year-round — it is DST-aware. A fixed `utcOffset` (e.g. `-08:00`) is
   also accepted, but it is wrong for half the year in DST-observing zones; prefer
   `timezone`. With neither, times are treated as UTC. (`timezone` wins if both are set.)
-- `createBooking` requires `customer.id` (ClientId), `staffId` (StaffId), and
-  `serviceId` (SessionTypeId).
+- `createBooking` requires `customer.id` (ClientId), `staffId` (StaffId),
+  `serviceId` (SessionTypeId), **and `locationId` (LocationId is required by
+  Mindbody's `AddAppointment`)** — a missing `locationId` is rejected client-side.
+- `updateBooking` calls `POST appointment/updateappointment` (Mindbody's
+  UpdateAppointment is a POST, not a PUT).
 - The public API has **no appointment-cancel endpoint**, so `cancelBooking`
-  throws `UNSUPPORTED`.
-- Endpoint shapes vary by account/version — validate against a live sandbox
-  before relying on this in production.
+  throws `UNSUPPORTED` (cancellation is observable only via the
+  `appointmentBooking.cancelled` webhook).
+- Note: since Sep 2025, `AddAppointment` deduplicates rapid duplicate creates
+  server-side; validate endpoint shapes against a live sandbox before production.
 
 **Webhooks:** Mindbody webhooks are a separate subscription product
 (`capabilities.webhooks` is `true`). Verify signatures with

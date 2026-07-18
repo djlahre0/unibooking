@@ -20,7 +20,8 @@ const APPTS_PATH = '/public/v6/appointment/staffappointments';
 runConformance({
   provider: 'mindbody',
   origin: 'https://api.mindbodyonline.com',
-  makeClient: () => mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' }),
+  makeClient: () =>
+    mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', locationId: 'L1', utcOffset: '-08:00' }),
   errorProbe: { method: 'GET', path: APPTS_PATH, run: (c) => c.getBooking('missing') },
   cases: [
     {
@@ -51,8 +52,8 @@ runConformance({
       run: (c) => c.getBooking('101'),
     },
     {
-      name: 'updateBooking reschedules',
-      method: 'PUT',
+      name: 'updateBooking reschedules (POST, not PUT)',
+      method: 'POST',
       path: '/public/v6/appointment/updateappointment',
       reply: { Appointment: APPT },
       run: (c) => c.updateBooking('101', { range: RANGE }),
@@ -100,15 +101,34 @@ describe('mindbody: status mapping + site-local query window', () => {
     await agent.close();
   });
 
-  it('maps Completed to the completed status (not confirmed)', async () => {
+  it('maps Completed to completed and Requested to pending (not unknown)', async () => {
     const pool = agent.get('https://api.mindbodyonline.com');
     pool
       .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
       .reply(200, JSON.stringify({ Appointments: [{ ...APPT, Status: 'Completed' }] }), {
         headers: { 'content-type': 'application/json' },
       });
+    pool
+      .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
+      .reply(200, JSON.stringify({ Appointments: [{ ...APPT, Status: 'Requested' }] }), {
+        headers: { 'content-type': 'application/json' },
+      });
     const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' });
     expect((await client.getBooking('101')).status).toBe('completed');
+    expect((await client.getBooking('101')).status).toBe('pending');
+  });
+
+  it('createBooking without a locationId is rejected (LocationId is required)', async () => {
+    const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' });
+    await expect(
+      client.createBooking({
+        title: 'x',
+        range: RANGE,
+        customer: { id: 'C1' },
+        staffId: '5',
+        serviceId: '9',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('sends the list window as site-local (offset-stripped) dates', async () => {

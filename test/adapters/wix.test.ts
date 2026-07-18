@@ -151,6 +151,29 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     agent.assertNoPendingInterceptors();
   });
 
+  it('creates a CRM contact with the {first,last} name shape (not firstName/lastName)', async () => {
+    const pool = agent.get(ORIGIN);
+    let createBody: any;
+    // No existing contact → falls through to create.
+    pool
+      .intercept({ path: '/contacts/v4/contacts/query', method: 'POST' })
+      .reply(200, JSON.stringify({ contacts: [] }), { headers: { 'content-type': 'application/json' } });
+    pool
+      .intercept({ path: '/contacts/v4/contacts', method: 'POST' })
+      .reply(200, (opts) => {
+        createBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ contact: { id: 'CT_NEW' } });
+      }, { headers: { 'content-type': 'application/json' } });
+
+    const client = wix({ accessToken: 't' });
+    const id = await client.customers!.findOrCreate({ name: 'Jane Doe', email: 'jane@example.com' });
+
+    expect(id).toBe('CT_NEW');
+    expect(createBody.info.name).toEqual({ first: 'Jane', last: 'Doe' });
+    expect(createBody.info.name.firstName).toBeUndefined();
+    agent.assertNoPendingInterceptors();
+  });
+
   it('updateBooking with only a status of cancelled routes to cancel', async () => {
     const pool = agent.get(ORIGIN);
     let canceled = false;

@@ -18,9 +18,11 @@ find-or-create (invitees aren't a CRUD store).
 
 ## Notes
 - **Booking-create needs a paid plan.** `createBooking` uses the Scheduling API's
-  "Create Event Invitee" (launched Oct 2025); it requires a `serviceId` (the
-  event-type URI) and an invitee email. Before Oct 2025 Calendly was read+cancel
-  only.
+  "Create Event Invitee" (`POST /invitees`, GA Oct 2025); it requires a `serviceId`
+  (the event-type URI) and an invitee email (a `name` and `timezone` are also
+  required by the API and are sent *inside* the invitee). Before Oct 2025 Calendly
+  was read+cancel only. **Event types that specify a location** require a
+  `location: { kind, ... }` on create — pass it through `providerOptions`.
 - **No reschedule endpoint.** `updateBooking` with a new `range` does
   **cancel+rebook**: it reads the event's type and invitee, books the new time
   via the Scheduling API, then cancels the original. `updateBooking` with
@@ -29,9 +31,10 @@ find-or-create (invitees aren't a CRUD store).
   size each slot (otherwise `INVALID_INPUT`).
 - Ids are the trailing segment of a Calendly resource URI; the adapter accepts a
   bare id or a full URI.
-- **Not yet verified against a live tenant.** The Scheduling API create path
-  (`CREATE_PATH`) and response shape are docs-derived and marked
-  `TODO: verify against live API`.
+- The create path (`POST /invitees`) and request body were corrected in the
+  2026-07-19 audit to match the current Scheduling API docs; the exact create
+  *response* wrapper is still best confirmed against a live paid-plan call (the
+  adapter falls back to fetching the event by URI, so this is low-risk).
 - **Webhooks:** `unibooking/webhooks/calendly → verifyCalendlySignature`
   (HMAC-SHA256 hex over `"<t>.<rawBody>"`, header `Calendly-Webhook-Signature:
   t=..,v1=..`). The Webhook API requires a paid plan.

@@ -22,7 +22,7 @@ function event(overrides: Record<string, unknown> = {}) {
 }
 
 const RANGE = { start: START, end: '2026-07-20T22:30:00Z' };
-const CREATE_PATH = '/scheduling/event_invitees';
+const CREATE_PATH = '/invitees';
 
 runConformance({
   provider: 'calendly',
@@ -165,6 +165,30 @@ describe('calendly: cancel+rebook and input requirements', () => {
     expect(createBody.invitee.email).toBe('jane@example.com');
     expect(canceled).toBe(true);
     agent.assertNoPendingInterceptors();
+  });
+
+  it('createBooking posts to /invitees with name + timezone INSIDE the invitee object', async () => {
+    const pool = agent.get(ORIGIN);
+    let createBody: any;
+    pool.intercept({ path: CREATE_PATH, method: 'POST' }).reply(
+      200,
+      (opts) => {
+        createBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ resource: event() });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+    const client = calendly({ token: 't', user: USER });
+    await client.createBooking({
+      title: 'Consultation',
+      range: { ...RANGE, timezone: 'America/New_York' },
+      serviceId: 'https://api.calendly.com/event_types/SVC1',
+      customer: { email: 'jane@example.com', name: 'Jane Doe' },
+    });
+    // timezone + name live inside `invitee`, not at the top level.
+    expect(createBody.invitee.timezone).toBe('America/New_York');
+    expect(createBody.invitee.name).toBe('Jane Doe');
+    expect(createBody.timezone).toBeUndefined();
   });
 
   it('createBooking without a serviceId (event_type) is rejected', async () => {
