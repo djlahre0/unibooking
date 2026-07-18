@@ -1,0 +1,933 @@
+'use client';
+
+import { useState, useCallback } from 'react';
+import {
+  type ActionResult,
+  getCapabilities,
+  callCreateBooking,
+  callGetBooking,
+  callUpdateBooking,
+  callCancelBooking,
+  callListBookings,
+  callSearchAvailability,
+  callFindOrCreateCustomer,
+  demoRegistry,
+  demoWithRetry,
+  demoCollectAll,
+  demoListAll,
+  demoErrorHelpers,
+  verifyWebhook,
+} from '../lib/call';
+import { PROVIDER_META as PROVIDERS, isDirect } from '../lib/providers';
+
+/* ═══════════════════════════════════════════════════════════
+   Webhook field metadata per provider
+   ═══════════════════════════════════════════════════════════ */
+const WEBHOOK_PROVIDERS: Record<
+  string,
+  { label: string; fields: { key: string; label: string; placeholder: string; multiline?: boolean }[] }
+> = {
+  square: {
+    label: 'Square',
+    fields: [
+      { key: 'signatureKey', label: 'Signature Key', placeholder: 'Webhook signature key' },
+      { key: 'notificationUrl', label: 'Notification URL', placeholder: 'https://...' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"event_type":"..."}', multiline: true },
+      { key: 'signature', label: 'Signature Header', placeholder: 'x-square-hmacsha256-signature value' },
+    ],
+  },
+  acuity: {
+    label: 'Acuity',
+    fields: [
+      { key: 'apiKey', label: 'API Key', placeholder: 'Your API key (HMAC secret)' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"id":123,...}', multiline: true },
+      { key: 'signature', label: 'Signature', placeholder: 'X-Acuity-Signature value' },
+    ],
+  },
+  calendly: {
+    label: 'Calendly',
+    fields: [
+      { key: 'signingKey', label: 'Signing Key', placeholder: 'Webhook signing key' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"event":"..."}', multiline: true },
+      { key: 'signatureHeader', label: 'Signature Header', placeholder: 't=...,v1=...' },
+    ],
+  },
+  google: {
+    label: 'Google Calendar',
+    fields: [
+      { key: 'expectedToken', label: 'Expected Token', placeholder: 'Token you set on the watch' },
+      { key: 'channelToken', label: 'Channel Token', placeholder: 'X-Goog-Channel-Token value' },
+    ],
+  },
+  mindbody: {
+    label: 'Mindbody',
+    fields: [
+      { key: 'signatureKey', label: 'Signature Key', placeholder: 'Webhook signature key' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"event":...}', multiline: true },
+      { key: 'signature', label: 'Signature', placeholder: 'X-Mindbody-Signature value' },
+    ],
+  },
+  outlook: {
+    label: 'Outlook / Graph',
+    fields: [
+      { key: 'mode', label: 'Mode', placeholder: 'validation | clientState' },
+      { key: 'queryString', label: 'Query String (validation)', placeholder: 'validationToken=abc' },
+      { key: 'payload', label: 'Payload JSON (clientState)', placeholder: '{"value":[...]}', multiline: true },
+      { key: 'expectedClientState', label: 'Expected Client State', placeholder: 'your-client-state' },
+    ],
+  },
+  boulevard: {
+    label: 'Boulevard',
+    fields: [
+      { key: 'signingSecret', label: 'Signing Secret', placeholder: 'Webhook signing secret' },
+      { key: 'salt', label: 'Salt Header', placeholder: 'x-blvd-hmac-salt value' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"event":...}', multiline: true },
+      { key: 'signature', label: 'Signature Header', placeholder: 'x-blvd-hmac-sha256 value' },
+    ],
+  },
+  vagaro: {
+    label: 'Vagaro',
+    fields: [
+      { key: 'received', label: 'Received Token', placeholder: 'X-Vagaro-Signature value' },
+      { key: 'expected', label: 'Expected Token', placeholder: 'Your configured verification token' },
+    ],
+  },
+  wix: {
+    label: 'Wix',
+    fields: [
+      { key: 'jwt', label: 'JWT (raw body)', placeholder: 'eyJ...', multiline: true },
+      { key: 'publicKey', label: 'Public Key (PEM)', placeholder: '-----BEGIN PUBLIC KEY-----\n...', multiline: true },
+    ],
+  },
+};
+
+const TABS = [
+  { id: 'connect', label: '🔌 Connect' },
+  { id: 'capabilities', label: '⚡ Capabilities' },
+  { id: 'bookings', label: '📅 Bookings' },
+  { id: 'availability', label: '🕐 Availability' },
+  { id: 'customers', label: '👤 Customers' },
+  { id: 'utilities', label: '🛠 Utilities' },
+  { id: 'webhooks', label: '🔔 Webhooks' },
+];
+
+/* ─── Trust-model banner: shows where the visitor's token actually goes ─── */
+function TrustBanner({ provider }: { provider: string }) {
+  const direct = isDirect(provider);
+  const style: React.CSSProperties = {
+    borderRadius: '8px',
+    padding: '0.7rem 0.85rem',
+    margin: '0.9rem 0 0.4rem',
+    fontSize: '0.78rem',
+    lineHeight: 1.6,
+    border: `1px solid ${direct ? '#2f6f4f' : '#6b5a2f'}`,
+    background: direct ? '#0f2418' : '#241f0f',
+    color: direct ? '#86efac' : '#fcd34d',
+  };
+  return (
+    <div style={style} role="note">
+      {direct ? (
+        <>
+          🔒 <strong>Your token never leaves this browser.</strong> It is sent directly from your
+          machine to the provider&apos;s API — this demo&apos;s server is never involved.
+        </>
+      ) : (
+        <>
+          ↗ <strong>This provider blocks browser calls</strong>, so your credentials are sent to the
+          demo&apos;s server, forwarded to the provider, and discarded. They are never stored or
+          logged.{' '}
+          <span style={{ color: 'var(--text-muted, #8888a0)' }}>
+            This is exactly why unibooking runs server-side.
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─── Result display component ─── */
+function ResultBox({ result, label }: { result: ActionResult | null; label?: string }) {
+  if (!result) return null;
+  return (
+    <div className="result-box fade-in">
+      <div className="result-header">
+        <span>{label ?? 'Response'}</span>
+        <span className={`result-status ${result.ok ? 'success' : 'error'}`}>
+          {result.ok ? '✓ Success' : '✗ Error'}
+        </span>
+      </div>
+      <div className="result-body">
+        <pre>{JSON.stringify(result.ok ? result.data : result.error, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Main Page
+   ═══════════════════════════════════════════════════════════ */
+export default function Home() {
+  const [activeTab, setActiveTab] = useState('connect');
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [loadingSection, setLoadingSection] = useState('');
+  const busy = (s: string) => loadingSection === s;
+
+  // Results
+  const [capsResult, setCapsResult] = useState<ActionResult | null>(null);
+  const [bookingResult, setBookingResult] = useState<ActionResult | null>(null);
+  const [availResult, setAvailResult] = useState<ActionResult | null>(null);
+  const [customerResult, setCustomerResult] = useState<ActionResult | null>(null);
+  const [utilResult, setUtilResult] = useState<ActionResult | null>(null);
+  const [webhookResult, setWebhookResult] = useState<ActionResult | null>(null);
+
+  // Form states
+  const [bookingOp, setBookingOp] = useState('create');
+  const [webhookProvider, setWebhookProvider] = useState('square');
+  const [webhookFields, setWebhookFields] = useState<Record<string, string>>({});
+
+  const updateCred = useCallback(
+    (key: string, value: string) => setCreds((prev) => ({ ...prev, [key]: value })),
+    [],
+  );
+
+  const wrap = useCallback(
+    async (section: string, fn: () => Promise<ActionResult>, setter: (r: ActionResult) => void) => {
+      setLoadingSection(section);
+      try {
+        const result = await fn();
+        setter(result);
+      } catch (e) {
+        setter({ ok: false, error: { message: String(e) } });
+      } finally {
+        setLoadingSection('');
+      }
+    },
+    [],
+  );
+
+  const providerInfo = selectedProvider ? PROVIDERS[selectedProvider] : null;
+
+  return (
+    <div className="app-container">
+      {/* ─── Header ─── */}
+      <header className="app-header">
+        <h1>unibooking</h1>
+        <p>
+          Stateless, unified CRUD for 16 booking &amp; calendar providers. Interactive API explorer
+          showcasing every feature.
+        </p>
+      </header>
+
+      {/* ─── Status Bar ─── */}
+      <div className="status-bar">
+        <div className={`status-dot ${selectedProvider ? 'connected' : ''}`} role="status" aria-label={selectedProvider ? 'Provider selected' : 'No provider selected'} />
+        <span style={{ color: 'var(--text-secondary)' }}>
+          {selectedProvider
+            ? `Selected: ${providerInfo?.label ?? selectedProvider}`
+            : 'No provider selected — go to Connect tab'}
+        </span>
+        {selectedProvider && (
+          <span className="info-badge accent" style={{ marginLeft: 'auto' }}>
+            {selectedProvider}
+          </span>
+        )}
+      </div>
+
+      {/* ─── Tabs ─── */}
+      <nav className="tabs" role="tablist" aria-label="API Explorer">
+        {TABS.map((t, i) => (
+          <button
+            key={t.id}
+            id={`tab-${t.id}`}
+            role="tab"
+            aria-selected={activeTab === t.id}
+            tabIndex={activeTab === t.id ? 0 : -1}
+            className={`tab ${activeTab === t.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(t.id)}
+            onKeyDown={(e) => {
+              let idx = i;
+              if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
+              else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
+              else return;
+              e.preventDefault();
+              setActiveTab(TABS[idx].id);
+              document.getElementById(`tab-${TABS[idx].id}`)?.focus();
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* ═══ CONNECT TAB ═══ */}
+      {activeTab === 'connect' && (
+        <div className="fade-in">
+          <div className="card">
+            <div className="card-title">
+              <span className="icon">🔌</span> Select Provider
+            </div>
+            <div className="provider-grid">
+              {Object.entries(PROVIDERS).map(([id, p]) => (
+                <button
+                  key={id}
+                  className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
+                  onClick={() => {
+                    setSelectedProvider(id);
+                    setCreds({});
+                    setCapsResult(null);
+                    setBookingResult(null);
+                    setAvailResult(null);
+                    setCustomerResult(null);
+                    setUtilResult(null);
+                    setWebhookResult(null);
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {providerInfo && (
+              <>
+                <div className="section-title" style={{ marginTop: '1.2rem' }}>
+                  Credentials for {providerInfo.label}
+                </div>
+                <TrustBanner provider={selectedProvider} />
+                <div className="creds-form">
+                  {providerInfo.fields.map((f) => (
+                    <div className="form-group" key={f.key}>
+                      <label className="form-label">{f.label}</label>
+                      <input
+                        className="form-input"
+                        type={f.secret === false ? 'text' : 'password'}
+                        placeholder={f.placeholder}
+                        value={creds[f.key] ?? ''}
+                        onChange={(e) => updateCred(f.key, e.target.value)}
+                        required={!f.placeholder.toLowerCase().includes('optional')}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: '1rem' }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)}
+                    disabled={busy('caps')}
+                  >
+                    {busy('caps') ? '...' : '⚡ Load Capabilities'}
+                  </button>
+                </div>
+                <ResultBox result={capsResult} label="Capabilities" />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ CAPABILITIES TAB ═══ */}
+      {activeTab === 'capabilities' && (
+        <div className="fade-in">
+          {!selectedProvider ? (
+            <div className="empty-state">
+              <span className="icon">⚡</span>
+              Select a provider in the Connect tab first
+            </div>
+          ) : (
+            <div className="card">
+              <div className="card-title">
+                <span className="icon">⚡</span> Capabilities — {providerInfo?.label}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+                <code>client.capabilities</code> — typed object that tells you what this provider
+                supports, before you call any method.
+              </p>
+              {!capsResult && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)}
+                  disabled={busy('caps')}
+                >
+                  {busy('caps') ? '...' : 'Load Capabilities'}
+                </button>
+              )}
+              {capsResult?.ok && capsResult.data ? (
+                <div className="caps-grid">
+                  {Object.entries(
+                    ((capsResult.data as Record<string, unknown>)?.capabilities ?? {}) as Record<string, boolean>,
+                  ).map(([key, val]) => (
+                    <div key={key} className={`cap-badge ${val ? 'supported' : 'unsupported'}`}>
+                      {val ? '✓' : '✗'} {key}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <ResultBox result={capsResult} label="Raw Response" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ BOOKINGS TAB ═══ */}
+      {activeTab === 'bookings' && (
+        <div className="fade-in">
+          {!selectedProvider ? (
+            <div className="empty-state">
+              <span className="icon">📅</span>
+              Select a provider in the Connect tab first
+            </div>
+          ) : (
+            <div className="card">
+              <div className="card-title">
+                <span className="icon">📅</span> Booking CRUD — {providerInfo?.label}
+              </div>
+
+              <div className="op-row">
+                {['create', 'get', 'update', 'cancel', 'list'].map((op) => (
+                  <button
+                    key={op}
+                    className={`btn btn-sm ${bookingOp === op ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => { setBookingOp(op); setBookingResult(null); }}
+                  >
+                    {op === 'create' && '➕ '}
+                    {op === 'get' && '🔍 '}
+                    {op === 'update' && '✏️ '}
+                    {op === 'cancel' && '🗑 '}
+                    {op === 'list' && '📋 '}
+                    {op.charAt(0).toUpperCase() + op.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Create Booking */}
+              {bookingOp === 'create' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    wrap('booking',
+                      () =>
+                        callCreateBooking(selectedProvider, creds, {
+                          title: fd.get('title') as string,
+                          start: fd.get('start') as string,
+                          end: fd.get('end') as string,
+                          serviceId: (fd.get('serviceId') as string) || undefined,
+                          staffId: (fd.get('staffId') as string) || undefined,
+                          customerName: (fd.get('customerName') as string) || undefined,
+                          customerEmail: (fd.get('customerEmail') as string) || undefined,
+                          idempotencyKey: (fd.get('idempotencyKey') as string) || undefined,
+                        }),
+                      setBookingResult,
+                    );
+                  }}
+                >
+                  <div className="two-col">
+                    <div className="form-group">
+                      <label className="form-label">Title</label>
+                      <input name="title" className="form-input" placeholder="Haircut — Jane" defaultValue="Demo Booking" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Service ID</label>
+                      <input name="serviceId" className="form-input" placeholder="Optional" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Start (RFC3339)</label>
+                      <input name="start" className="form-input" placeholder="2026-07-20T10:00:00-07:00" defaultValue="2026-07-20T10:00:00-07:00" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">End (RFC3339)</label>
+                      <input name="end" className="form-input" placeholder="2026-07-20T10:45:00-07:00" defaultValue="2026-07-20T10:45:00-07:00" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Staff ID</label>
+                      <input name="staffId" className="form-input" placeholder="Optional" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Idempotency Key</label>
+                      <input name="idempotencyKey" className="form-input" placeholder="Optional UUID" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Customer Name</label>
+                      <input name="customerName" className="form-input" placeholder="Jane Doe" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Customer Email</label>
+                      <input name="customerEmail" className="form-input" placeholder="jane@example.com" />
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={busy('booking')} style={{ marginTop: '1rem' }}>
+                    {busy('booking') ? '...' : '➕ Create Booking'}
+                  </button>
+                </form>
+              )}
+
+              {/* Get Booking */}
+              {bookingOp === 'get' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    wrap('booking', () => callGetBooking(selectedProvider, creds, fd.get('bookingId') as string), setBookingResult);
+                  }}
+                >
+                  <div className="form-group">
+                    <label className="form-label">Booking ID</label>
+                    <input name="bookingId" className="form-input" placeholder="Enter booking ID" required />
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={busy('booking')}>
+                    {busy('booking') ? '...' : '🔍 Get Booking'}
+                  </button>
+                </form>
+              )}
+
+              {/* Update Booking */}
+              {bookingOp === 'update' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    wrap('booking',
+                      () =>
+                        callUpdateBooking(selectedProvider, creds, fd.get('bookingId') as string, {
+                          title: (fd.get('title') as string) || undefined,
+                          start: (fd.get('start') as string) || undefined,
+                          end: (fd.get('end') as string) || undefined,
+                          staffId: (fd.get('staffId') as string) || undefined,
+                          serviceId: (fd.get('serviceId') as string) || undefined,
+                        }),
+                      setBookingResult,
+                    );
+                  }}
+                >
+                  <div className="two-col">
+                    <div className="form-group">
+                      <label className="form-label">Booking ID</label>
+                      <input name="bookingId" className="form-input" placeholder="ID to update" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">New Title</label>
+                      <input name="title" className="form-input" placeholder="Optional" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">New Start</label>
+                      <input name="start" className="form-input" placeholder="Optional RFC3339" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">New End</label>
+                      <input name="end" className="form-input" placeholder="Optional RFC3339" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">New Staff ID</label>
+                      <input name="staffId" className="form-input" placeholder="Optional" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">New Service ID</label>
+                      <input name="serviceId" className="form-input" placeholder="Optional" />
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={busy('booking')} style={{ marginTop: '1rem' }}>
+                    {busy('booking') ? '...' : '✏️ Update Booking'}
+                  </button>
+                </form>
+              )}
+
+              {/* Cancel Booking */}
+              {bookingOp === 'cancel' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    wrap('booking',
+                      () =>
+                        callCancelBooking(
+                          selectedProvider,
+                          creds,
+                          fd.get('bookingId') as string,
+                          (fd.get('reason') as string) || undefined,
+                        ),
+                      setBookingResult,
+                    );
+                  }}
+                >
+                  <div className="two-col">
+                    <div className="form-group">
+                      <label className="form-label">Booking ID</label>
+                      <input name="bookingId" className="form-input" placeholder="ID to cancel" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Reason</label>
+                      <input name="reason" className="form-input" placeholder="Optional cancellation reason" />
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={busy('booking')} style={{ marginTop: '1rem' }}>
+                    {busy('booking') ? '...' : '🗑 Cancel Booking'}
+                  </button>
+                </form>
+              )}
+
+              {/* List Bookings */}
+              {bookingOp === 'list' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    wrap('booking',
+                      () =>
+                        callListBookings(selectedProvider, creds, {
+                          start: fd.get('start') as string,
+                          end: fd.get('end') as string,
+                          limit: (fd.get('limit') as string) ? Number(fd.get('limit')) : undefined,
+                          pageToken: (fd.get('pageToken') as string) || undefined,
+                        }),
+                      setBookingResult,
+                    );
+                  }}
+                >
+                  <div className="two-col">
+                    <div className="form-group">
+                      <label className="form-label">Start (RFC3339)</label>
+                      <input name="start" className="form-input" defaultValue="2026-07-20T00:00:00-07:00" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">End (RFC3339)</label>
+                      <input name="end" className="form-input" defaultValue="2026-07-27T00:00:00-07:00" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Limit</label>
+                      <input name="limit" className="form-input" placeholder="Optional page size" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Page Token</label>
+                      <input name="pageToken" className="form-input" placeholder="Optional (from prev response)" />
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={busy('booking')} style={{ marginTop: '1rem' }}>
+                    {busy('booking') ? '...' : '📋 List Bookings'}
+                  </button>
+                </form>
+              )}
+
+              <ResultBox result={bookingResult} label={`${bookingOp} result`} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ AVAILABILITY TAB ═══ */}
+      {activeTab === 'availability' && (
+        <div className="fade-in">
+          {!selectedProvider ? (
+            <div className="empty-state">
+              <span className="icon">🕐</span>
+              Select a provider in the Connect tab first
+            </div>
+          ) : (
+            <div className="card">
+              <div className="card-title">
+                <span className="icon">🕐</span> Search Availability — {providerInfo?.label}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+                <code>client.searchAvailability(query)</code> — only works when{' '}
+                <code>capabilities.availability</code> is <code>true</code>
+              </p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  wrap('avail',
+                    () =>
+                      callSearchAvailability(selectedProvider, creds, {
+                        start: fd.get('start') as string,
+                        end: fd.get('end') as string,
+                        serviceId: (fd.get('serviceId') as string) || undefined,
+                        staffId: (fd.get('staffId') as string) || undefined,
+                      }),
+                    setAvailResult,
+                  );
+                }}
+              >
+                <div className="two-col">
+                  <div className="form-group">
+                    <label className="form-label">Start (RFC3339)</label>
+                    <input name="start" className="form-input" defaultValue="2026-07-20T00:00:00-07:00" required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">End (RFC3339)</label>
+                    <input name="end" className="form-input" defaultValue="2026-07-21T00:00:00-07:00" required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Service ID</label>
+                    <input name="serviceId" className="form-input" placeholder="Optional" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Staff ID</label>
+                    <input name="staffId" className="form-input" placeholder="Optional" />
+                  </div>
+                </div>
+                <button className="btn btn-primary" type="submit" disabled={busy('avail')} style={{ marginTop: '1rem' }}>
+                  {busy('avail') ? '...' : '🔍 Search Slots'}
+                </button>
+              </form>
+              <ResultBox result={availResult} label="Availability" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ CUSTOMERS TAB ═══ */}
+      {activeTab === 'customers' && (
+        <div className="fade-in">
+          {!selectedProvider ? (
+            <div className="empty-state">
+              <span className="icon">👤</span>
+              Select a provider in the Connect tab first
+            </div>
+          ) : (
+            <div className="card">
+              <div className="card-title">
+                <span className="icon">👤</span> Customer Management — {providerInfo?.label}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+                <code>client.customers?.findOrCreate(customer)</code> — only when{' '}
+                <code>capabilities.customers</code> is <code>true</code>
+              </p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  wrap('customer',
+                    () =>
+                      callFindOrCreateCustomer(selectedProvider, creds, {
+                        name: (fd.get('name') as string) || undefined,
+                        email: (fd.get('email') as string) || undefined,
+                        phone: (fd.get('phone') as string) || undefined,
+                      }),
+                    setCustomerResult,
+                  );
+                }}
+              >
+                <div className="two-col">
+                  <div className="form-group">
+                    <label className="form-label">Name</label>
+                    <input name="name" className="form-input" placeholder="Jane Doe" defaultValue="Jane Doe" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Email</label>
+                    <input name="email" className="form-input" placeholder="jane@example.com" defaultValue="jane@example.com" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Phone</label>
+                    <input name="phone" className="form-input" placeholder="+1555..." />
+                  </div>
+                </div>
+                <button className="btn btn-primary" type="submit" disabled={busy('customer')} style={{ marginTop: '1rem' }}>
+                  {busy('customer') ? '...' : '👤 Find or Create'}
+                </button>
+              </form>
+              <ResultBox result={customerResult} label="Customer" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ UTILITIES TAB ═══ */}
+      {activeTab === 'utilities' && (
+        <div className="fade-in">
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <div className="card-title">
+              <span className="icon">🛠</span> Core Utilities
+            </div>
+            <div className="feature-list">
+              <div className="feature-item">
+                <span className="icon">🔄</span>
+                <div>
+                  <h4>createRegistry</h4>
+                  <p>
+                    Dynamic dispatch: register adapters and look them up by <code>ProviderId</code>. Methods: <code>get</code>, <code>tryGet</code>, <code>has</code>, <code>ids</code>.
+                  </p>
+                </div>
+              </div>
+              <div className="feature-item">
+                <span className="icon">🔁</span>
+                <div>
+                  <h4>withRetry</h4>
+                  <p>
+                    Wrap a client for exponential backoff on transient errors. Honors <code>retryAfterMs</code> from RATE_LIMIT. Safe for creates only with <code>idempotencyKey</code>.
+                  </p>
+                </div>
+              </div>
+              <div className="feature-item">
+                <span className="icon">📄</span>
+                <div>
+                  <h4>listAll / collectAll</h4>
+                  <p>
+                    Auto-paginate <code>listBookings</code> across every page. <code>listAll</code> yields via AsyncGenerator; <code>collectAll</code> returns an array.
+                  </p>
+                </div>
+              </div>
+              <div className="feature-item">
+                <span className="icon">⚠️</span>
+                <div>
+                  <h4>Error Helpers</h4>
+                  <p>
+                    <code>isUnibookingError</code>, <code>isRetryable</code>, <code>codeForStatus</code> — discriminate and map errors consistently.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <div className="card-title">Try Them</div>
+            <div className="op-row">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => wrap('util', () => demoRegistry(), setUtilResult)}
+                disabled={busy('util')}
+              >
+                🔄 createRegistry
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => wrap('util', () => demoErrorHelpers(), setUtilResult)}
+                disabled={busy('util')}
+              >
+                ⚠️ Error Helpers
+              </button>
+              {selectedProvider && (
+                <>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() =>
+                      wrap('util',
+                        () =>
+                          demoWithRetry(selectedProvider, creds, {
+                            start: '2026-07-20T00:00:00Z',
+                            end: '2026-07-27T00:00:00Z',
+                          }),
+                        setUtilResult,
+                      )
+                    }
+                    disabled={busy('util')}
+                  >
+                    🔁 withRetry
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() =>
+                      wrap('util',
+                        () =>
+                          demoCollectAll(selectedProvider, creds, {
+                            start: '2026-07-20T00:00:00Z',
+                            end: '2026-07-27T00:00:00Z',
+                          }),
+                        setUtilResult,
+                      )
+                    }
+                    disabled={busy('util')}
+                  >
+                    📄 collectAll
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() =>
+                      wrap('util',
+                        () =>
+                          demoListAll(selectedProvider, creds, {
+                            start: '2026-07-20T00:00:00Z',
+                            end: '2026-07-27T00:00:00Z',
+                          }),
+                        setUtilResult,
+                      )
+                    }
+                    disabled={busy('util')}
+                  >
+                    📄 listAll
+                  </button>
+                </>
+              )}
+            </div>
+            {!selectedProvider && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                ℹ️ Connect to a provider to unlock withRetry, collectAll, and listAll demos.
+              </p>
+            )}
+            <ResultBox result={utilResult} label="Utility Result" />
+          </div>
+        </div>
+      )}
+
+      {/* ═══ WEBHOOKS TAB ═══ */}
+      {activeTab === 'webhooks' && (
+        <div className="fade-in">
+          <div className="card">
+            <div className="card-title">
+              <span className="icon">🔔</span> Webhook Verification
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+              9 webhook verifiers — paste the raw payload + signature to verify.
+            </p>
+
+            <div className="section-title">Select Webhook Provider</div>
+            <div className="provider-grid" style={{ marginBottom: '1.2rem' }}>
+              {Object.entries(WEBHOOK_PROVIDERS).map(([id, wp]) => (
+                <button
+                  key={id}
+                  className={`provider-chip ${webhookProvider === id ? 'selected' : ''}`}
+                  onClick={() => {
+                    setWebhookProvider(id);
+                    setWebhookFields({});
+                    setWebhookResult(null);
+                  }}
+                >
+                  {wp.label}
+                </button>
+              ))}
+            </div>
+
+            {WEBHOOK_PROVIDERS[webhookProvider] && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  wrap('webhook', () => verifyWebhook(webhookProvider, webhookFields), setWebhookResult);
+                }}
+              >
+                <div className="section-title">{WEBHOOK_PROVIDERS[webhookProvider].label} Fields</div>
+                {WEBHOOK_PROVIDERS[webhookProvider].fields.map((f) => (
+                  <div className="form-group" key={f.key}>
+                    <label className="form-label">{f.label}</label>
+                    {f.multiline ? (
+                      <textarea
+                        className="form-textarea"
+                        placeholder={f.placeholder}
+                        value={webhookFields[f.key] ?? ''}
+                        onChange={(e) =>
+                          setWebhookFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                        }
+                      />
+                    ) : (
+                      <input
+                        className="form-input"
+                        type={/password|secret|key/i.test(f.key) ? 'password' : 'text'}
+                        placeholder={f.placeholder}
+                        value={webhookFields[f.key] ?? ''}
+                        onChange={(e) =>
+                          setWebhookFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                        }
+                      />
+                    )}
+                  </div>
+                ))}
+                <button className="btn btn-primary" type="submit" disabled={busy('webhook')}>
+                  {busy('webhook') ? '...' : '🔐 Verify Signature'}
+                </button>
+              </form>
+            )}
+
+            <ResultBox result={webhookResult} label="Webhook Verification" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
