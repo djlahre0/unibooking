@@ -1,5 +1,7 @@
 # Zenoti
 
+> **Corrected 2026-07-20.** The create body nested the service as a flat `service_id`; the spec requires `item: { id, item_type }`. `updateBooking` now uses the first-class reschedule instead of booking fresh and cancelling the old invoice. See CHANGELOG 0.2.0.
+
 Tier-2 (gated). API key generated per-tenant.
 
 ## Access

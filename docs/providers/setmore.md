@@ -2,6 +2,14 @@
 
 Tier-2 (gated). Setmore Booking API — a long-running beta.
 
+> **Corrected 2026-07-20.** The Booking API is 11 routes total. It has **no**
+> fetch-by-id and **no** cancel or delete endpoint; `getBooking` and
+> `cancelBooking` previously called paths that do not exist and now throw
+> UNSUPPORTED. `updateBooking` accepts only a label. Six of eight paths were
+> wrong, as were all three date encodings. `searchAvailability` now requires an
+> IANA `range.timezone` because slot times carry no date or offset. See CHANGELOG
+> 0.2.0.
+
 ## Access
 Requires a paid **Setmore Pro** account, then email **api@setmore.com** with your
 name, registered email, and use case to be granted API credentials. There is

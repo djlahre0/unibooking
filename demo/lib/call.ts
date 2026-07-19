@@ -251,7 +251,7 @@ export function callListBookings(
 export function callSearchAvailability(
   providerId: string,
   creds: Record<string, string>,
-  query: { start: string; end: string; serviceId?: string; staffId?: string },
+  query: { start: string; end: string; timezone?: string; serviceId?: string; staffId?: string },
 ): Promise<ActionResult> {
   return run(providerId, creds, 'searchAvailability', query);
 }

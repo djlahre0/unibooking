@@ -2,6 +2,13 @@
 
 Tier-2 (gated, **Enterprise-tier only**). GraphQL Admin API (`/api/2020-01/admin`).
 
+> **Corrected 2026-07-20.** The webhook verifier signed the wrong payload (it
+> omitted the colon separator and keyed the HMAC with the undecoded base64
+> secret), so every genuine webhook was rejected. Most GraphQL argument shapes
+> were also wrong — `appointments` needs a required `locationId`, booking is a
+> three-step mutation chain, and cancellation needs a reason enum. See CHANGELOG
+> 0.2.0.
+
 ## Access
 Boulevard exposes the Admin, Client, and Tokenization APIs to **Enterprise-tier**
 customers only. Create a sandbox account and an API application (API key, secret,
@@ -11,7 +18,7 @@ business id) via the developer portal.
 ```ts
 import { boulevard } from 'unibooking/adapters/boulevard';
 
-const client = boulevard({ businessId, apiKey, apiSecret });
+const client = boulevard({ businessId, locationId, apiKey, apiSecret });
 ```
 
 Auth is a per-request HMAC token wrapped in HTTP Basic (this is why the kit's

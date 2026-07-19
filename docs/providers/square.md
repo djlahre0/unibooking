@@ -1,5 +1,7 @@
 # Square Appointments
 
+> **Updated 2026-07-20.** API version pin bumped from `2025-10-16` to `2026-07-15`. See CHANGELOG 0.2.0.
+
 ```ts
 import { square } from 'unibooking/adapters/square';
 const client = square({ accessToken, locationId });

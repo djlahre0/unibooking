@@ -1,5 +1,7 @@
 # Apple Calendar / CalDAV
 
+> **Corrected 2026-07-20.** Two iCalendar TEXT escaping bugs (a literal backslash before `n` decoded to a line feed; bare CRs were emitted) and a recurrence bug where `patchICS` flattened TZID-anchored series to UTC, drifting an hour at every DST transition. See CHANGELOG 0.2.0.
+
 ```ts
 import { apple } from 'unibooking/adapters/apple';
 const client = apple({

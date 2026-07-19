@@ -1,5 +1,7 @@
 # Mindbody (public API v6)
 
+> **Corrected 2026-07-20.** `cancelBooking` previously threw UNSUPPORTED on the claim that no cancel endpoint exists. There is no cancel *path*, but cancellation is a documented action on `updateappointment` (`Execute: cancel`). `createBooking` also dropped `range.end`. See CHANGELOG 0.2.0.
+
 ```ts
 import { mindbody } from 'unibooking/adapters/mindbody';
 const client = mindbody({ apiKey, siteId, accessToken, locationId?, timezone: 'America/Los_Angeles' });

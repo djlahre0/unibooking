@@ -1,5 +1,7 @@
 # Outlook / Microsoft 365 (Microsoft Graph)
 
+> **Corrected 2026-07-20.** A non-URL `pageToken` was forwarded as `$skiptoken`, which Graph ignores — callers looped on page 1 forever. Event ids are now requested as immutable. See CHANGELOG 0.2.0.
+
 ```ts
 import { outlook } from 'unibooking/adapters/outlook';
 const cal = outlook({ accessToken, userId?, calendarId? });

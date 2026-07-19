@@ -1,5 +1,7 @@
 # Wix Bookings
 
+> **Corrected 2026-07-20.** The extended-bookings path was missing a segment, so reads 404'd — which also broke cancel and reschedule, since both resolve a revision first. See CHANGELOG 0.2.0.
+
 Tier-1 (self-serve). Wix's headless REST API — Bookings Writer/Reader **V2**.
 (Bookings V1 was removed on 2024-12-31.)
 

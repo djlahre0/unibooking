@@ -1,5 +1,7 @@
 # Bookeo
 
+> **Corrected 2026-07-20.** Bookeo **does** sign its webhooks (HMAC-SHA256 hex); a code comment claimed otherwise and no verifier shipped. `unibooking/webhooks/bookeo` now provides one, verified against Bookeo's published test vector. `createBooking` also omitted the required `participants` field. See CHANGELOG 0.2.0.
+
 ```ts
 import { bookeo } from 'unibooking/adapters/bookeo';
 const client = bookeo({ apiKey, secretKey });

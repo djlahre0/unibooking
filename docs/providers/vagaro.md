@@ -1,7 +1,12 @@
 # Vagaro
 
-Tier-2 (gated), **read-only**. Vagaro's public API exposes reads and webhooks but
-no appointment write endpoints.
+Tier-2 (gated). Vagaro Enterprise Business API V2 — public docs, gated access.
+
+> **Corrected 2026-07-20.** This adapter was previously documented and implemented
+> as read-only, on the claim that no appointment write endpoints exist. That was
+> wrong: create, update, delete and list are all documented. Auth was also wrong
+> (`Authorization: Bearer` instead of a raw `accessToken` header), so every call
+> returned 401. See CHANGELOG 0.2.0.
 
 ## Access
 Request access in the Vagaro business account under **Settings > All Settings >

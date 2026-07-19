@@ -1,5 +1,7 @@
 # Phorest
 
+> **Corrected 2026-07-20.** `updateBooking` omitted `staffId` and `startTime`, both required, so partial patches were rejected. They are now backfilled from current state. See CHANGELOG 0.2.0.
+
 Tier-2 (gated). Phorest issues Basic-auth credentials manually.
 
 ## Access

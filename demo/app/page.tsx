@@ -670,6 +670,7 @@ export default function Home() {
                       callSearchAvailability(selectedProvider, creds, {
                         start: fd.get('start') as string,
                         end: fd.get('end') as string,
+                        timezone: (fd.get('timezone') as string) || undefined,
                         serviceId: (fd.get('serviceId') as string) || undefined,
                         staffId: (fd.get('staffId') as string) || undefined,
                       }),
@@ -693,6 +694,14 @@ export default function Home() {
                   <div className="form-group">
                     <label className="form-label">Staff ID</label>
                     <input name="staffId" className="form-input" placeholder="Optional" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Timezone (IANA)</label>
+                    <input
+                      name="timezone"
+                      className="form-input"
+                      placeholder="Required by Setmore and Wix"
+                    />
                   </div>
                 </div>
                 <button className="btn btn-primary" type="submit" disabled={busy('avail')} style={{ marginTop: '1rem' }}>

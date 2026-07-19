@@ -1,5 +1,7 @@
 # Calendly
 
+> **Corrected 2026-07-20.** `updateBooking({ status: 'cancelled' })` always threw: the cancellation endpoint returns a Cancellation resource, not an event. See CHANGELOG 0.2.0.
+
 Tier-1 (self-serve). Calendly API v2.
 
 ## Credentials

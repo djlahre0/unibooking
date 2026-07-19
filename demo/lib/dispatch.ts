@@ -31,7 +31,14 @@ export const OPS: readonly Op[] = [
   'listAll',
 ];
 
-const RANGE = (a: { start: string; end: string }) => ({ start: a.start, end: a.end });
+// `timezone` is an IANA name for display, but some providers genuinely need it:
+// Setmore and Wix return offset-less slot times that cannot be anchored without
+// one, and reject an availability query that omits it.
+const RANGE = (a: { start: string; end: string; timezone?: string }) => ({
+  start: a.start,
+  end: a.end,
+  ...(a.timezone ? { timezone: a.timezone } : {}),
+});
 
 /**
  * Run one operation against a BookingClient. Returns the success payload or

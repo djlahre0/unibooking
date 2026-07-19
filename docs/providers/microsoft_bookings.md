@@ -1,5 +1,7 @@
 # Microsoft Bookings (Microsoft Graph)
 
+> **Added 2026-07-20.** `searchAvailability` is implemented via `getStaffAvailability` (GA in Graph v1.0). Note it is **application-permission only**, unlike every other call on this adapter. See CHANGELOG 0.2.0.
+
 ```ts
 import { microsoftBookings } from 'unibooking/adapters/microsoft_bookings';
 const client = microsoftBookings({ accessToken, businessId });

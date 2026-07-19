@@ -1,5 +1,7 @@
 # Acuity Scheduling
 
+> **Corrected 2026-07-20.** `createBooking` now validates Acuity's required customer fields up front, and `cancelBooking` sends `admin=true` so cancellations past the client-cancellation window succeed. See CHANGELOG 0.2.0.
+
 ```ts
 import { acuity } from 'unibooking/adapters/acuity';
 const client = acuity({ userId, apiKey });
