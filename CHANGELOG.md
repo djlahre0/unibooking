@@ -6,6 +6,153 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-20
+
+Every adapter was diffed against its provider's current published API
+documentation. Three were non-functional and eleven had wire-format defects. All
+findings below are grounded in a first-party specification — an OpenAPI/Swagger
+document, a GraphQL introspection schema, or an official reference page.
+
+> **Verification status.** These fixes match the published specifications and are
+> asserted at the wire level (URL, headers, request body) in tests. They are
+> **not** confirmed against live tenants — Vagaro, Setmore and Boulevard all
+> require gated credentials. The exception is the Bookeo webhook verifier, which
+> reproduces the vendor's own published test vector.
+
+### Breaking
+
+- **`VagaroCredentials` requires `businessId`.** Every appointment call needs it;
+  it is discoverable via `POST /{region}/api/v2/locations`.
+  ```ts
+  // before
+  vagaro({ region: 'us04', accessToken })
+  // after
+  vagaro({ region: 'us04', businessId: 'biz_123', accessToken })
+  ```
+- **`BoulevardCredentials` requires `locationId`.** The `appointments` query
+  declares it non-null, and the booking flow needs it.
+  ```ts
+  boulevard({ businessId, locationId: 'urn:blvd:Location:…', apiKey, apiSecret })
+  ```
+- **Setmore `searchAvailability` requires `range.timezone`** (an IANA name). Slot
+  times arrive as bare wall-clock strings with no date and no offset; inferring a
+  zone from the caller's range misplaces every slot across a DST boundary.
+- **Setmore `getBooking` and `cancelBooking` now throw `UNSUPPORTED`.** Neither
+  endpoint exists — the Booking API is 11 routes with no fetch-by-id and no
+  cancel or delete. Read bookings via `listBookings` over a date range. Setmore
+  `updateBooking` accepts only a title (label); time, staff and service changes
+  throw.
+- **Vagaro `listBookings` requires `query.customerId`.** Vagaro has no
+  date-range list; `POST /appointments` accepts `appointmentId` or `customerId`.
+- **Acuity `createBooking` validates required customer fields up front**, raising
+  `INVALID_INPUT` instead of surfacing an opaque upstream 400. `customer.name` is
+  always required; `customer.email` is required except on admin bookings (i.e.
+  when a `staffId` is supplied).
+- **Boulevard `createBooking` requires a `staffId`** — `bookingComplete`
+  declares `bookWithStaffId` non-null, so a staff-less booking is not
+  expressible. `updateBooking` no longer accepts staff or service changes
+  (`UpdateAppointmentInput` covers only notes, state and custom fields), and
+  cancellation requires one of the documented reason enum values.
+- **Outlook and Microsoft Bookings reject a non-URL `pageToken`.** It was
+  previously forwarded as `$skiptoken`; see Fixed below.
+
+### Fixed
+
+Adapters that could not work at all:
+
+- **Vagaro** authenticated with `Authorization: Bearer` where the spec declares
+  an apiKey scheme using a raw `accessToken` header — every request returned 401.
+  A spurious `merchants/` path segment 404'd the two implemented methods, and
+  `createBooking`/`updateBooking`/`cancelBooking`/`listBookings` were marked
+  UNSUPPORTED on the false claim that no such endpoints exist. All are now
+  implemented. Writes emit business-local wall clock while reads stay UTC;
+  round-tripping a fetched instant into a write previously shifted the booking by
+  the location's offset. `parseError` read `errorCode`/`code`, neither of which
+  Vagaro sends — now `responseCode`.
+- **Setmore** had six of eight paths wrong, and two operations addressed
+  endpoints that do not exist. All three date encodings are corrected
+  (`dd-mm-yyyy` list, `DD/MM/YYYY` slots, `yyyy-MM-ddTHH:mm` create), slots is a
+  POST rather than a GET, dot-separated slot times parse, `cell_no` is now the
+  documented `cell_phone` (phone numbers were silently dropped), and a
+  `response: false` body raises even on HTTP 200.
+- **Boulevard**'s webhook verifier omitted the colon separator and keyed the HMAC
+  with the undecoded base64 secret, so **every genuine webhook was rejected**. It
+  also accepted a hex signature Boulevard never emits. GraphQL operations now use
+  the real argument shapes: `appointments` takes a required `locationId` and a
+  `QueryString` filter (there is no `endAt` field, so ranges use `startAt`),
+  booking is the documented three-step `bookingCreate` → `bookingAddService` →
+  `bookingComplete` chain, reschedule resolves an opaque `bookableTimeId` first,
+  and `clients` takes `emails: [String!]`.
+
+Breaking defects in otherwise-working adapters:
+
+- **Wix** `getBooking`, `listBookings` and `currentRevision` 404'd — the
+  extended-bookings path was missing a segment (`bookings/reader/v2` →
+  `bookings/bookings-reader/v2`). Because cancel and reschedule both resolve a
+  revision first, most of the adapter was down.
+- **Mindbody** `cancelBooking` threw UNSUPPORTED claiming no cancel endpoint
+  exists. There is no cancel *path*, but cancellation is a documented action on
+  `updateappointment` (`Execute: 'cancel'`). `createBooking` also dropped
+  `range.end`, so a 90-minute request silently became the staff default duration.
+  `searchAvailability` now pages instead of truncating at the first 100 results.
+- **Calendly** `updateBooking({ status: 'cancelled' })` always threw `UPSTREAM`:
+  the cancellation endpoint returns a Cancellation resource with no
+  `uri`/`start_time`/`end_time`, which was fed to the booking mapper.
+  Availability ranges are checked against the documented 31-day cap.
+- **Bookeo** `createBooking` omitted the required `participants` field, failing
+  for essentially every product. `parseError` read `code`/`errorCode`; the
+  documented field is `errorId`, so `providerCode` was always `undefined`.
+  `itemsPerPage` is clamped to the documented maximum of 100.
+- **Zenoti** nested the service as a flat `service_id`; the spec requires
+  `item: { id, item_type }`. `updateBooking` now uses the first-class reschedule
+  (carrying `invoice_id` and `invoice_item_id`) rather than booking fresh and
+  cancelling the old invoice — which changed the booking id, orphaned a cancelled
+  invoice and could trigger cancellation fees. Slots flagged `Available: false`
+  are no longer offered as bookable.
+- **Phorest** `updateBooking` omitted `staffId` and `startTime`, both marked
+  required, so any partial patch was rejected. They are now backfilled from
+  current state. Note that Phorest recomputes duration from the new staff or
+  service and ignores `endTime` on such a change.
+- **Outlook / Microsoft Bookings** forwarded a non-URL `pageToken` as
+  `$skiptoken`. `calendarView` pages via `$skip` and Graph ignores unrecognized
+  query parameters silently, so callers received page 1 indefinitely and looped.
+  `$top` is now range-checked against the documented 1–1000.
+- **Apple / iCal**: `unescapeText` expanded the escaped-newline sequence before
+  the escaped-backslash sequence, so a literal backslash followed by `n` decoded
+  to a line feed. `escapeText` emitted bare CRs, for which RFC 5545 defines no
+  escape and which re-split the content line. `patchICS` flattened
+  `TZID`-anchored events to UTC, converting a recurring wall-clock series into a
+  fixed-offset one that drifts an hour at every DST transition and orphans the
+  `VTIMEZONE`. All three are covered by tests that fail against the previous
+  implementation.
+
+### Added
+
+- **Bookeo webhook verification** (`unibooking/webhooks/bookeo`). Bookeo signs
+  deliveries with HMAC-SHA256 (hex) over
+  `timestamp + messageId + webhookUrl + rawBody`, contradicting a code comment
+  claiming otherwise. Verified against Bookeo's published test vector, which
+  ships as a test. Supports the documented ±120s timestamp freshness check.
+- **Microsoft Bookings `searchAvailability`** via `getStaffAvailability`, which
+  is GA in Graph v1.0. Note it is **application-permission only** — a delegated
+  user token works for every other call on that adapter but not this one.
+- **Outlook immutable event ids** (`Prefer: IdType="ImmutableId"`). Graph event
+  ids otherwise change when an item moves between calendars, breaking the
+  persist-the-id contract this library is built on.
+- **Acuity `cancelBooking` sends `admin=true`**, so cancellations succeed past
+  the account's client-cancellation window.
+- A test asserting the README's provider table against the adapters' real
+  `capabilities` objects — it had silently drifted twice.
+
+### Changed
+
+- **Square API version pinned to `2026-07-15`** (was `2025-10-16`, four releases
+  behind). Square's changelog records no Bookings changes across that span.
+- Provider names in the README table now link to their official API
+  documentation. The notes distinguish *platform limitations* (the provider
+  cannot do this) from *adapter gaps* (it can; unibooking has not modelled it) —
+  previously a single dash meant both.
+
 ## [0.1.5] - 2026-07-19
 
 ### Fixed

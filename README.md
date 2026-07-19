@@ -883,6 +883,15 @@ unibooking currently supports the following providers.
 > Provider names in the table link to the official API documentation. MangoMint
 > is unlinked because it publishes no public API reference — integration is
 > arranged directly with their support team.
+>
+> **Verification status.** Every adapter is checked against its provider's
+> current published specification, and the conformance suite asserts the wire
+> format — URL, headers and request body — not just the mapped result. Adapters
+> for providers with open sandboxes are additionally exercised against them;
+> Vagaro, Setmore, Boulevard, Zenoti and Phorest require gated credentials, so
+> those are spec-verified rather than live-verified. If you hit a discrepancy
+> against a live tenant, please open an issue — that is exactly the gap this
+> project cannot close on its own.
 
 ---
 
@@ -1208,9 +1217,26 @@ You can build internal adapters for proprietary booking systems.
 
 ## Is it production ready?
 
-Yes.
+The core — types, errors, retry, pagination, the adapter kit — is stable and
+heavily tested.
 
-Every official adapter is validated against the shared conformance test suite to ensure consistent behavior.
+Per-adapter maturity varies, and it is worth being precise about what the tests
+prove. Every official adapter runs the shared conformance suite, which pins the
+canonical `Booking` shape, status mapping, error normalization and pagination.
+Adapters also have wire-format tests asserting the exact URL, headers and request
+body they send.
+
+What that does **not** prove is that a provider accepts those requests. The suite
+mocks the transport, so a wrong endpoint or auth header is invisible to it — an
+adapter can be fully green and still fail against the real API. Adapters for
+providers with open sandboxes get exercised against them; the gated ones
+(Vagaro, Setmore, Boulevard, Zenoti, Phorest) are verified against their
+published specifications instead.
+
+So: treat the widely-used adapters (Google, Outlook, Square, Acuity, Calendly)
+as production-ready, and validate the gated ones against your own tenant before
+depending on them. Discrepancy reports are the most useful contribution you can
+make.
 
 ---
 
