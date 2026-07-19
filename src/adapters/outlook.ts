@@ -151,8 +151,12 @@ export const outlook = defineAdapter<OutlookCredentials>({
 
     async cancelBooking(id, options) {
       const c = await http.resolve();
-      // The /cancel action cancels a meeting you organize and notifies attendees
-      // with an optional comment; a bare DELETE just removes the event silently.
+      // NOTE: `notify: false` is not honorable for organizer-owned meetings.
+      // Graph documents that deleting an event on the organizer's calendar
+      // "sends a cancellation message to the meeting attendees" — so DELETE is
+      // only silent for events with no attendees. Since createBooking attaches
+      // an attendee whenever customer.email is set, most bookings we create will
+      // notify on cancel regardless of this flag.
       if (options?.notify === true || options?.reason !== undefined) {
         await http.request(c, {
           method: 'POST',
@@ -176,6 +180,27 @@ export const outlook = defineAdapter<OutlookCredentials>({
       // verbatim so any Graph paging param ($skiptoken or $skip) is preserved.
       const follow =
         query.pageToken && /^https?:\/\//i.test(query.pageToken) ? query.pageToken : undefined;
+      if (query.pageToken !== undefined && follow === undefined) {
+        // A non-URL token used to be forwarded as `$skiptoken`. Graph pages
+        // calendarView with `$skip`, silently ignores unrecognized query params,
+        // and its docs say never to extract a paging token and reuse it — so
+        // that path returned page 1 forever and the caller looped indefinitely.
+        throw new UnibookingError({
+          provider: 'outlook',
+          code: 'INVALID_INPUT',
+          message:
+            'pageToken must be the full @odata.nextLink URL from a previous page; ' +
+            'Graph paging tokens cannot be reconstructed',
+        });
+      }
+      if (query.limit !== undefined && (query.limit < 1 || query.limit > 1000)) {
+        // calendarView documents $top as min 1, max 1000.
+        throw new UnibookingError({
+          provider: 'outlook',
+          code: 'INVALID_INPUT',
+          message: `limit must be between 1 and 1000 (got ${query.limit})`,
+        });
+      }
       const res = follow
         ? await http.request(c, { path: follow, headers: PREFER_UTC })
         : await http.request(c, {
@@ -186,7 +211,6 @@ export const outlook = defineAdapter<OutlookCredentials>({
               endDateTime: query.range.end,
               $top: query.limit ?? 50,
               $orderby: 'start/dateTime',
-              ...(query.pageToken ? { $skiptoken: query.pageToken } : {}),
             },
           });
       const bookings = asArray(res?.value, 'outlook', 'calendarView.value').map(toBooking);

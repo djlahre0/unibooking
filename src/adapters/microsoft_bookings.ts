@@ -1,12 +1,17 @@
-import type { Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import type { AvailabilitySlot, Booking } from '../types';
+import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
 
 /**
  * Microsoft Bookings (via Microsoft Graph). Has real staff and services.
- * Scope: `Bookings.ReadWrite.All`. Availability search is not modeled here.
+ * Scope: `Bookings.ReadWrite.All`.
+ *
+ * NOTE on availability: `getStaffAvailability` is GA in v1.0, but Graph documents
+ * it as **application-permission only** — delegated user tokens are not
+ * supported for that action, unlike every other call here. If your token is
+ * delegated, `searchAvailability` will fail even though the rest works.
  */
 export type MicrosoftBookingsCredentials = {
   accessToken: string;
@@ -75,7 +80,7 @@ function customerInfo(input: { customer?: { name?: string; email?: string; phone
 export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
   id: 'microsoft_bookings',
   capabilities: {
-    availability: false,
+    availability: true,
     staff: true,
     services: true,
     webhooks: false,
@@ -155,6 +160,18 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
       // paging param ($skiptoken or $skip) is preserved.
       const follow =
         query.pageToken && /^https?:\/\//i.test(query.pageToken) ? query.pageToken : undefined;
+      if (query.pageToken !== undefined && follow === undefined) {
+        // Forwarding a hand-built `$skiptoken` returned page 1 forever: Graph
+        // ignores unrecognized query params silently, and its paging docs say a
+        // token must never be extracted and reused.
+        throw new UnibookingError({
+          provider: 'microsoft_bookings',
+          code: 'INVALID_INPUT',
+          message:
+            'pageToken must be the full @odata.nextLink URL from a previous page; ' +
+            'Graph paging tokens cannot be reconstructed',
+        });
+      }
       const res = follow
         ? await http.request(c, { path: follow, headers: PREFER_UTC })
         : await http.request(c, {
@@ -164,7 +181,6 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
               start: query.range.start,
               end: query.range.end,
               $top: query.limit ?? 50,
-              ...(query.pageToken ? { $skiptoken: query.pageToken } : {}),
             },
           });
       const bookings = asArray(res?.value, 'microsoft_bookings', 'calendarView.value').map(toBooking);
@@ -172,8 +188,43 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
       return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
     },
 
-    async searchAvailability(_query) {
-      return unsupported('microsoft_bookings', 'availability');
+    async searchAvailability(query): Promise<AvailabilitySlot[]> {
+      assertValidRange(query.range, 'microsoft_bookings');
+      const c = await http.resolve();
+      const staffIds = query.staffId
+        ? [query.staffId]
+        : asArray(
+            (await http.request(c, { path: `${base(c)}/staffMembers`, query: { $top: 200 } }))?.value,
+            'microsoft_bookings',
+            'staffMembers.value',
+          )
+            .map((s: any) => (typeof s?.id === 'string' ? s.id : undefined))
+            .filter((s): s is string => s !== undefined);
+      if (staffIds.length === 0) return [];
+      const res = await http.request(c, {
+        method: 'POST',
+        path: `${base(c)}/getStaffAvailability`,
+        body: {
+          staffIds,
+          startDateTime: graphDateTime(query.range.start),
+          endDateTime: graphDateTime(query.range.end),
+        },
+      });
+      const out: AvailabilitySlot[] = [];
+      for (const entry of asArray(res?.value, 'microsoft_bookings', 'staffAvailability')) {
+        const e = asRecord(entry, 'microsoft_bookings', 'staffAvailabilityItem');
+        const staffId = typeof e.staffId === 'string' ? e.staffId : undefined;
+        for (const item of asArray(e.availabilityItems ?? [], 'microsoft_bookings', 'availabilityItems')) {
+          const slot = asRecord(item, 'microsoft_bookings', 'availabilityItem');
+          // Only `available` windows are bookable; busy/out-of-office are not.
+          if (String(slot.status).toLowerCase() !== 'available') continue;
+          const start = graphToInstant(slot.startDateTime);
+          const end = graphToInstant(slot.endDateTime);
+          if (start === undefined || end === undefined) continue;
+          out.push({ start, end, ...(staffId ? { staffId } : {}), raw: slot });
+        }
+      }
+      return out;
     },
   }),
 });

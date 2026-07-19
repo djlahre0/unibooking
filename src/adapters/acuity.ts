@@ -50,6 +50,36 @@ function splitName(name: string): { firstName: string; lastName: string } {
   return { firstName: first ?? name, lastName: rest.join(' ') };
 }
 
+/** Acuity marks firstName, lastName and email required on POST /appointments —
+ *  email being "optional for admins" only. We send `admin=true` exactly when a
+ *  staffId is present, so email is enforced only on the non-admin path, which is
+ *  the one that previously produced an opaque upstream 400. */
+function requireCustomerFields(input: {
+  staffId?: string;
+  customer?: { name?: string; email?: string };
+}): { firstName: string; lastName: string; email?: string } {
+  const name = input.customer?.name;
+  const email = input.customer?.email;
+  const isAdmin = input.staffId !== undefined;
+  if (!name) {
+    throw new UnibookingError({
+      provider: 'acuity',
+      code: 'INVALID_INPUT',
+      message: 'Acuity requires customer.name (firstName/lastName) to create an appointment',
+    });
+  }
+  if (!email && !isAdmin) {
+    throw new UnibookingError({
+      provider: 'acuity',
+      code: 'INVALID_INPUT',
+      message:
+        'Acuity requires customer.email to create an appointment ' +
+        '(it is optional only for admin bookings, i.e. when a staffId is supplied)',
+    });
+  }
+  return { ...splitName(name), ...(email ? { email } : {}) };
+}
+
 function toBooking(raw: unknown): Booking {
   const a = asRecord(raw, 'acuity', 'appointment');
   const start = normalizeInstant(a.datetime);
@@ -146,8 +176,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
           appointmentTypeID: requireService(input.serviceId),
           datetime: input.range.start,
           ...(input.staffId ? { calendarID: input.staffId } : {}),
-          ...(input.customer?.name ? splitName(input.customer.name) : {}),
-          ...(input.customer?.email ? { email: input.customer.email } : {}),
+          ...requireCustomerFields(input),
           ...(input.customer?.phone ? { phone: input.customer.phone } : {}),
           ...input.providerOptions,
         },
@@ -200,7 +229,13 @@ export const acuity = defineAdapter<AcuityCredentials>({
       await http.request(c, {
         method: 'PUT',
         path: `appointments/${encodeURIComponent(id)}/cancel`,
-        query: { ...(options?.notify === false ? { noEmail: true } : {}) },
+        query: {
+          // Without admin=true, a cancellation past the account's client-cancel
+          // window fails with cancel_too_close / cancel_not_allowed — even on an
+          // admin key. Server-side API calls are administrative by nature.
+          admin: true,
+          ...(options?.notify === false ? { noEmail: true } : {}),
+        },
         body: { ...(options?.reason ? { cancelNote: options.reason } : {}) },
         parse: 'none',
       });

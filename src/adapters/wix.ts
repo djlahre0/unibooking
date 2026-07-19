@@ -174,7 +174,7 @@ async function queryExtendedBookings(
 ): Promise<{ raw: Record<string, any>[]; next?: string }> {
   const res = await http.request(c, {
     method: 'POST',
-    path: 'bookings/reader/v2/extended-bookings/query',
+    path: 'bookings/bookings-reader/v2/extended-bookings/query',
     body: { query: { filter, ...(cursorPaging ? { cursorPaging } : {}) } },
   });
   const items = asArray(res?.extendedBookings, 'wix', 'extendedBookings');

@@ -147,11 +147,11 @@ describe('bookeo: pagination + numeric error code', () => {
     expect(p2.nextPageToken).toBeUndefined();
   });
 
-  it('captures a numeric provider error code', async () => {
+  it('captures the provider error code from errorId', async () => {
     const pool = agent.get('https://api.bookeo.com');
     pool
       .intercept({ path: (p) => p.startsWith('/v2/bookings/BK'), method: 'GET' })
-      .reply(400, JSON.stringify({ message: 'bad request', code: 507 }), {
+      .reply(400, JSON.stringify({ httpStatus: 400, message: 'bad request', errorId: 507 }), {
         headers: { 'content-type': 'application/json' },
       });
     const client = bookeo({ apiKey: 'k', secretKey: 's' });

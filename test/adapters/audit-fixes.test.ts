@@ -6,6 +6,7 @@ import { vagaro } from '../../src/adapters/vagaro';
 import { setmore } from '../../src/adapters/setmore';
 import { square } from '../../src/adapters/square';
 import { mindbody } from '../../src/adapters/mindbody';
+import { zenoti } from '../../src/adapters/zenoti';
 import { google } from '../../src/adapters/google';
 import { patchICS, parseICS } from '../../src/ical';
 import { codeForStatus, isRetryable } from '../../src/errors';
@@ -239,34 +240,59 @@ describe('AUDIT acuity: rejects zero-length ranges/slots', () => {
 // Vagaro: unsizable availability slots are skipped, never zero-length
 // ---------------------------------------------------------------------------
 describe('AUDIT vagaro: skips unsizable slots', () => {
-  it('drops a slot with no endTime and no durationMinutes instead of emitting end===start', async () => {
+  it('drops a slot whose items[] carries no duration instead of emitting end===start', async () => {
     agent
       .get('https://api.vagaro.com')
-      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/merchants/appointments/availability'), method: 'GET' })
-      .reply(200, JSON.stringify([{ startTime: '2026-07-20T22:00:00Z' }]), { headers: JSON_HEADERS });
-    const slots = await vagaro({ region: 'usa03', accessToken: 't' }).searchAvailability({
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          data: [{ appointmentDate: '2026-07-20', items: [{ serviceProviderId: 'sp1' }], timeSlot: ['09:00'] }],
+        }),
+        { headers: JSON_HEADERS },
+      );
+    const slots = await vagaro({ region: 'usa03', businessId: 'biz1', accessToken: 't' }).searchAvailability({
       range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T23:00:00Z' },
+      serviceId: 'svc1',
     });
     expect(slots).toHaveLength(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Setmore: unrecognized status maps to 'unknown', not 'confirmed'
+// Setmore: appointments carry no status field at all
 // ---------------------------------------------------------------------------
-describe('AUDIT setmore: unknown status is not assumed confirmed', () => {
-  it('maps an unrecognized status to unknown', async () => {
+// The former "unrecognized status maps to unknown" case is obsolete: the
+// Booking API returns no status/cancelled/no-show field on any documented
+// appointment shape, so there is nothing to map. Every appointment Setmore
+// hands back is implicitly active.
+describe('AUDIT setmore: no status field is returned', () => {
+  it('reports confirmed and ignores any stray status-like field', async () => {
     agent
       .get('https://developer.setmore.com')
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/appointments'), method: 'GET' })
-      .reply(200, JSON.stringify({
-        data: { appointment: {
-          key: 'A1', start_time: '2026-07-20T09:00:00-05:00', end_time: '2026-07-20T09:30:00-05:00',
-          label: 'x', status: 'SOME_NEW_STATE',
-        } },
-      }), { headers: JSON_HEADERS });
-    const b = await setmore({ accessToken: 't' }).getBooking('A1');
-    expect(b.status).toBe('unknown');
+      .reply(
+        200,
+        JSON.stringify({
+          response: true,
+          data: {
+            appointments: [
+              {
+                key: 'A1',
+                start_time: '2026-07-20T09:00Z',
+                end_time: '2026-07-20T09:30Z',
+                label: 'x',
+                status: 'SOME_NEW_STATE',
+              },
+            ],
+          },
+        }),
+        { headers: JSON_HEADERS },
+      );
+    const page = await setmore({ accessToken: 't' }).listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+    });
+    expect(page.bookings[0]!.status).toBe('confirmed');
   });
 });
 
@@ -409,5 +435,64 @@ describe('AUDIT mindbody: IANA timezone applies DST', () => {
     const b = await client.getBooking('1');
     // 15:00 PDT (July, -07:00) === 22:00Z. A fixed -08:00 offset would wrongly give 23:00Z.
     expect(Date.parse(b.range.start)).toBe(Date.parse('2026-07-20T22:00:00Z'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Docs-verification round (July 2026): bugs found by diffing against live specs
+// ---------------------------------------------------------------------------
+describe("AUDIT mindbody: cancel is supported via updateappointment", () => {
+  it("POSTs Execute: cancel instead of throwing UNSUPPORTED", async () => {
+    let body: any;
+    agent
+      .get("https://api.mindbodyonline.com")
+      .intercept({ path: (p) => p.includes("/appointment/updateappointment"), method: "POST" })
+      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify({}); },
+        { headers: JSON_HEADERS });
+    await mindbody({ apiKey: "k", siteId: "1", accessToken: "t" })
+      .cancelBooking("12345", { notify: true });
+    expect(body.AppointmentId).toBe(12345);
+    expect(body.Execute).toBe("cancel");
+    expect(body.SendEmail).toBe(true);
+  });
+});
+
+describe("AUDIT mindbody: create sends EndDateTime", () => {
+  it("does not let the staff default duration silently override the range", async () => {
+    let body: any;
+    agent
+      .get("https://api.mindbodyonline.com")
+      .intercept({ path: (p) => p.includes("/appointment/addappointment"), method: "POST" })
+      .reply(200, (opts: any) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({ Appointment: { Id: 1, StartDateTime: "2026-07-20T09:00:00",
+          EndDateTime: "2026-07-20T10:30:00", Status: "Booked" } });
+      }, { headers: JSON_HEADERS });
+    await mindbody({ apiKey: "k", siteId: "1", accessToken: "t", locationId: "1" }).createBooking({
+      title: "x",
+      range: { start: "2026-07-20T09:00:00Z", end: "2026-07-20T10:30:00Z" },
+      customer: { id: "c1" }, staffId: "s1", serviceId: "svc1",
+    });
+    expect(body.StartDateTime).toBe("2026-07-20T09:00:00");
+    expect(body.EndDateTime).toBe("2026-07-20T10:30:00");
+  });
+});
+
+describe("AUDIT zenoti: service is nested under item.id", () => {
+  it("sends item: { id, item_type }, not a flat service_id", async () => {
+    let body: any;
+    agent
+      .get("https://api.zenoti.com")
+      .intercept({ path: (p) => p.startsWith("/v1/bookings"), method: "POST" })
+      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify({ id: "bk1" }); },
+        { headers: JSON_HEADERS });
+    await zenoti({ apiKey: "k", centerId: "ctr1" }).searchAvailability({
+      range: { start: "2026-07-20T09:00:00Z", end: "2026-07-20T17:00:00Z" },
+      serviceId: "svc1",
+      providerOptions: { guestId: "g1" },
+      durationMinutes: 30,
+    }).catch(() => undefined);
+    expect(body.guests[0].items[0].item).toEqual({ id: "svc1", item_type: 0 });
+    expect(body.guests[0].items[0].service_id).toBeUndefined();
   });
 });

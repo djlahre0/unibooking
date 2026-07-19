@@ -199,6 +199,14 @@ async function resolveGuestId(
   });
 }
 
+/** Identifies an existing appointment to reschedule in place. When present,
+ *  Zenoti moves that appointment to the new slot instead of creating a fresh
+ *  booking — so no cancellation, no new id, and no cancellation fee. */
+interface RescheduleTarget {
+  invoiceId: string;
+  invoiceItemId: string;
+}
+
 /** Create booking -> reserve the slot matching `start` -> confirm -> appointment_id. */
 async function bookAndConfirm(
   http: HttpContext<ZenotiCredentials>,
@@ -208,6 +216,7 @@ async function bookAndConfirm(
   start: string,
   staffId: string | undefined,
   extra: Record<string, unknown> | undefined,
+  reschedule?: RescheduleTarget,
 ): Promise<string> {
   // Use the wall-clock date the caller expressed, NOT the UTC date — a late
   // center-local start (e.g. 10pm -05:00 = 03:00Z next day) must book on the
@@ -223,7 +232,14 @@ async function bookAndConfirm(
       guests: [
         {
           id: guestId,
-          items: [{ service_id: serviceId, ...(staffId ? { therapist: { id: staffId } } : {}) }],
+          ...(reschedule ? { invoice_id: reschedule.invoiceId } : {}),
+          items: [
+            {
+              item: { id: serviceId, item_type: 0 },
+              ...(reschedule ? { invoice_item_id: reschedule.invoiceItemId } : {}),
+              ...(staffId ? { therapist: { id: staffId } } : {}),
+            },
+          ],
         },
       ],
       ...extra,
@@ -233,7 +249,7 @@ async function bookAndConfirm(
   const bookingId = reqString(String(booking?.id ?? booking?.booking_id ?? ''), 'zenoti', 'booking.id');
   const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
   const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
-  const match = slots.find((s: any) => matchesRequestedTime(s.Time, start));
+  const match = slots.find((s: any) => s.Available !== false && matchesRequestedTime(s.Time, start));
   if (!match) {
     throw new UnibookingError({
       provider: 'zenoti',
@@ -309,15 +325,24 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         });
       }
       assertValidRange(input.range, 'zenoti');
-      // Re-book: read current service/guest/invoice, book the new time, cancel old.
+      // Zenoti has a first-class reschedule: the same create -> slots -> reserve
+      // -> confirm chain, but carrying the existing invoice_id and
+      // invoice_item_id moves the appointment instead of creating a new one.
+      // The previous book-fresh-then-cancel-old approach changed the booking id,
+      // left a cancelled invoice behind, and could fire cancellation fees.
       const current = await http.request(c, { path: `appointments/${enc(id)}` });
       const a = asRecord(current, 'zenoti', 'appointment');
       const serviceId =
         input.serviceId ?? reqString(String(a.service?.id ?? ''), 'zenoti', 'appointment.service.id');
       const guestId = reqString(String(a.guest?.id ?? ''), 'zenoti', 'appointment.guest.id');
-      const oldInvoiceId = reqString(String(a.invoice_id ?? ''), 'zenoti', 'appointment.invoice_id');
+      const invoiceId = reqString(String(a.invoice_id ?? ''), 'zenoti', 'appointment.invoice_id');
+      const invoiceItemId = reqString(
+        String(a.invoice_item_id ?? a.invoice_item?.id ?? ''),
+        'zenoti',
+        'appointment.invoice_item_id',
+      );
       const staffId = input.staffId ?? (a.therapist?.id ? String(a.therapist.id) : undefined);
-      const newApptId = await bookAndConfirm(
+      const apptId = await bookAndConfirm(
         http,
         c,
         guestId,
@@ -325,14 +350,9 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         input.range.start,
         staffId,
         input.providerOptions,
+        { invoiceId, invoiceItemId },
       );
-      await http.request(c, {
-        method: 'PUT',
-        path: `invoices/${enc(oldInvoiceId)}/cancel`,
-        query: { comments: 'rescheduled' },
-        parse: 'none',
-      });
-      return getAppointment(http, c, newApptId);
+      return getAppointment(http, c, apptId);
     },
 
     async cancelBooking(id, options) {
@@ -410,7 +430,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           guests: [
             {
               id: guestId,
-              items: [{ service_id: serviceId, ...(query.staffId ? { therapist: { id: query.staffId } } : {}) }],
+              items: [{ item: { id: serviceId, item_type: 0 }, ...(query.staffId ? { therapist: { id: query.staffId } } : {}) }],
             },
           ],
         },
@@ -422,6 +442,9 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       return slots.flatMap((s: any) => {
         const start = utc(s.Time) ?? (typeof s.Time === 'string' ? s.Time : undefined);
         if (start === undefined) return [];
+        // Each slot carries an Available flag; an unavailable slot is not
+        // bookable, so emitting it as a candidate misleads the caller.
+        if (s.Available === false) return [];
         return [
           {
             start,

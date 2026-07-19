@@ -14,7 +14,7 @@ export type SquareCredentials = {
 };
 
 const BASE = 'https://connect.squareup.com/v2/';
-const SQUARE_VERSION = '2025-10-16';
+const SQUARE_VERSION = '2026-07-15';
 
 function enc(id: string): string {
   return encodeURIComponent(id);

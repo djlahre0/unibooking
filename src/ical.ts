@@ -1,5 +1,5 @@
 import { formatWithOffset } from './time';
-import { localToInstant } from './tz';
+import { localToInstant, zoneOffsetMinutes } from './tz';
 
 /**
  * Minimal, dependency-free iCalendar (RFC 5545) reader/writer — enough for the
@@ -93,12 +93,38 @@ function quoteParam(v: string): string {
   return /[:;,]/.test(cleaned) ? `"${cleaned}"` : cleaned;
 }
 
+/** An instant rendered as iCalendar local basic form (`YYYYMMDDTHHMMSS`, no `Z`)
+ *  in `tz`. Returns undefined when the zone can't be resolved. */
+function instantToICalLocal(instant: string, tz: string): string | undefined {
+  const ms = Date.parse(instant);
+  if (Number.isNaN(ms)) return undefined;
+  const offset = zoneOffsetMinutes(tz, new Date(ms));
+  if (offset === null) return undefined;
+  const d = new Date(ms + offset * 60_000);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}` +
+    `T${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
+  );
+}
+
 function unescapeText(s: string): string {
-  return s.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+  // Single pass. Sequential replaces expanded the `\n` *inside* an escaped
+  // backslash first: the wire value `C:\\new` (correct encoding of `C:\new`)
+  // decoded to `C:\` + LF + `ew`.
+  return s.replace(/\\([\\;,nN])/g, (_m, c: string) => (c === 'n' || c === 'N' ? '\n' : c));
 }
 
 function escapeText(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  // RFC 5545 §3.3.11 defines no `\r` escape and TSAFE-CHAR excludes control
+  // characters, so normalize line endings before escaping. Emitting a bare CR
+  // re-splits the content line and corrupts the property.
+  return s
+    .replace(/\r\n?/g, '\n')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n');
 }
 
 /** Parse every VEVENT in an iCalendar document. */
@@ -294,6 +320,19 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
     ...(changes.summary !== undefined ? { SUMMARY: `SUMMARY:${escapeText(changes.summary)}` } : {}),
     ...(changes.status !== undefined ? { STATUS: `STATUS:${changes.status}` } : {}),
   };
+
+  /** Rewrite DTSTART/DTEND while keeping the property's original TZID anchoring.
+   *  Flattening a `DTSTART;TZID=…` to a UTC instant turns a recurring
+   *  wall-clock series into a fixed-offset one, which then drifts by an hour at
+   *  every DST transition (and orphans the VTIMEZONE). */
+  function retimed(existing: string, name: 'DTSTART' | 'DTEND', instant: string): string {
+    const tzid = /^[^:]*;(?:[^:]*;)*TZID=([^;:]+)/i.exec(existing)?.[1];
+    if (tzid) {
+      const local = instantToICalLocal(instant, tzid);
+      if (local !== undefined) return `${name};TZID=${tzid}:${local}`;
+    }
+    return `${name}:${instantToICalUTC(instant)}`;
+  }
   const out: string[] = [];
   const stack: string[] = [];
   let patchedEvent = false; // only the first VEVENT is patched
@@ -329,7 +368,13 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
       const name = propertyName(line);
       const replacement = replacements[name];
       if (replacement !== undefined) {
-        out.push(replacement);
+        if (name === 'DTSTART' && changes.start !== undefined) {
+          out.push(retimed(line, 'DTSTART', changes.start));
+        } else if (name === 'DTEND' && changes.end !== undefined) {
+          out.push(retimed(line, 'DTEND', changes.end));
+        } else {
+          out.push(replacement);
+        }
         seen.add(name);
         continue;
       }

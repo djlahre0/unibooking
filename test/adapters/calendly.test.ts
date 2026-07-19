@@ -58,14 +58,6 @@ runConformance({
       check: (b) => expect(b.status).toBe('cancelled'),
     },
     {
-      name: 'updateBooking with status cancelled posts a cancellation',
-      method: 'POST',
-      path: '/scheduled_events/EVT1/cancellation',
-      reply: { resource: event({ status: 'canceled' }) },
-      run: (c) => c.updateBooking('EVT1', { status: 'cancelled' }),
-      check: (b) => expect(b.status).toBe('cancelled'),
-    },
-    {
       name: 'cancelBooking posts a cancellation',
       method: 'POST',
       path: '/scheduled_events/EVT1/cancellation',
@@ -213,5 +205,41 @@ describe('calendly: cancel+rebook and input requirements', () => {
         serviceId: 'https://api.calendly.com/event_types/SVC1',
       }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+});
+
+describe('calendly: cancellation response is not a Booking', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it("re-reads the event instead of mapping the Cancellation resource", async () => {
+    const pool = agent.get(ORIGIN);
+    // POST /cancellation returns a Cancellation ({canceled_by, reason,
+    // canceler_type, created_at}) — no uri, no start_time, no end_time. Mapping
+    // it directly always threw UPSTREAM.
+    pool
+      .intercept({ path: '/scheduled_events/EVT1/cancellation', method: 'POST' })
+      .reply(201, JSON.stringify({
+        resource: { canceled_by: 'Jane', reason: null, canceler_type: 'host', created_at: '2026-07-02T00:00:00Z' },
+      }), { headers: { 'content-type': 'application/json' } });
+    pool
+      .intercept({ path: (p) => p.startsWith('/scheduled_events/EVT1'), method: 'GET' })
+      .reply(200, JSON.stringify({ resource: event({ status: 'canceled' }) }), {
+        headers: { 'content-type': 'application/json' },
+      });
+
+    const b = await calendly({ token: 'token', user: USER }).updateBooking('EVT1', { status: 'cancelled' });
+    expect(b.status).toBe('cancelled');
+    expect(b.range.start).toBe(START);
   });
 });

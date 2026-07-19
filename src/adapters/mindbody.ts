@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange, formatWithOffset } from '../time';
 import { localToInstant, zoneOffsetMinutes } from '../tz';
@@ -14,9 +14,10 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * a fixed `utcOffset` (e.g. `-08:00`) so this adapter can produce correct
  * canonical instants; without either, times are treated as UTC. `timezone` is
  * preferred — a fixed offset is wrong for half the year in DST-observing zones.
- * The public API has no appointment-cancel endpoint, so `cancelBooking` throws
- * UNSUPPORTED. Validate endpoint shapes against a live sandbox before relying
- * on this in production.
+ * Cancellation has no dedicated path — it is an action on the update endpoint
+ * (`updateappointment` with `Execute: 'cancel'`), which is what `cancelBooking`
+ * calls. Validate endpoint shapes against a live sandbox before relying on this
+ * in production.
  */
 export type MindbodyCredentials = {
   apiKey: string;
@@ -153,8 +154,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     staff: true,
     services: true,
     // Mindbody ships a Webhooks API; see webhooks/mindbody.ts for signature
-    // verification. (Appointment cancellation is only *observable* via the
-    // `appointmentBooking.cancelled` event — there is no cancel endpoint.)
+    // verification.
     webhooks: true,
     idempotency: false,
     customers: false,
@@ -179,6 +179,9 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           // LocationId is REQUIRED by AddAppointment (not optional).
           LocationId: required(c.locationId, 'locationId (LocationId)'),
           StartDateTime: toSiteLocal(input.range.start, tz),
+          // Without EndDateTime the staff default duration is used, silently
+          // ignoring the requested range.
+          EndDateTime: toSiteLocal(input.range.end, tz),
           ...input.providerOptions,
         },
       });
@@ -217,9 +220,20 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       return toBooking(res?.Appointment ?? res, tz);
     },
 
-    async cancelBooking(_id) {
-      // The Mindbody public API has no appointment-cancel endpoint.
-      return unsupported('mindbody', 'cancelBooking');
+    async cancelBooking(id, options) {
+      const c = await http.resolve();
+      // There is no dedicated cancel *path*, but cancellation is a documented
+      // action on the update endpoint: `Execute` accepts confirm, unconfirm,
+      // arrive, unarrive, cancel, latecancel, complete.
+      await http.request(c, {
+        method: 'POST',
+        path: 'appointment/updateappointment',
+        body: {
+          AppointmentId: Number(id),
+          Execute: 'cancel',
+          ...(options?.notify !== undefined ? { SendEmail: options.notify } : {}),
+        },
+      });
     },
 
     async listBookings(query) {
@@ -252,17 +266,32 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       assertValidRange(query.range, 'mindbody');
       const c = await http.resolve();
       const tz = siteTz(c);
-      const res = await http.request(c, {
-        path: 'appointment/bookableitems',
-        query: {
-          SessionTypeIds: required(query.serviceId, 'serviceId (SessionTypeIds)'),
-          StartDate: toSiteLocal(query.range.start, tz),
-          EndDate: toSiteLocal(query.range.end, tz),
-          StaffIds: query.staffId,
-          ...(c.locationId ? { LocationIds: c.locationId } : {}),
-        },
-      });
-      const items = asArray(res?.Availabilities, 'mindbody', 'Availabilities');
+      // bookableitems paginates (default limit 100). Reading only the first page
+      // silently truncated availability with no way for the caller to notice.
+      const items: unknown[] = [];
+      const PAGE = 100;
+      for (let offset = 0, page = 0; page < 50; page++, offset += PAGE) {
+        const res = await http.request(c, {
+          path: 'appointment/bookableitems',
+          query: {
+            SessionTypeIds: required(query.serviceId, 'serviceId (SessionTypeIds)'),
+            StartDate: toSiteLocal(query.range.start, tz),
+            EndDate: toSiteLocal(query.range.end, tz),
+            StaffIds: query.staffId,
+            ...(c.locationId ? { LocationIds: c.locationId } : {}),
+            limit: PAGE,
+            offset,
+          },
+        });
+        const batch = asArray(res?.Availabilities, 'mindbody', 'Availabilities');
+        items.push(...batch);
+        const total = res?.PaginationResponse?.TotalResults;
+        const done =
+          batch.length === 0 ||
+          batch.length < PAGE ||
+          (typeof total === 'number' && offset + batch.length >= total);
+        if (done) break;
+      }
       return items.flatMap((a: any) => {
         const start = toInstant(a.StartDateTime, tz);
         const end = toInstant(a.EndDateTime, tz);

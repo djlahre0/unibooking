@@ -11,6 +11,7 @@ import { runConformance } from '../conformance';
 const APPT = {
   appointment_id: 'appt1',
   invoice_id: 'inv1',
+  invoice_item_id: 'inv-item-1',
   start_time_utc: '2026-07-20T22:00:00',
   end_time_utc: '2026-07-20T22:45:00',
   status: 6, // Confirmed
@@ -154,17 +155,28 @@ describe('zenoti flows', () => {
     expect(bookingBody.date).toBe('2026-07-20');
   });
 
-  it('updateBooking reschedules by re-booking then cancelling the old invoice', async () => {
+  it('updateBooking reschedules in place, carrying invoice ids', async () => {
     const RANGE2 = { start: '2026-07-21T22:00:00Z', end: '2026-07-21T22:45:00Z' };
-    intercept('GET', '/v1/appointments/appt1', APPT); // current appt: service svc1, guest g1, invoice inv1
-    intercept('POST', '/v1/bookings', { id: 'bk2' });
+    intercept('GET', '/v1/appointments/appt1', APPT);
+    let bookingBody: any;
+    agent
+      .get('https://api.zenoti.com')
+      .intercept({ path: (p: string) => p.split('?')[0] === '/v1/bookings', method: 'POST' })
+      .reply(200, (opts: any) => { bookingBody = JSON.parse(String(opts.body)); return JSON.stringify({ id: 'bk2' }); },
+        { headers: { 'content-type': 'application/json' } });
     intercept('GET', '/v1/bookings/bk2/slots', { slots: [{ Time: '2026-07-21T22:00:00Z' }] });
     intercept('POST', '/v1/bookings/bk2/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk2/slots/confirm', { invoice: { items: [{ appointment_id: 'appt2' }] } });
-    intercept('PUT', '/v1/invoices/inv1/cancel', '');
-    intercept('GET', '/v1/appointments/appt2', { ...APPT, appointment_id: 'appt2' });
+    intercept('POST', '/v1/bookings/bk2/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('GET', '/v1/appointments/appt1', APPT);
+
     const b = await makeClient().updateBooking('appt1', { range: RANGE2 });
-    expect(b.id).toBe('appt2');
+
+    // Reschedule threads the existing invoice ids so Zenoti moves the booking
+    // rather than creating a second one and cancelling the first.
+    expect(bookingBody.guests[0].invoice_id).toBe('inv1');
+    expect(bookingBody.guests[0].items[0].invoice_item_id).toBe('inv-item-1');
+    // No invoice cancel is issued, and the booking keeps its id.
+    expect(b.id).toBe('appt1');
   });
 
   it('customers.findOrCreate returns an existing guest id by email', async () => {

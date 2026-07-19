@@ -55,5 +55,17 @@ export function parseGraphError(
   };
 }
 
-/** Prefer header so Graph returns times in UTC. */
-export const PREFER_UTC = { prefer: 'outlook.timezone="UTC"' };
+/**
+ * Prefer header: UTC times, plus immutable ids.
+ *
+ * Graph event ids are NOT stable by default — the docs state the value "changes
+ * when the item is moved from one container (such as a folder or calendar) to
+ * another". For a booking library whose contract is "persist this id, call
+ * getBooking(id) later", that is a durability defect, so we opt into
+ * `IdType="ImmutableId"`.
+ *
+ * Tradeoff: Microsoft's known-issues page notes immutable ids can miss some
+ * `/delta` notifications for *messages*. This adapter reads calendar events and
+ * never uses message delta, so the tradeoff does not apply here.
+ */
+export const PREFER_UTC = { prefer: 'outlook.timezone="UTC", IdType="ImmutableId"' };

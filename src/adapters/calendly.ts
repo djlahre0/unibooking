@@ -223,12 +223,18 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         return rebooked;
       }
       if (input.status === 'cancelled') {
-        const res = await http.request(c, {
+        const uuid = uuidFromUri(id);
+        // The cancellation endpoint returns a Cancellation resource
+        // ({canceled_by, reason, canceler_type, created_at}) — no uri, no
+        // start_time, no end_time. Feeding it to toBookingFromEvent always threw
+        // UPSTREAM, so discard it and re-read the event instead.
+        await http.request(c, {
           method: 'POST',
-          path: `scheduled_events/${enc(uuidFromUri(id))}/cancellation`,
+          path: `scheduled_events/${enc(uuid)}/cancellation`,
           body: {},
+          parse: 'none',
         });
-        return toBookingFromEvent(res?.resource);
+        return getEvent(http, c, id);
       }
       return unsupported(
         'calendly',
@@ -283,6 +289,15 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         });
       }
       const durationMinutes = query.durationMinutes;
+      // Documented limit: the range may not exceed 31 days (it was 7 before
+      // 2026-07-09). Surface it here rather than as an upstream 400.
+      if (Date.parse(query.range.end) - Date.parse(query.range.start) > 31 * 24 * 60 * 60 * 1000) {
+        throw new UnibookingError({
+          provider: 'calendly',
+          code: 'INVALID_INPUT',
+          message: 'Calendly availability ranges may not exceed 31 days',
+        });
+      }
       const c = await http.resolve();
       const res = await http.request(c, {
         path: 'event_type_available_times',

@@ -35,7 +35,7 @@ runConformance({
   // Reader V2 has no GET-by-id — get/list both POST the extended-bookings query.
   errorProbe: {
     method: 'POST',
-    path: '/bookings/reader/v2/extended-bookings/query',
+    path: '/bookings/bookings-reader/v2/extended-bookings/query',
     run: (c) => c.getBooking('missing'),
   },
   cases: [
@@ -64,7 +64,7 @@ runConformance({
     {
       name: 'getBooking queries extended-bookings and unwraps .booking',
       method: 'POST',
-      path: '/bookings/reader/v2/extended-bookings/query',
+      path: '/bookings/bookings-reader/v2/extended-bookings/query',
       reply: { extendedBookings: [{ booking: wixBooking({ status: 'CANCELED' }) }] },
       run: (c) => c.getBooking('B1'),
       check: (b) => expect(b.status).toBe('cancelled'),
@@ -72,7 +72,7 @@ runConformance({
     {
       name: 'listBookings queries extended-bookings and returns a cursor',
       method: 'POST',
-      path: '/bookings/reader/v2/extended-bookings/query',
+      path: '/bookings/bookings-reader/v2/extended-bookings/query',
       reply: {
         extendedBookings: [{ booking: wixBooking() }],
         pagingMetadata: { cursors: { next: 'c2' } },
@@ -180,7 +180,7 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     const pool = agent.get(ORIGIN);
     // 1) revision lookup via the extended-bookings query
     pool
-      .intercept({ path: '/bookings/reader/v2/extended-bookings/query', method: 'POST' })
+      .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
       .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '7' }) }] }), {
         headers: { 'content-type': 'application/json' },
       });
@@ -205,7 +205,7 @@ describe('wix: contact resolution + non-reschedule updates', () => {
   it('updateBooking with status cancelled reads the revision then routes to cancel', async () => {
     const pool = agent.get(ORIGIN);
     pool
-      .intercept({ path: '/bookings/reader/v2/extended-bookings/query', method: 'POST' })
+      .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
       .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '9' }) }] }), {
         headers: { 'content-type': 'application/json' },
       });

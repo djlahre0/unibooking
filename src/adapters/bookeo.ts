@@ -50,8 +50,8 @@ function toBooking(raw: unknown): Booking {
 function parseBookeoError(_status: number, body: unknown): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
-  // Bookeo's `code` is sometimes numeric — capture it either way.
-  const code = b.code ?? b.errorCode;
+  // The documented error body is {httpStatus, message, errorId}.
+  const code = b.errorId;
   return {
     ...(typeof b.message === 'string' ? { message: b.message } : {}),
     ...(typeof code === 'string' || typeof code === 'number' ? { providerCode: String(code) } : {}),
@@ -75,8 +75,9 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     availability: true,
     staff: false,
     services: true,
-    // Bookeo delivers webhooks but does not sign them, so no verifier is shipped.
-    webhooks: false,
+    // Bookeo signs webhooks with HMAC-SHA256 (hex); see webhooks/bookeo.ts.
+    // Verified against the vendor published test vector.
+    webhooks: true,
     idempotency: false,
     customers: false,
   },
@@ -92,6 +93,10 @@ export const bookeo = defineAdapter<BookeoCredentials>({
         path: 'bookings',
         body: {
           productId: requireProduct(input.serviceId),
+          // `participants` is required by the Booking schema; without it creates
+          // fail for essentially every product. Callers override the category
+          // split via providerOptions.
+          participants: { numbers: [{ number: 1 }] },
           startTime: input.range.start,
           endTime: input.range.end,
           ...(input.customer
@@ -156,7 +161,7 @@ export const bookeo = defineAdapter<BookeoCredentials>({
           : {
               startTime: query.range.start,
               endTime: query.range.end,
-              itemsPerPage: query.limit ?? 100,
+              itemsPerPage: Math.min(query.limit ?? 100, 100),
             },
       });
       const bookings = asArray(res?.data, 'bookeo', 'bookings.data').map(toBooking);

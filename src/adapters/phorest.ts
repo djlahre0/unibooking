@@ -239,11 +239,22 @@ export const phorest = defineAdapter<PhorestCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'phorest');
       const c = await http.resolve();
-      // PUT requires the current optimistic-lock `version`; read it if not supplied.
+      // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
+      // version all required — so a partial patch (e.g. serviceId alone) has to
+      // backfill the others from current state or the request is rejected.
       let version = input.providerOptions?.version;
-      if (version === undefined) {
-        const current = await http.request(c, { path: branchPath(c, `appointment/${enc(id)}`) });
-        version = asRecord(current, 'phorest', 'appointment').version;
+      let currentStaffId: string | undefined;
+      let currentStartTime: string | undefined;
+      const needsBackfill = version === undefined || !input.staffId || !input.range;
+      if (needsBackfill) {
+        const current = asRecord(
+          await http.request(c, { path: branchPath(c, `appointment/${enc(id)}`) }),
+          'phorest',
+          'appointment',
+        );
+        if (version === undefined) version = current.version;
+        if (typeof current.staffId === 'string') currentStaffId = current.staffId;
+        if (typeof current.startTime === 'string') currentStartTime = current.startTime;
       }
       const res = await http.request(c, {
         method: 'PUT',
@@ -251,12 +262,12 @@ export const phorest = defineAdapter<PhorestCredentials>({
         body: {
           appointmentId: id,
           version,
-          // Send BOTH ends on a reschedule so the new duration isn't silently
-          // taken from the old endTime.
-          ...(input.range
-            ? { startTime: toUtcZ(input.range.start), endTime: toUtcZ(input.range.end) }
-            : {}),
-          ...(input.staffId ? { staffId: input.staffId } : {}),
+          staffId: input.staffId ?? currentStaffId,
+          startTime: input.range ? toUtcZ(input.range.start) : currentStartTime,
+          // Note: when the staff or service changes, Phorest recomputes the
+          // duration from the new staff/service and IGNORES endTime — so the
+          // returned booking may not match the requested range.
+          ...(input.range ? { endTime: toUtcZ(input.range.end) } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...input.providerOptions,
         },

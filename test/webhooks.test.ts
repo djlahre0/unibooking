@@ -9,6 +9,7 @@ import { verifyCalendlySignature } from '../src/webhooks/calendly';
 import { verifyMindbodySignature } from '../src/webhooks/mindbody';
 import { verifyBoulevardSignature } from '../src/webhooks/boulevard';
 import { verifyWixWebhook } from '../src/webhooks/wix';
+import { verifyBookeoSignature } from '../src/webhooks/bookeo';
 
 // Cross-check our Web Crypto HMAC against Node's crypto to prove correctness.
 function nodeHmacBase64(key: string, msg: string): string {
@@ -133,22 +134,81 @@ describe('mindbody webhook', () => {
 });
 
 describe('boulevard webhook (salted HMAC)', () => {
-  const secret = 'blvd_whsec';
-  const salt = 'random-salt-123';
+  // Boulevard signs `salt + ":" + rawBody` with the base64-DECODED app secret,
+  // and emits base64 only. The secret is base64 text at rest.
+  const rawSecret = Buffer.from('blvd-app-secret-bytes');
+  const secret = rawSecret.toString('base64');
+  const salt = 'blvd-webhook-v1:efa1a1fd-80b2-41c8-8b13-850f36f9a303:1600717631';
   const body = '{"type":"appointment.created"}';
-  const msg = salt + body;
+  const payload = `${salt}:${body}`;
 
-  it('accepts a hex signature over salt+body', async () => {
-    expect(await verifyBoulevardSignature({ signingSecret: secret, salt, body, signature: nodeHmacHex(secret, msg) })).toBe(true);
+  const sign = (key: Buffer, msg: string): string =>
+    createHmac('sha256', key).update(msg).digest('base64');
+
+  it('accepts a base64 signature over salt + ":" + body', async () => {
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt,
+        body,
+        signature: sign(rawSecret, payload),
+      }),
+    ).toBe(true);
   });
-  it('accepts a base64 signature over salt+body', async () => {
-    expect(await verifyBoulevardSignature({ signingSecret: secret, salt, body, signature: nodeHmacBase64(secret, msg) })).toBe(true);
+
+  it('rejects a signature computed without the colon separator', async () => {
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt,
+        body,
+        signature: sign(rawSecret, salt + body),
+      }),
+    ).toBe(false);
   });
+
+  it('rejects a signature keyed with the undecoded base64 secret', async () => {
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt,
+        body,
+        signature: sign(Buffer.from(secret), payload),
+      }),
+    ).toBe(false);
+  });
+
   it('rejects a tampered body', async () => {
-    expect(await verifyBoulevardSignature({ signingSecret: secret, salt, body: body + 'x', signature: nodeHmacHex(secret, msg) })).toBe(false);
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt,
+        body: body + 'x',
+        signature: sign(rawSecret, payload),
+      }),
+    ).toBe(false);
   });
+
   it('rejects when the salt is wrong', async () => {
-    expect(await verifyBoulevardSignature({ signingSecret: secret, salt: 'other', body, signature: nodeHmacHex(secret, msg) })).toBe(false);
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt: 'blvd-webhook-v1:other:1600717631',
+        body,
+        signature: sign(rawSecret, payload),
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a hex signature — Boulevard never emits hex', async () => {
+    expect(
+      await verifyBoulevardSignature({
+        signingSecret: secret,
+        salt,
+        body,
+        signature: createHmac('sha256', rawSecret).update(payload).digest('hex'),
+      }),
+    ).toBe(false);
   });
 });
 
@@ -175,5 +235,49 @@ describe('wix webhook (signed JWT)', () => {
     const otherPem = other.publicKey.export({ type: 'spki', format: 'pem' }).toString();
     const token = jwt({ data: 'x' });
     expect(await verifyWixWebhook({ jwt: token, publicKey: otherPem })).toBeNull();
+  });
+});
+
+describe('bookeo webhook (HMAC-SHA256 hex)', () => {
+  // Bookeo's own published worked example. Every string below is verbatim from
+  // their docs, including the query string on the URL — this is the whole test.
+  const secretKey = 'iWQlbsuksGUqStFPk46WVjpGO7vVQoeO';
+  const timestamp = '1683025420401';
+  const messageId = 'dvpwVQI0W7Pe187dc203154';
+  const webhookUrl = 'https://www.mywebsite.com/webhooktest?id=1234';
+  const body =
+    '{"itemId":"2856MUMPA187DC203130","timestamp":"2023-05-02T04:01:00-07:00","item":{"credit":{"amount":"0",' +
+    '"currency":"USD"},"acceptSmsReminders":true,"numBookings":0,"numCancelations":0,"numNoShows":0,"member":false,' +
+    '"id":"2856MUMPA187DC203130","firstName":"John","lastName":"Smith","streetAddress":{"countryCode":"US"},' +
+    '"creationTime":"2023-05-02T04:01:00-07:00","gender":"unknown"}}';
+  const signature = 'a3cec455a9462fc524b02eeac7a26af743d512763271ab170f957aeafd6a636e';
+
+  const input = { secretKey, timestamp, messageId, webhookUrl, body, signature };
+
+  it("reproduces the signature from Bookeo's published test vector", async () => {
+    expect(await verifyBookeoSignature(input)).toBe(true);
+  });
+
+  it('rejects a tampered body', async () => {
+    expect(await verifyBookeoSignature({ ...input, body: body + 'x' })).toBe(false);
+  });
+
+  it('rejects when the URL query string is stripped', async () => {
+    // The query string is part of the signed message — no normalization.
+    expect(
+      await verifyBookeoSignature({ ...input, webhookUrl: 'https://www.mywebsite.com/webhooktest' }),
+    ).toBe(false);
+  });
+
+  it('rejects a stale timestamp when a tolerance is supplied', async () => {
+    expect(
+      await verifyBookeoSignature({ ...input, toleranceMs: 120_000, now: () => Number(timestamp) + 300_000 }),
+    ).toBe(false);
+  });
+
+  it('accepts a fresh timestamp within tolerance', async () => {
+    expect(
+      await verifyBookeoSignature({ ...input, toleranceMs: 120_000, now: () => Number(timestamp) + 5_000 }),
+    ).toBe(true);
   });
 });

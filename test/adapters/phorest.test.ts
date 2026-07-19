@@ -60,7 +60,8 @@ runConformance({
       method: 'PUT',
       path: '/third-party-api-server/api/business/biz1/branch/br1/appointment/ap123',
       reply: APPT,
-      run: (c) => c.updateBooking('ap123', { range: RANGE, providerOptions: { version: 1 } }),
+      run: (c) =>
+        c.updateBooking('ap123', { range: RANGE, staffId: 'stf1', providerOptions: { version: 1 } }),
       check: (b) => expect(b.range.end).toBe('2026-07-20T22:45:00Z'),
     },
     {
@@ -175,5 +176,43 @@ describe('phorest multi-call flows', () => {
       range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
     });
     expect(r.nextPageToken).toBe('1');
+  });
+});
+
+describe("phorest: update backfills required fields", () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it("reads current staffId/startTime when the patch omits them", async () => {
+    // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
+    // version required, so a serviceId-only patch must backfill the rest.
+    const pool = agent.get("https://platform.phorest.com");
+    pool
+      .intercept({ path: (p) => p.endsWith("/appointment/ap123"), method: "GET" })
+      .reply(200, JSON.stringify({ ...APPT, version: 7, staffId: "stf-current" }),
+        { headers: { "content-type": "application/json" } });
+    let body: any;
+    pool
+      .intercept({ path: (p) => p.endsWith("/appointment/ap123"), method: "PUT" })
+      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify(APPT); },
+        { headers: { "content-type": "application/json" } });
+
+    await makeClient().updateBooking("ap123", { serviceId: "svc-new" });
+
+    expect(body.appointmentId).toBe("ap123");
+    expect(body.version).toBe(7);
+    expect(body.staffId).toBe("stf-current");
+    expect(body.startTime).toBeTruthy();
+    expect(body.serviceId).toBe("svc-new");
   });
 });
