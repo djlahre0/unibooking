@@ -34,8 +34,10 @@ idempotency, customers.
   fetches the current version first.
 - **A real `createBooking` needs a `staffId` and the service-variation version.**
   Square's `appointment_segments` require `team_member_id`, and an appointment
-  booking needs `service_variation_version` — pass a `staffId` and inject the full
-  `appointment_segments` (with `service_variation_version`) via `providerOptions`.
+  booking needs `service_variation_version` — pass a `staffId` and the version via
+  `providerOptions: { service_variation_version }` (the adapter routes it onto the
+  segment). You can still override the whole `appointment_segments` array via
+  `providerOptions` if you need to.
 - `cancelBooking` takes **no reason** — Square's CancelBooking body carries only
   `idempotency_key`/`booking_version`, so `options.reason`/`notify` are ignored
   (set a seller note via `updateBooking` instead).

@@ -110,10 +110,15 @@ function toBooking(ev: VEvent): Booking {
 }
 
 function calendarQuery(startBasic: string, endBasic: string): string {
+  // `<C:expand>` asks the server to return each in-window recurrence instance as
+  // its own VEVENT (concrete DTSTART/DTEND, RRULE removed) rather than the
+  // unexpanded master — so a repeating series reports the right in-window times
+  // (RFC 4791 §9.6.5), matching how Google/Outlook expand recurrences. Its
+  // start/end must be UTC "date with time" values, same as the time-range.
   return (
     `<?xml version="1.0" encoding="utf-8" ?>` +
     `<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
-    `<D:prop><D:getetag/><C:calendar-data/></D:prop>` +
+    `<D:prop><D:getetag/><C:calendar-data><C:expand start="${startBasic}" end="${endBasic}"/></C:calendar-data></D:prop>` +
     `<C:filter><C:comp-filter name="VCALENDAR"><C:comp-filter name="VEVENT">` +
     `<C:time-range start="${startBasic}" end="${endBasic}"/>` +
     `</C:comp-filter></C:comp-filter></C:filter></C:calendar-query>`

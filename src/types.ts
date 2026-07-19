@@ -95,6 +95,10 @@ export interface CreateBookingInput {
    *  network retry can't double-book. Ignored by providers without support —
    *  check `capabilities.idempotency`. */
   idempotencyKey?: string;
+  /** Ask the provider to notify the customer/attendees about the new booking.
+   *  Honored only by providers that support it (e.g. Google `sendUpdates`);
+   *  ignored elsewhere. Omit to use the provider default. */
+  notify?: boolean;
   /** Escape hatch for provider-specific required fields
    *  (e.g. Square `appointmentSegments`, Zenoti `roomId`). Shallow-merged into
    *  the outgoing request body. */
@@ -107,6 +111,9 @@ export interface UpdateBookingInput {
   status?: BookingStatus;
   staffId?: string;
   serviceId?: string;
+  /** Ask the provider to notify the customer/attendees about the change. Honored
+   *  only where supported (e.g. Google `sendUpdates`); ignored elsewhere. */
+  notify?: boolean;
   providerOptions?: Record<string, unknown>;
 }
 

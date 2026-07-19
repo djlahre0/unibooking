@@ -18,7 +18,9 @@ export type SetmoreCredentials = {
   accessToken: string;
 };
 
-const BASE = 'https://api.setmore.com/';
+// Setmore's official docs use the developer.setmore.com host; override via
+// options.baseUrl if your account uses a different one.
+const BASE = 'https://developer.setmore.com/';
 
 function enc(id: string): string {
   return encodeURIComponent(id);

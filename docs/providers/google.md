@@ -25,12 +25,11 @@ function that returns a fresh token.
   `cancelled`. A status with no Google form (e.g. `no_show`) leaves it untouched.
 - `cancelBooking` deletes the event (Google has no soft-cancel for plain events).
   Pass `{ notify: true | false }` to control `sendUpdates`.
-- **Attendees are not notified on `createBooking`/`updateBooking`.** Google's API
-  sends no invitations unless the `sendUpdates` *query* parameter is set — unlike
-  the Calendar web UI. The adapter only wires `sendUpdates` on cancel (via
-  `cancelBooking({ notify })`); create/update currently have no notify toggle
-  (`providerOptions` is merged into the request body, not the query, so it can't
-  carry `sendUpdates`). Send the invite out-of-band if you need guests emailed.
+- **Attendees are not notified by default.** Google's API sends no invitations
+  unless the `sendUpdates` query parameter is set — unlike the Calendar web UI.
+  Pass `notify: true` on `createBooking`/`updateBooking` (or
+  `cancelBooking({ notify })`) to email guests (`sendUpdates=all`); `notify: false`
+  forces `none`; omitting it uses Google's default (no email).
 - `idempotency` is false: Google only accepts client-supplied event ids in a
   restricted format. Provide one via `providerOptions.id` if you need it.
 - All-day (date-only) events are represented with midnight-UTC instants.

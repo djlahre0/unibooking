@@ -33,7 +33,7 @@ Vagaro payment processing first).
 | Zenoti | Shipped | Full CRUD via multi-step booking flow; `apikey` auth, `centerId` scoped. Endpoints verified against the docs (2026-07-19 audit). Book times in the center's local offset — slot matching is wall-clock based and not yet verified against non-UTC live tenants. |
 | Vagaro | Shipped (read-only) | Public API is read + webhooks only; writes throw `UNSUPPORTED`. |
 | Boulevard | Shipped (no availability) | Enterprise-tier only. GraphQL Admin API with per-request async-HMAC auth (`Basic`). Create/read/reschedule/cancel/list + customers + webhooks. `searchAvailability` throws `UNSUPPORTED` — bookable-time queries live on the Client cart API (different creds). |
-| Setmore | Shipped (gated) | Requires Setmore Pro + manual approval (email `api@setmore.com`); no sandbox. Full appointment CRUD, slots, staff, services, customers. Bring your own bearer token. The official API host may be `developer.setmore.com` rather than the adapter's `api.setmore.com` default — verify with a live call and override `options.baseUrl` if needed. |
+| Setmore | Shipped (gated) | Requires Setmore Pro + manual approval (email `api@setmore.com`); no sandbox. Full appointment CRUD, slots, staff, services, customers. Bring your own bearer token. Defaults to the documented `developer.setmore.com` host (override `options.baseUrl` if your account differs); not yet verified against a live account. |
 | Mangomint | Stub (blocked) | No public API documentation exists. Methods throw `UNSUPPORTED`. |
 
 See [docs/providers/](./providers/) for per-provider setup and caveats.

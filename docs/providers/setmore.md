@@ -29,6 +29,9 @@ CRUD (create / get / update-reschedule / cancel / list). No webhooks.
   slots come back as local `HH:mm` for the selected date; the adapter combines
   them with the **offset of your `range.start`** to form canonical instants — so
   express availability queries in the business's local offset (as with Zenoti).
-- **Not yet verified against a live account.** The response envelope, the
+- **Host:** defaults to the documented `developer.setmore.com` (paths under
+  `/api/v1/bookingapi/…`). If your account is provisioned on a different host,
+  override it with `options.baseUrl`.
+- **Not yet verified against a live account.** The host, response envelope, the
   appointment time format (ISO vs epoch — both are handled), and the slot format
   are docs-derived and marked `TODO: verify against live API`.

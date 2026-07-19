@@ -169,6 +169,12 @@ export const square = defineAdapter<SquareCredentials>({
       if (customerId === undefined && input.customer && (input.customer.email || input.customer.phone)) {
         customerId = await findOrCreateCustomer(http, c, input.customer);
       }
+      // Square appointment bookings require a `service_variation_version` on the
+      // segment (pins the catalog version). It has no canonical field, so pull it
+      // out of providerOptions and put it in the SEGMENT rather than the booking
+      // body. The rest of providerOptions still merges onto the booking (a caller
+      // can also override `appointment_segments` wholesale that way).
+      const { service_variation_version, ...bookingOptions } = input.providerOptions ?? {};
       const res = await http.request(c, {
         method: 'POST',
         path: 'bookings',
@@ -185,9 +191,10 @@ export const square = defineAdapter<SquareCredentials>({
               {
                 ...(input.staffId ? { team_member_id: input.staffId } : {}),
                 ...(input.serviceId ? { service_variation_id: input.serviceId } : {}),
+                ...(service_variation_version !== undefined ? { service_variation_version } : {}),
               },
             ],
-            ...input.providerOptions,
+            ...bookingOptions,
           },
         },
       });

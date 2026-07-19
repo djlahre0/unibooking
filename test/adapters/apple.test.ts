@@ -141,6 +141,57 @@ describe('apple: update does GET then PUT', () => {
     expect(putBody).not.toContain('STATUS:CONFIRMED');
   });
 
+  it('requests server-side expansion and maps each recurring instance to its own booking', async () => {
+    // The server honors <C:expand> and returns two concrete instances (each with a
+    // RECURRENCE-ID and its own DTSTART, RRULE removed) under one resource href.
+    const EXPANDED = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:series-1',
+      'RECURRENCE-ID:20260720T220000Z',
+      'SUMMARY:Weekly sync',
+      'DTSTART:20260720T220000Z',
+      'DTEND:20260720T223000Z',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:series-1',
+      'RECURRENCE-ID:20260727T220000Z',
+      'SUMMARY:Weekly sync',
+      'DTSTART:20260727T220000Z',
+      'DTEND:20260727T223000Z',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const MS =
+      `<?xml version="1.0" encoding="utf-8"?>` +
+      `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+      `<D:response><D:href>/123/calendars/home/series-1.ics</D:href>` +
+      `<D:propstat><D:prop><C:calendar-data>${EXPANDED}</C:calendar-data></D:prop>` +
+      `<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`;
+
+    const pool = agent.get(ORIGIN);
+    let reportBody = '';
+    pool
+      .intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' })
+      .reply(207, (opts) => {
+        reportBody = String(opts.body);
+        return MS;
+      }, { headers: { 'content-type': 'application/xml' } });
+
+    const client = apple({ username: 'u', appPassword: 'p', calendarUrl: CAL });
+    const { bookings } = await client.listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-28T00:00:00Z' },
+    });
+
+    expect(reportBody).toContain('<C:expand');
+    expect(bookings).toHaveLength(2);
+    expect(bookings.map((b) => b.range.start)).toEqual([
+      '2026-07-20T22:00:00Z',
+      '2026-07-27T22:00:00Z',
+    ]);
+  });
+
   it('sends If-Match with the current ETag on update, If-None-Match:* on create', async () => {
     const pool = agent.get(ORIGIN);
     pool

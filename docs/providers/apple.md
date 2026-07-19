@@ -26,15 +26,15 @@ Works with any CalDAV server (iCloud, Fastmail, Nextcloud, …) — it speaks We
   and ids each booking by its DAV resource href — so `getBooking`/`updateBooking`/
   `cancelBooking` address the right resource even when a server stored the event
   under a name that isn't its iCal UID.
-- **Recurring events are returned unexpanded.** The `calendar-query` `REPORT`
-  returns the recurring *master* `VEVENT` (per RFC 4791), so a repeating series
-  yields **one** booking whose `range` is the master's original `DTSTART`/`DTEND`
-  — which may fall *outside* the queried window. This adapter does not run
-  server-side `<C:expand>` or client-side `RRULE` expansion (iCloud's server-side
-  expand is unreliable), so per-instance times aren't materialized. If you need
-  individual occurrences, read `booking.raw` (the `RRULE`) and expand yourself.
-  (Google and Outlook expand recurrences into single instances; Apple/CalDAV does
-  not.)
+- **Recurring events are expanded.** `listBookings` asks the server to expand the
+  recurrence set with CalDAV `<C:expand>` (RFC 4791 §9.6.5), so a repeating series
+  returns **one booking per in-window occurrence** with the correct instance times
+  — matching Google/Outlook. Two caveats: (1) iCloud's server-side expand has been
+  reported as occasionally returning the unexpanded master anyway, in which case
+  that booking carries the master's original `DTSTART`; and (2) expanded instances
+  of the same series share one DAV resource, so they share a booking `id` — read
+  `booking.raw` (which includes each `RECURRENCE-ID`) to tell them apart. No
+  client-side `RRULE` expansion fallback is performed.
 - `updateBooking` GETs the current `.ics`, patches only the fields you changed
   (preserving `RRULE`, `LOCATION`, `DESCRIPTION`, extra attendees, alarms, and
   `VTIMEZONE`), and PUTs it back with an `If-Match` ETag for optimistic-concurrency

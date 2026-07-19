@@ -20,6 +20,31 @@ function normalizeInstant(s: unknown): string | undefined {
   return s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
 }
 
+/** The offset token (`Z` or `±HH:MM`) of an RFC3339 instant. */
+function offsetToken(iso: string): string {
+  const m = /([+-]\d{2}:\d{2}|Z)$/.exec(iso);
+  return m ? m[1]! : 'Z';
+}
+
+/** The `YYYY-MM-DD` dates (in `range.start`'s offset) that the window overlaps —
+ *  Acuity's `availability/times` is single-date, so a multi-day range needs one
+ *  call per day. Capped so an over-wide range can't fan out unboundedly. */
+function datesInRange(startIso: string, endIso: string, cap = 31): string[] {
+  const offset = offsetToken(startIso);
+  const endMs = Date.parse(endIso);
+  const dates: string[] = [];
+  let dateStr = startIso.slice(0, 10);
+  for (let i = 0; i < cap; i++) {
+    const dayStartMs = Date.parse(`${dateStr}T00:00:00${offset}`);
+    if (dayStartMs >= endMs) break;
+    dates.push(dateStr);
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    dateStr = d.toISOString().slice(0, 10);
+  }
+  return dates.length > 0 ? dates : [startIso.slice(0, 10)];
+}
+
 function splitName(name: string): { firstName: string; lastName: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
   return { firstName: first ?? name, lastName: rest.join(' ') };
@@ -211,28 +236,32 @@ export const acuity = defineAdapter<AcuityCredentials>({
         });
       }
       const durationMinutes = query.durationMinutes;
+      const serviceId = requireService(query.serviceId);
       const c = await http.resolve();
-      const res = await http.request(c, {
-        path: 'availability/times',
-        query: {
-          date: query.range.start.slice(0, 10),
-          appointmentTypeID: requireService(query.serviceId),
-          calendarID: query.staffId,
-        },
-      });
-      const times = asArray(res, 'acuity', 'availability/times');
-      return times.flatMap((t: any) => {
-        const start = normalizeInstant(t.time);
-        if (start === undefined) return [];
-        return [
-          {
+      const windowStart = Date.parse(query.range.start);
+      const windowEnd = Date.parse(query.range.end);
+      // `availability/times` returns one date's slots, so page a call per day the
+      // window overlaps and keep only slots that actually fall inside the range.
+      const out: AvailabilitySlot[] = [];
+      for (const date of datesInRange(query.range.start, query.range.end)) {
+        const res = await http.request(c, {
+          path: 'availability/times',
+          query: { date, appointmentTypeID: serviceId, calendarID: query.staffId },
+        });
+        for (const t of asArray(res, 'acuity', 'availability/times')) {
+          const start = normalizeInstant(t.time);
+          if (start === undefined) continue;
+          const startMs = Date.parse(start);
+          if (startMs < windowStart || startMs >= windowEnd) continue;
+          out.push({
             start,
             end: endFromDuration(start, durationMinutes),
             ...(query.staffId ? { staffId: query.staffId } : {}),
             raw: t,
-          },
-        ];
-      });
+          });
+        }
+      }
+      return out;
     },
   }),
 });

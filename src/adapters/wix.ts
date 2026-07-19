@@ -2,7 +2,8 @@ import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../type
 import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
-import { assertValidRange, endFromDuration, isInstant } from '../time';
+import { assertValidRange, endFromDuration, formatWithOffset, isInstant } from '../time';
+import { localToInstant, zoneOffsetMinutes } from '../tz';
 
 /**
  * Wix Bookings (headless REST). Bookings Writer V2 for create/reschedule/cancel,
@@ -25,6 +26,14 @@ const BASE = 'https://www.wixapis.com/';
 
 function enc(id: string): string {
   return encodeURIComponent(id);
+}
+
+/** A canonical instant → the offset-less wall-clock time in `tz` (what Wix Time
+ *  Slots V2 wants for `fromLocalDate`/`toLocalDate`). */
+function toLocalWallClock(instant: string, tz: string): string {
+  const epoch = Date.parse(instant);
+  const offsetMin = zoneOffsetMinutes(tz, new Date(epoch)) ?? 0;
+  return formatWithOffset(epoch, offsetMin).replace(/(Z|[+-]\d{2}:\d{2})$/, '');
 }
 
 function mapStatus(s: unknown): BookingStatus {
@@ -154,14 +163,47 @@ async function findOrCreateContact(
   return reqString(String(created?.contact?.id ?? ''), 'wix', 'contact.id');
 }
 
+/** Reader V2 has NO GET-by-id — you query `extended-bookings` with a filter. Each
+ *  result is an ExtendedBooking wrapper whose `.booking` holds the real booking.
+ *  Returns the raw booking objects plus the next cursor. */
+async function queryExtendedBookings(
+  http: HttpContext<WixCredentials>,
+  c: WixCredentials,
+  filter: Record<string, unknown>,
+  cursorPaging?: { limit?: number; cursor?: string },
+): Promise<{ raw: Record<string, any>[]; next?: string }> {
+  const res = await http.request(c, {
+    method: 'POST',
+    path: 'bookings/reader/v2/extended-bookings/query',
+    body: { query: { filter, ...(cursorPaging ? { cursorPaging } : {}) } },
+  });
+  const items = asArray(res?.extendedBookings, 'wix', 'extendedBookings');
+  const bookings = items.map((e) => (e && typeof e.booking === 'object' ? e.booking : e));
+  const next = res?.pagingMetadata?.cursors?.next;
+  return { raw: bookings, ...(typeof next === 'string' && next ? { next } : {}) };
+}
+
 async function getBooking(
   http: HttpContext<WixCredentials>,
   c: WixCredentials,
   id: string,
 ): Promise<Booking> {
-  // TODO: verify against live API — Reader V2 may require the query endpoint instead of GET-by-id.
-  const res = await http.request(c, { path: `bookings/reader/v2/bookings/${enc(id)}` });
-  return toBooking(res?.booking ?? res);
+  const { raw } = await queryExtendedBookings(http, c, { id });
+  if (!raw[0]) {
+    throw new UnibookingError({ provider: 'wix', code: 'NOT_FOUND', message: `booking ${id} not found` });
+  }
+  return toBooking(raw[0]);
+}
+
+/** Reschedule and cancel both need the booking's current `revision` (optimistic
+ *  concurrency). Read it via the query unless the caller supplied one. */
+async function currentRevision(
+  http: HttpContext<WixCredentials>,
+  c: WixCredentials,
+  id: string,
+): Promise<string | number | undefined> {
+  const { raw } = await queryExtendedBookings(http, c, { id });
+  return raw[0]?.revision;
 }
 
 export const wix = defineAdapter<WixCredentials>({
@@ -186,6 +228,11 @@ export const wix = defineAdapter<WixCredentials>({
         contactId = await findOrCreateContact(http, c, input.customer);
       }
       const cust = input.customer;
+      // Wix create requires a participant count — either `totalParticipants` or
+      // `participantsChoices`. Default to 1 unless the caller supplies either.
+      const hasParticipants =
+        input.providerOptions?.totalParticipants !== undefined ||
+        input.providerOptions?.participantsChoices !== undefined;
       const res = await http.request(c, {
         method: 'POST',
         path: 'bookings/v2/bookings',
@@ -210,6 +257,7 @@ export const wix = defineAdapter<WixCredentials>({
                   },
                 }
               : {}),
+            ...(hasParticipants ? {} : { totalParticipants: 1 }),
             ...input.providerOptions,
           },
         },
@@ -227,28 +275,33 @@ export const wix = defineAdapter<WixCredentials>({
       // reschedule. Cancellation routes to the cancel endpoint.
       if (input.range) {
         assertValidRange(input.range, 'wix');
+        // `revision` is REQUIRED on reschedule (optimistic concurrency).
+        const { revision: optRevision, ...rest } = input.providerOptions ?? {};
+        const revision = optRevision ?? (await currentRevision(http, c, id));
         const res = await http.request(c, {
           method: 'POST',
           path: `bookings/v2/bookings/${enc(id)}/reschedule`,
           body: {
+            ...(revision !== undefined ? { revision } : {}),
             slot: {
               startDate: input.range.start,
               endDate: input.range.end,
               ...(input.staffId ? { resource: { id: input.staffId } } : {}),
               ...(input.serviceId ? { serviceId: input.serviceId } : {}),
             },
-            ...input.providerOptions,
+            ...rest,
           },
         });
         return toBooking(res?.booking);
       }
       if (input.status === 'cancelled') {
         // Wix's cancel endpoint returns the updated booking, so map it directly
-        // rather than making a second round-trip.
+        // rather than making a second round-trip. `revision` is REQUIRED.
+        const revision = input.providerOptions?.revision ?? (await currentRevision(http, c, id));
         const res = await http.request(c, {
           method: 'POST',
           path: `bookings/v2/bookings/${enc(id)}/cancel`,
-          body: {},
+          body: { ...(revision !== undefined ? { revision } : {}) },
         });
         return toBooking(res?.booking);
       }
@@ -260,11 +313,13 @@ export const wix = defineAdapter<WixCredentials>({
 
     async cancelBooking(id, options) {
       const c = await http.resolve();
+      // `revision` is REQUIRED on cancel; `participantNotification` controls emails.
+      const revision = await currentRevision(http, c, id);
       await http.request(c, {
         method: 'POST',
         path: `bookings/v2/bookings/${enc(id)}/cancel`,
         body: {
-          // TODO: verify against live API — Wix uses `participantNotification` to control emails.
+          ...(revision !== undefined ? { revision } : {}),
           ...(options?.notify !== undefined
             ? { participantNotification: { notifyParticipants: options.notify } }
             : {}),
@@ -276,60 +331,65 @@ export const wix = defineAdapter<WixCredentials>({
     async listBookings(query) {
       assertValidRange(query.range, 'wix');
       const c = await http.resolve();
-      // TODO: verify against live API — Reader V2 query filter field/operators.
-      const res = await http.request(c, {
-        method: 'POST',
-        path: 'bookings/reader/v2/bookings/query',
-        body: {
-          query: {
-            filter: {
-              startDate: { $gte: query.range.start, $lte: query.range.end },
-              ...(query.staffId ? { 'bookedEntity.slot.resource.id': query.staffId } : {}),
-            },
-            cursorPaging: { limit: query.limit ?? 50, ...(query.pageToken ? { cursor: query.pageToken } : {}) },
-          },
+      // Reader V2's only list method is Query Extended Bookings.
+      // TODO: verify against live API — the exact filterable field name for the
+      // date window (`startDate` here) isn't published; confirm on a live tenant.
+      const { raw, next } = await queryExtendedBookings(
+        http,
+        c,
+        {
+          startDate: { $gte: query.range.start, $lte: query.range.end },
+          ...(query.staffId ? { 'bookedEntity.slot.resource.id': query.staffId } : {}),
         },
-      });
-      const bookings = asArray(res?.bookings ?? res?.items, 'wix', 'bookings').map(toBooking);
-      const next = res?.pagingMetadata?.cursors?.next;
-      return { bookings, ...(typeof next === 'string' && next ? { nextPageToken: next } : {}) };
+        { limit: query.limit ?? 50, ...(query.pageToken ? { cursor: query.pageToken } : {}) },
+      );
+      const bookings = raw.map(toBooking);
+      return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
     },
 
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
       assertValidRange(query.range, 'wix');
+      // Time Slots V2 works in LOCAL time: it takes `fromLocalDate`/`toLocalDate`
+      // (no offset) plus an IANA `timeZone`, and returns `localStartDate`/
+      // `localEndDate` (also offset-less). Convert those back to canonical instants
+      // using the same zone, so a query without a timezone can't produce ambiguous
+      // times.
+      const tz = query.range.timezone;
+      if (!tz) {
+        throw new UnibookingError({
+          provider: 'wix',
+          code: 'INVALID_INPUT',
+          message: 'Wix availability (Time Slots V2) is local-time — pass range.timezone (an IANA zone)',
+        });
+      }
       const c = await http.resolve();
-      // TODO: verify against live API — Time Slots V2 endpoint + request shape.
+      // TODO: verify against live API — Time Slots V2 public path + resource-filter shape.
       const res = await http.request(c, {
         method: 'POST',
-        path: 'bookings/v2/time-slots/list-availability-time-slots',
+        path: '_api/service-availability/v2/time-slots',
         body: {
           ...(query.serviceId ? { serviceId: query.serviceId } : {}),
-          startDate: query.range.start,
-          endDate: query.range.end,
-          ...(query.staffId ? { resourceIds: [query.staffId] } : {}),
+          fromLocalDate: toLocalWallClock(query.range.start, tz),
+          toLocalDate: toLocalWallClock(query.range.end, tz),
+          timeZone: tz,
+          ...(query.staffId ? { resourceTypes: [{ resourceIds: [query.staffId] }] } : {}),
         },
       });
-      const slots = asArray(
-        res?.availabilityTimeSlots ?? res?.timeSlots ?? res?.slots,
-        'wix',
-        'availabilityTimeSlots',
-      );
+      const slots = asArray(res?.timeSlots ?? res?.availabilityTimeSlots, 'wix', 'timeSlots');
+      const toInstant = (local: unknown): string | undefined =>
+        typeof local === 'string' && local
+          ? localToInstant(local, tz, (ms) => formatWithOffset(ms, 0))
+          : undefined;
       return slots.flatMap((s: any): AvailabilitySlot[] => {
-        const inner = s.slot ?? s;
-        const start = inner.startDate;
-        // Wix may return `localStartDate` (no offset) when a slot has a timezone;
-        // those are not canonical instants, so we skip them rather than emit an
-        // ambiguous time. Callers needing those should read `raw`.
-        if (typeof start !== 'string' || !isInstant(start)) return [];
-        const rawEnd = inner.endDate;
+        const start = toInstant(s.localStartDate) ?? (isInstant(s.startDate) ? s.startDate : undefined);
+        if (start === undefined) return [];
         const end =
-          typeof rawEnd === 'string' && isInstant(rawEnd)
-            ? rawEnd
-            : query.durationMinutes
-              ? endFromDuration(start, query.durationMinutes)
-              : undefined;
+          toInstant(s.localEndDate) ??
+          (isInstant(s.endDate) ? s.endDate : undefined) ??
+          (query.durationMinutes ? endFromDuration(start, query.durationMinutes) : undefined);
         if (end === undefined) return [];
-        const staffId = inner.resource?.id ?? query.staffId;
+        const staffId =
+          s.availableResources?.[0]?.resources?.[0]?.id ?? s.resource?.id ?? query.staffId;
         return [{ start, end, ...(staffId ? { staffId: String(staffId) } : {}), raw: s }];
       });
     },

@@ -117,6 +117,30 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     expect(b.range.timezone).toBe('America/Los_Angeles');
   });
 
+  it('pages availability across a multi-day range and keeps only in-window slots', async () => {
+    const pool = agent.get('https://acuityscheduling.com');
+    const H = { 'content-type': 'application/json' };
+    pool
+      .intercept({ path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-20'), method: 'GET' })
+      .reply(200, JSON.stringify([{ time: '2026-07-20T09:00:00-0700' }, { time: '2026-07-20T15:00:00-0700' }]), { headers: H });
+    pool
+      .intercept({ path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-21'), method: 'GET' })
+      .reply(200, JSON.stringify([{ time: '2026-07-21T10:00:00-0700' }]), { headers: H });
+
+    const client = acuity({ userId: 'u', apiKey: 'k' });
+    const slots = await client.searchAvailability({
+      range: { start: '2026-07-20T10:00:00-07:00', end: '2026-07-21T12:00:00-07:00' },
+      serviceId: '12',
+      durationMinutes: 30,
+    });
+    // 07-20 09:00 is before the window (10:00) → dropped; the other two are in-window.
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-07-20T15:00:00-07:00',
+      '2026-07-21T10:00:00-07:00',
+    ]);
+    agent.assertNoPendingInterceptors();
+  });
+
   it('searchAvailability rejects an inverted range before hitting the network', async () => {
     const client = acuity({ userId: 'u', apiKey: 'k' });
     await expect(

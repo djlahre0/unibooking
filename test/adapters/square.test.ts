@@ -150,6 +150,34 @@ describe('square: customer resolution + version fetch', () => {
     agent.assertNoPendingInterceptors();
   });
 
+  it('createBooking puts providerOptions.service_variation_version on the segment', async () => {
+    const pool = agent.get(ORIGIN);
+    let body: any;
+    pool
+      .intercept({ path: '/v2/bookings', method: 'POST' })
+      .reply(200, (opts) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking() });
+      }, { headers: { 'content-type': 'application/json' } });
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.createBooking({
+      title: 'Cut',
+      range: RANGE,
+      customer: { id: 'CUST1' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+      providerOptions: { service_variation_version: 42 },
+    });
+
+    const seg = body.booking.appointment_segments[0];
+    expect(seg.service_variation_version).toBe(42);
+    expect(seg.service_variation_id).toBe('sv1');
+    // version must NOT leak into the booking body as a top-level field
+    expect(body.booking.service_variation_version).toBeUndefined();
+    agent.assertNoPendingInterceptors();
+  });
+
   it('updateBooking without a version first GETs to read it', async () => {
     const pool = agent.get(ORIGIN);
     pool

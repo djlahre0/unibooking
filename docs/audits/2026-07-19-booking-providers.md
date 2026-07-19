@@ -81,46 +81,38 @@ envelopes, `version` optimistic concurrency, list filters incl. `team_member_id`
 `start_at_max`, `search-availability` incl. the `segment_filters` requirement,
 and the full `BookingStatus` enum.)
 
-### Wix — wrong CRM contact name shape
+### Wix — rewritten to the documented Bookings V2 contract
 
-`customers.findOrCreate` sent `info.name = { firstName, lastName }`, but Contacts
-v4 uses **`info.name = { first, last }`** — so a new contact's name was silently
-dropped. (The `{ firstName, lastName }` shape is correct for `booking.contactDetails`,
-which is why the two got conflated.) Fixed with a dedicated `contactName` helper.
+The first pass fixed the CRM contact name shape (`info.name = { first, last }`,
+not `{ firstName, lastName }` — a new contact's name was silently dropped). A
+follow-up pass then rewrote the endpoints/shapes that verification had flagged as
+not matching the live API (see the former "Documented" note below):
+
+- `getBooking`/`listBookings` now POST `bookings/reader/v2/extended-bookings/query`
+  (Reader V2 has no GET-by-id) and unwrap each result's `.booking`.
+- `searchAvailability` rewritten to **Time Slots V2**: sends `fromLocalDate`/
+  `toLocalDate`/`timeZone` and maps the offset-less `localStartDate`/`localEndDate`
+  back to instants (so it now requires `range.timezone`, else `INVALID_INPUT` —
+  previously it returned `[]`).
+- `createBooking` sends the required participant count (`totalParticipants: 1` by
+  default); `reschedule`/`cancel` now read and send the required `revision`.
+
+⚠️ **Still needs live-tenant verification.** The exact public gateway paths for the
+extended-bookings query and Time Slots V2, and the list date-filter field, are
+docs-derived and remain marked `TODO: verify against live API`.
 
 ---
 
 ## Documented (confirmed limitations, no safe blind fix)
 
-### Wix — multiple endpoints don't match the current V2 API ⚠️
-
-Beyond the contact-name fix, verification confirmed the Wix adapter's other
-methods are built on shapes that don't match the current Bookings V2 API. These
-were **not** blind-rewritten (the exact public gateway paths and filter fields
-can't be confirmed without a live tenant, and a wrong rewrite would be worse):
-
-- `getBooking` — Reader V2 has **no GET-by-id**; you must Query Extended Bookings
-  with `filter: { id }` (results under `extendedBookings`, each wrapping `booking`).
-- `listBookings` — should POST `.../reader/v2/extended-bookings/query`; results
-  are under `extendedBookings`, not `bookings`.
-- `searchAvailability` — Time Slots V2 is a different endpoint whose request uses
-  `fromLocalDate`/`toLocalDate`/`timeZone` and whose slots expose
-  `localStartDate`/`localEndDate` — so today it returns `[]` in practice.
-- `createBooking` omits the required `totalParticipants`/`participantsChoices`;
-  `reschedule`/`cancel` omit the required `revision`. Supply these via
-  `providerOptions` until the adapter is rewritten against a live tenant.
-
-**Recommendation:** treat the Wix adapter as needing a live-tenant rewrite; it is
-flagged as such in [docs/providers/wix.md](../providers/wix.md).
-
 ### Square — create needs staff + a service-variation version
 
 Square's `AppointmentSegment` requires `team_member_id`, and an appointment
-booking also needs the service **variation version**. The canonical model carries
-neither implicitly — pass a `staffId` and inject `appointment_segments` (with
-`service_variation_version`) via `providerOptions` for a real create. Also:
-`Square-Version` is pinned to `2025-10-16` (valid, non-deprecated, but not the
-latest `2026-07-15`).
+booking also needs the service **variation version**. Pass a `staffId`, and supply
+`providerOptions: { service_variation_version }` — the adapter now routes that key
+onto the segment (rather than requiring you to override the whole
+`appointment_segments` array). `Square-Version` stays pinned to `2025-10-16`
+(valid, non-deprecated, though not the latest `2026-07-15`).
 
 ### Bookeo — create needs participants (and eventId for fixed products)
 
@@ -135,8 +127,9 @@ and that `GET /availability/slots` **does** exist.)
 
 `listBookings` has **no cursor** — Acuity's `max` only caps the count (default
 100), so a wide window silently truncates; narrow the date range or raise `max`.
-`searchAvailability` (`availability/times`) is **single-date** — a multi-day range
-only returns `range.start`'s day. The top-level `canceled` boolean isn't in the
+`searchAvailability` (`availability/times`) is **single-date**; a follow-up pass
+now pages it one call per day across the range (capped at 31 days) and windows the
+slots, so a multi-day range works. The top-level `canceled` boolean isn't in the
 documented appointment schema (the adapter reads it defensively; cancel state is
 also expressed via the `canceled=true` list filter and `noShow`).
 
@@ -158,5 +151,6 @@ also expressed via the `canceled=true` list filter and `noShow`).
   `POST /appointment/cancel` may take a *list* of ids (adapter sends one), and
   `appointments/availability` may be GET rather than POST.
 - **Setmore** — access model + `bookingapi/*` paths + bearer auth confirmed. The
-  official host appears to be `developer.setmore.com`, not `api.setmore.com` —
-  verify against a live call (override via `options.baseUrl` if needed).
+  default host was switched to the documented **`developer.setmore.com`** (was
+  `api.setmore.com`); still verify against a live call (override via
+  `options.baseUrl` if your account differs).

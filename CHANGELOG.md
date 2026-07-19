@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-19
+
+### Fixed
+
+- **Provider-audit follow-ups** (extends the 0.1.4 audit; verified against current
+  docs, pending live-credential confirmation):
+  - **Apple/CalDAV now expands recurring events.** `listBookings` requests CalDAV
+    `<C:expand>` (RFC 4791 §9.6.5), so a repeating series returns one booking per
+    in-window occurrence with the correct instance time (was: the unexpanded master
+    at a possibly out-of-window time). Instances of one series share a DAV resource
+    (and thus a booking `id`); use `raw`'s `RECURRENCE-ID` to disambiguate.
+  - **Wix rewritten to the documented Bookings V2 contract.** `getBooking`/
+    `listBookings` now POST the Query Extended Bookings endpoint (Reader V2 has no
+    GET-by-id) and unwrap `.booking`; `searchAvailability` uses Time Slots V2
+    (`fromLocalDate`/`toLocalDate`/`timeZone`, mapping offset-less local times back
+    to instants — now requires `range.timezone`); `createBooking` sends the required
+    participant count and `reschedule`/`cancel` send the required `revision`.
+  - **Square** `createBooking` routes `providerOptions.service_variation_version`
+    onto the appointment segment (where Square needs it).
+  - **Setmore** default host switched to the documented `developer.setmore.com`
+    (override via `options.baseUrl`).
+  - **Acuity `searchAvailability` now spans a multi-day range.** Acuity's
+    `availability/times` is single-date, so the adapter pages one call per day the
+    range overlaps (capped at 31 days) and keeps only in-window slots — a multi-day
+    query previously returned only the first day.
+
+### Added
+
+- **`notify?: boolean` on `CreateBookingInput`/`UpdateBookingInput`.** Wired into
+  the Google adapter (`notify: true` → `sendUpdates=all` so attendees are emailed
+  on create/update, `false` → `none`, omitted → Google's default). Ignored by
+  providers that don't support it.
+
 ## [0.1.4] - 2026-07-19
 
 ### Fixed

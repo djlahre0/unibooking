@@ -32,7 +32,12 @@ runConformance({
   provider: 'wix',
   origin: ORIGIN,
   makeClient: () => wix({ accessToken: 'token' }),
-  errorProbe: { method: 'GET', path: '/bookings/reader/v2/bookings', run: (c) => c.getBooking('missing') },
+  // Reader V2 has no GET-by-id — get/list both POST the extended-bookings query.
+  errorProbe: {
+    method: 'POST',
+    path: '/bookings/reader/v2/extended-bookings/query',
+    run: (c) => c.getBooking('missing'),
+  },
   cases: [
     {
       name: 'createBooking maps slot + contact',
@@ -57,32 +62,21 @@ runConformance({
       },
     },
     {
-      name: 'getBooking maps a canceled booking',
-      method: 'GET',
-      path: '/bookings/reader/v2/bookings',
-      reply: { booking: wixBooking({ status: 'CANCELED' }) },
+      name: 'getBooking queries extended-bookings and unwraps .booking',
+      method: 'POST',
+      path: '/bookings/reader/v2/extended-bookings/query',
+      reply: { extendedBookings: [{ booking: wixBooking({ status: 'CANCELED' }) }] },
       run: (c) => c.getBooking('B1'),
       check: (b) => expect(b.status).toBe('cancelled'),
     },
     {
-      name: 'updateBooking with a range reschedules',
+      name: 'listBookings queries extended-bookings and returns a cursor',
       method: 'POST',
-      path: '/bookings/v2/bookings/B1/reschedule',
-      reply: { booking: wixBooking() },
-      run: (c) => c.updateBooking('B1', { range: RANGE }),
-    },
-    {
-      name: 'cancelBooking posts to /cancel',
-      method: 'POST',
-      path: '/bookings/v2/bookings/B1/cancel',
-      reply: { booking: wixBooking({ status: 'CANCELED' }) },
-      run: (c) => c.cancelBooking('B1', { reason: 'client asked' }),
-    },
-    {
-      name: 'listBookings queries and returns a cursor',
-      method: 'POST',
-      path: '/bookings/reader/v2/bookings/query',
-      reply: { bookings: [wixBooking()], pagingMetadata: { cursors: { next: 'c2' } } },
+      path: '/bookings/reader/v2/extended-bookings/query',
+      reply: {
+        extendedBookings: [{ booking: wixBooking() }],
+        pagingMetadata: { cursors: { next: 'c2' } },
+      },
       run: (c) => c.listBookings({ range: { start: START, end: '2026-07-21T00:00:00Z' } }),
       check: (r) => {
         expect(r.bookings).toHaveLength(1);
@@ -90,19 +84,27 @@ runConformance({
       },
     },
     {
-      name: 'searchAvailability maps time slots',
+      name: 'searchAvailability maps Time Slots V2 local times back to instants',
       method: 'POST',
-      path: '/bookings/v2/time-slots/list-availability-time-slots',
+      path: '/_api/service-availability/v2/time-slots',
       reply: {
-        availabilityTimeSlots: [
-          { startDate: START, endDate: '2026-07-20T22:30:00Z', resource: { id: 'staff1' } },
+        timeSlots: [
+          {
+            localStartDate: '2026-07-20T22:00:00',
+            localEndDate: '2026-07-20T22:30:00',
+            availableResources: [{ resources: [{ id: 'staff1' }] }],
+          },
         ],
       },
       run: (c) =>
-        c.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z' }, serviceId: 'svc1' }),
+        c.searchAvailability({
+          // Time Slots V2 is local-time; pass an IANA zone (UTC keeps the math trivial).
+          range: { start: START, end: '2026-07-21T00:00:00Z', timezone: 'UTC' },
+          serviceId: 'svc1',
+        }),
       check: (slots) => {
         expect(slots).toHaveLength(1);
-        expect(slots[0].start).toBe(START);
+        expect(slots[0].start).toBe('2026-07-20T22:00:00Z');
         expect(slots[0].end).toBe('2026-07-20T22:30:00Z');
         expect(slots[0].staffId).toBe('staff1');
       },
@@ -174,13 +176,44 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     agent.assertNoPendingInterceptors();
   });
 
-  it('updateBooking with only a status of cancelled routes to cancel', async () => {
+  it('reschedule reads the current revision, then sends it on the reschedule', async () => {
     const pool = agent.get(ORIGIN);
-    let canceled = false;
+    // 1) revision lookup via the extended-bookings query
+    pool
+      .intercept({ path: '/bookings/reader/v2/extended-bookings/query', method: 'POST' })
+      .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '7' }) }] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    // 2) reschedule carries that revision
+    let body: any;
+    pool.intercept({ path: '/bookings/v2/bookings/B1/reschedule', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: wixBooking() });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const client = wix({ accessToken: 't' });
+    await client.updateBooking('B1', { range: RANGE });
+    expect(body.revision).toBe('7');
+    expect(body.slot.startDate).toBe(START);
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('updateBooking with status cancelled reads the revision then routes to cancel', async () => {
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: '/bookings/reader/v2/extended-bookings/query', method: 'POST' })
+      .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '9' }) }] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    let cancelBody: any;
     pool.intercept({ path: '/bookings/v2/bookings/B1/cancel', method: 'POST' }).reply(
       200,
-      () => {
-        canceled = true;
+      (opts) => {
+        cancelBody = JSON.parse(String(opts.body));
         return JSON.stringify({ booking: wixBooking({ status: 'CANCELED' }) });
       },
       { headers: { 'content-type': 'application/json' } },
@@ -188,8 +221,15 @@ describe('wix: contact resolution + non-reschedule updates', () => {
 
     const client = wix({ accessToken: 't' });
     await client.updateBooking('B1', { status: 'cancelled' });
-    expect(canceled).toBe(true);
+    expect(cancelBody.revision).toBe('9');
     agent.assertNoPendingInterceptors();
+  });
+
+  it('searchAvailability without a range.timezone is rejected (Time Slots V2 is local-time)', async () => {
+    const client = wix({ accessToken: 't' });
+    await expect(
+      client.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z' }, serviceId: 'svc1' }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('updateBooking with no range and no cancel throws UNSUPPORTED', async () => {

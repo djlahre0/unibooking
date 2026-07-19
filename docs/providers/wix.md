@@ -21,34 +21,39 @@ Availability (Time Slots V2), staff (resources), services, customers (via the
 CRM Contacts v4 API), and webhooks. Full booking lifecycle: create, get, query,
 reschedule, cancel.
 
-## ⚠️ Status: needs a live-tenant rewrite
+## ⚠️ Status: rewritten to the documented contract, not yet live-verified
 
-The 2026-07-19 audit verified this adapter against the current Bookings V2 docs
-and found several methods built on endpoints/shapes that **don't match the live
-API**. The `customers.findOrCreate` contact-name shape was fixed
-(`info.name = { first, last }`), but these remain and are **not** safe to
-blind-rewrite without a real Wix tenant:
+The 2026-07-19 audit found several methods built on endpoints/shapes that didn't
+match the current Bookings V2 docs. They have since been **rewritten to the
+documented shapes** (below), but the exact public paths still need confirmation
+against a real Wix tenant — a few are marked `TODO: verify against live API`.
 
-- `getBooking` — Reader V2 has **no GET-by-id**; you must Query Extended Bookings
-  with `filter: { id }` (results under `extendedBookings`, wrapping `booking`).
-- `listBookings` — should POST `.../reader/v2/extended-bookings/query`; results
-  come back under `extendedBookings`, not `bookings`.
-- `searchAvailability` — Time Slots V2 is a different endpoint whose request uses
-  `fromLocalDate`/`toLocalDate`/`timeZone` and whose slots expose
-  `localStartDate`/`localEndDate`; in its current form it returns `[]`.
-- `createBooking` omits the required `totalParticipants`/`participantsChoices`;
-  `reschedule`/`cancel` omit the required `revision`. Supply these via
-  `providerOptions` for now.
+- `getBooking`/`listBookings` — Reader V2 has **no GET-by-id**, so both POST
+  `bookings/reader/v2/extended-bookings/query` (`getBooking` with `filter: { id }`)
+  and unwrap each result's `.booking` from `extendedBookings`.
+- `searchAvailability` — rewritten to Time Slots V2 (`fromLocalDate`/`toLocalDate`/
+  `timeZone`), mapping `localStartDate`/`localEndDate` back to instants.
+- `createBooking` now sends the required participant count; `reschedule`/`cancel`
+  now read and send the required `revision`.
 
 See [docs/audits/2026-07-19-booking-providers.md](../audits/2026-07-19-booking-providers.md).
 
 ## Notes
+- **Reads use Query Extended Bookings** (no GET-by-id in Reader V2): `getBooking`
+  and `listBookings` POST `bookings/reader/v2/extended-bookings/query` and unwrap
+  `.booking`.
 - `updateBooking` with a `range` calls Wix's native **reschedule**; with
   `status: 'cancelled'` it cancels; other field-only edits throw `UNSUPPORTED`.
-- `createBooking` with `customer: { email }` resolves (or creates) a CRM contact
-  first; `customer: { id }` is used directly.
-- Time Slots that Wix returns as `localStartDate` (no offset) are skipped rather
-  than emitted as ambiguous instants — read `raw` if you need them.
+  Both reschedule and cancel first read the booking's current `revision` (pass
+  `providerOptions.revision` on a reschedule to skip that lookup).
+- `createBooking` defaults `totalParticipants` to 1 (Wix requires a participant
+  count) — override via `providerOptions.totalParticipants`/`participantsChoices`.
+  `customer: { email }` resolves (or creates) a CRM contact first (contact name
+  uses the Contacts v4 `{ first, last }` shape); `customer: { id }` is used directly.
+- **`searchAvailability` is local-time (Time Slots V2)** — it requires
+  `range.timezone` (an IANA zone) and throws `INVALID_INPUT` without one; Wix
+  returns offset-less `localStartDate`/`localEndDate`, which the adapter converts
+  back to instants using that zone.
 - **Webhooks:** Wix delivers events as an RS256-signed JWT (the raw body is the
   JWT). Verify with `unibooking/webhooks/wix → verifyWixWebhook`, passing your
   app's public key; it returns the decoded payload or `null`.

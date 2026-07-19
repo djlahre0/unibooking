@@ -18,10 +18,10 @@ Integrations → API.
 - Acuity returns offsets like `-0700` (no colon); the adapter normalizes them to
   RFC3339. Booking `end` is derived from the appointment `duration`; an appointment
   with no positive duration raises `UPSTREAM` rather than a zero-length range.
-- `searchAvailability` returns start times for a **single date** (from
-  `range.start`) and **requires** a positive `durationMinutes` to size each slot —
-  it throws `INVALID_INPUT` without one. A multi-day range only returns the first
-  day; loop days yourself if you need more.
+- `searchAvailability` pages Acuity's single-date `availability/times` across
+  every day the range overlaps (one call per day, capped at 31 days) and keeps
+  only slots inside the window. It **requires** a positive `durationMinutes` to
+  size each start-only slot — it throws `INVALID_INPUT` without one.
 - `updateBooking` with a `range` calls the reschedule endpoint. A non-reschedule
   update (e.g. `title → notes`) sends `admin=true`, because Acuity only lets an
   admin write `notes`.

@@ -257,7 +257,7 @@ describe('AUDIT vagaro: skips unsizable slots', () => {
 describe('AUDIT setmore: unknown status is not assumed confirmed', () => {
   it('maps an unrecognized status to unknown', async () => {
     agent
-      .get('https://api.setmore.com')
+      .get('https://developer.setmore.com')
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/appointments'), method: 'GET' })
       .reply(200, JSON.stringify({
         data: { appointment: {
@@ -363,6 +363,32 @@ describe('AUDIT google: updateBooking maps canonical status onto event status', 
 
   it('sends status:confirmed for a confirmed update', async () => {
     expect((await patchBodyFor('confirmed')).status).toBe('confirmed');
+  });
+});
+
+describe('AUDIT google: notify maps to the sendUpdates query on create', () => {
+  it('sends sendUpdates=all when notify is true, and omits it otherwise', async () => {
+    const paths: string[] = [];
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'), method: 'POST' })
+      .reply(200, (opts) => {
+        paths.push(opts.path);
+        return JSON.stringify({
+          id: 'ev1',
+          summary: 'x',
+          start: { dateTime: '2026-07-20T15:00:00-07:00' },
+          end: { dateTime: '2026-07-20T15:45:00-07:00' },
+          status: 'confirmed',
+        });
+      }, { headers: JSON_HEADERS })
+      .times(2);
+    const client = google({ accessToken: 't', calendarId: 'primary' });
+    const range = { start: '2026-07-20T15:00:00-07:00', end: '2026-07-20T15:45:00-07:00' };
+    await client.createBooking({ title: 'x', range, notify: true });
+    await client.createBooking({ title: 'x', range });
+    expect(paths[0]).toContain('sendUpdates=all');
+    expect(paths[1]).not.toContain('sendUpdates');
   });
 });
 

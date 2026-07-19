@@ -27,6 +27,12 @@ function point(instant: string, timezone: string | undefined): Record<string, un
   return { dateTime: instant, ...(timezone !== undefined ? { timeZone: timezone } : {}) };
 }
 
+/** Canonical `notify` → Google's `sendUpdates` query value. Undefined leaves it
+ *  to Google's default (no notifications). */
+function sendUpdatesFor(notify: boolean | undefined): 'all' | 'none' | undefined {
+  return notify === true ? 'all' : notify === false ? 'none' : undefined;
+}
+
 function pointToInstant(p: any): string | undefined {
   if (!p || typeof p !== 'object') return undefined;
   if (typeof p.dateTime === 'string') return p.dateTime;
@@ -132,6 +138,8 @@ export const google = defineAdapter<GoogleCredentials>({
       const res = await http.request(c, {
         method: 'POST',
         path: `calendars/${calId(c)}/events`,
+        // Google emails attendees only when sendUpdates is set (default: none).
+        query: { sendUpdates: sendUpdatesFor(input.notify) },
         body: {
           summary: input.title,
           start: point(input.range.start, input.range.timezone),
@@ -170,6 +178,7 @@ export const google = defineAdapter<GoogleCredentials>({
       const res = await http.request(c, {
         method: 'PATCH',
         path: `calendars/${calId(c)}/events/${encodeURIComponent(id)}`,
+        query: { sendUpdates: sendUpdatesFor(input.notify) },
         body: {
           ...(input.title !== undefined ? { summary: input.title } : {}),
           ...(input.range
@@ -187,8 +196,7 @@ export const google = defineAdapter<GoogleCredentials>({
 
     async cancelBooking(id, options) {
       const c = await http.resolve();
-      const sendUpdates =
-        options?.notify === true ? 'all' : options?.notify === false ? 'none' : undefined;
+      const sendUpdates = sendUpdatesFor(options?.notify);
       await http.request(c, {
         method: 'DELETE',
         path: `calendars/${calId(c)}/events/${encodeURIComponent(id)}`,

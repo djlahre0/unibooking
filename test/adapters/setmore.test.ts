@@ -3,7 +3,7 @@ import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } 
 import { setmore } from '../../src/adapters/setmore';
 import { runConformance } from '../conformance';
 
-const ORIGIN = 'https://api.setmore.com';
+const ORIGIN = 'https://developer.setmore.com';
 // Setmore times are business-local; express canonical times in that offset.
 const START = '2026-07-20T09:00:00-05:00';
 
