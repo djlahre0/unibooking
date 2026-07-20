@@ -18,7 +18,9 @@ import {
   demoErrorHelpers,
   verifyWebhook,
 } from '../lib/call';
-import { PROVIDER_META as PROVIDERS, isDirect } from '../lib/providers';
+import { PROVIDER_META as PROVIDERS } from '../lib/providers';
+import ConnectPanel from './ConnectPanel';
+import ResultBox from './ResultBox';
 
 /* ═══════════════════════════════════════════════════════════
    Webhook field metadata per provider
@@ -139,58 +141,6 @@ const TABS = [
   { id: 'utilities', label: '🛠 Utilities' },
   { id: 'webhooks', label: '🔔 Webhooks' },
 ];
-
-/* ─── Trust-model banner: shows where the visitor's token actually goes ─── */
-function TrustBanner({ provider }: { provider: string }) {
-  const direct = isDirect(provider);
-  const style: React.CSSProperties = {
-    borderRadius: '8px',
-    padding: '0.7rem 0.85rem',
-    margin: '0.9rem 0 0.4rem',
-    fontSize: '0.78rem',
-    lineHeight: 1.6,
-    border: `1px solid ${direct ? '#2f6f4f' : '#6b5a2f'}`,
-    background: direct ? '#0f2418' : '#241f0f',
-    color: direct ? '#86efac' : '#fcd34d',
-  };
-  return (
-    <div style={style} role="note">
-      {direct ? (
-        <>
-          🔒 <strong>Your token never leaves this browser.</strong> It is sent directly from your
-          machine to the provider&apos;s API — this demo&apos;s server is never involved.
-        </>
-      ) : (
-        <>
-          ↗ <strong>This provider blocks browser calls</strong>, so your credentials are sent to the
-          demo&apos;s server, forwarded to the provider, and discarded. They are never stored or
-          logged.{' '}
-          <span style={{ color: 'var(--text-muted, #8888a0)' }}>
-            This is exactly why unibooking runs server-side.
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ─── Result display component ─── */
-function ResultBox({ result, label }: { result: ActionResult | null; label?: string }) {
-  if (!result) return null;
-  return (
-    <div className="result-box fade-in">
-      <div className="result-header">
-        <span>{label ?? 'Response'}</span>
-        <span className={`result-status ${result.ok ? 'success' : 'error'}`}>
-          {result.ok ? '✓ Success' : '✗ Error'}
-        </span>
-      </div>
-      <div className="result-body">
-        <pre>{JSON.stringify(result.ok ? result.data : result.error, null, 2)}</pre>
-      </div>
-    </div>
-  );
-}
 
 /* ═══════════════════════════════════════════════════════════
    Main Page
@@ -384,69 +334,26 @@ export default function Home() {
         <main className="content-area">
           {/* ═══ CONNECT TAB ═══ */}
           {activeTab === 'connect' && (
-            <div className="fade-in">
-              <div className="card">
-                <div className="card-title">
-                  <span className="icon">🔌</span> Select Provider
-                </div>
-                <div className="provider-grid">
-                  {Object.entries(PROVIDERS).map(([id, p]) => (
-                    <button
-                      key={id}
-                      className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
-                      onClick={() => {
-                        setSelectedProvider(id);
-                        setCreds({});
-                        setCapsResult(null);
-                        setBookingResult(null);
-                        setAvailResult(null);
-                        setCustomerResult(null);
-                        setUtilResult(null);
-                        setWebhookResult(null);
-                      }}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-
-                {providerInfo && (
-                  <>
-                    <div className="section-title" style={{ marginTop: '1.2rem' }}>
-                      Credentials for {providerInfo.label}
-                    </div>
-                    <TrustBanner provider={selectedProvider} />
-                    <div className="creds-form">
-                      {providerInfo.fields.map((f) => (
-                        <div className="form-group" key={f.key}>
-                          <label className="form-label">{f.label}</label>
-                          <input
-                            className="form-input"
-                            type={f.secret === false ? 'text' : 'password'}
-                            placeholder={f.placeholder}
-                            value={creds[f.key] ?? ''}
-                            onChange={(e) => updateCred(f.key, e.target.value)}
-                            required={!f.placeholder.toLowerCase().includes('optional')}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ marginTop: '1rem' }}>
-                      <button
-                        className="btn btn-primary"
-                        onClick={() =>
-                          wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)
-                        }
-                        disabled={busy('caps')}
-                      >
-                        {busy('caps') ? '...' : '⚡ Load Capabilities'}
-                      </button>
-                    </div>
-                    <ResultBox result={capsResult} label="Capabilities" />
-                  </>
-                )}
-              </div>
-            </div>
+            <ConnectPanel
+              selectedProvider={selectedProvider}
+              onSelectProvider={(id) => {
+                setSelectedProvider(id);
+                setCreds({});
+                setCapsResult(null);
+                setBookingResult(null);
+                setAvailResult(null);
+                setCustomerResult(null);
+                setUtilResult(null);
+                setWebhookResult(null);
+              }}
+              creds={creds}
+              onCredChange={updateCred}
+              capsResult={capsResult}
+              onLoadCapabilities={() =>
+                wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)
+              }
+              busy={busy('caps')}
+            />
           )}
 
           {/* ═══ CAPABILITIES TAB ═══ */}
