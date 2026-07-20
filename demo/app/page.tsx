@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   type ActionResult,
   getCapabilities,
@@ -20,8 +20,17 @@ import {
 } from '../lib/call';
 import { PROVIDER_META as PROVIDERS } from '../lib/providers';
 import { ENVIRONMENTS } from '../lib/environments';
+import {
+  loadState,
+  saveProvider,
+  clearProvider,
+  clearAll,
+  storageAvailable,
+  setRemember as persistRemember,
+} from '../lib/cred-storage';
 import ConnectPanel from './ConnectPanel';
 import EnvironmentControl from './EnvironmentControl';
+import PersistenceControls from './PersistenceControls';
 import ResultBox from './ResultBox';
 
 /* ═══════════════════════════════════════════════════════════
@@ -153,8 +162,15 @@ export default function Home() {
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [env, setEnv] = useState('prod');
   const [baseUrl, setBaseUrl] = useState('');
+  const [remember, setRemember_] = useState(false);
+  const [storageOk, setStorageOk] = useState(true);
   const [loadingSection, setLoadingSection] = useState('');
   const busy = (s: string) => loadingSection === s;
+
+  useEffect(() => {
+    setStorageOk(storageAvailable());
+    setRemember_(loadState().remember);
+  }, []);
 
   // Results
   const [capsResult, setCapsResult] = useState<ActionResult | null>(null);
@@ -202,6 +218,14 @@ export default function Home() {
     // non-obvious, hence this note.
     return { creds, baseUrl: !baseUrl || baseUrl === prod ? undefined : baseUrl };
   }, [creds, baseUrl, selectedProvider]);
+
+  useEffect(() => {
+    if (!remember || !selectedProvider) return;
+    const t = setTimeout(() => {
+      saveProvider(selectedProvider, { creds, env, baseUrl });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [remember, selectedProvider, creds, env, baseUrl]);
 
   return (
     <div className="app-container">
@@ -353,9 +377,10 @@ export default function Home() {
               selectedProvider={selectedProvider}
               onSelectProvider={(id) => {
                 setSelectedProvider(id);
-                setCreds({});
-                setEnv('prod');
-                setBaseUrl(ENVIRONMENTS[id]?.prod ?? '');
+                const saved = loadState().providers[id];
+                setCreds(saved?.creds ?? {});
+                setEnv(saved?.env ?? 'prod');
+                setBaseUrl(saved?.baseUrl ?? ENVIRONMENTS[id]?.prod ?? '');
                 setCapsResult(null);
                 setBookingResult(null);
                 setAvailResult(null);
@@ -378,6 +403,25 @@ export default function Home() {
                 onChange={(nextEnv, nextUrl) => {
                   setEnv(nextEnv);
                   setBaseUrl(nextUrl);
+                }}
+              />
+              <PersistenceControls
+                remember={remember}
+                available={storageOk}
+                providerLabel={PROVIDERS[selectedProvider]?.label ?? selectedProvider}
+                onToggleRemember={(on) => {
+                  setRemember_(on);
+                  persistRemember(on); // turning off also wipes what was saved
+                }}
+                onClearProvider={() => {
+                  clearProvider(selectedProvider);
+                  setCreds({});
+                }}
+                onClearAll={() => {
+                  if (confirm('Clear saved credentials for every provider on this device?')) {
+                    clearAll();
+                    setCreds({});
+                  }
                 }}
               />
             </ConnectPanel>
