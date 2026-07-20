@@ -41,6 +41,23 @@ function hostileStorage(): Storage {
   } as unknown as Storage;
 }
 
+/** A Storage whose setItem succeeds but whose removeItem always throws. */
+function removeItemThrowsStorage(seed: Record<string, string> = {}): Storage {
+  const map = new Map(Object.entries(seed));
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: () => {
+      throw new DOMException('denied', 'SecurityError');
+    },
+    setItem: (k: string, v: string) => void map.set(k, v),
+  } as Storage;
+}
+
 let s: Storage;
 beforeEach(() => {
   s = fakeStorage();
@@ -63,6 +80,62 @@ describe('loadState', () => {
 
   it('degrades to empty state when storage throws', () => {
     expect(loadState(hostileStorage())).toEqual({ remember: false, providers: {} });
+  });
+
+  it('does not share a providers reference across separate empty loads', () => {
+    // Regression: loadState used to return `{ ...EMPTY }`, a shallow copy that
+    // aliased the same module-level `providers` object on every empty/failure path.
+    const a = loadState(fakeStorage());
+    const b = loadState(fakeStorage());
+    expect(a.providers).not.toBe(b.providers);
+    a.providers.square = { creds: { accessToken: 'leaked' }, env: 'prod' };
+    expect(b.providers).toEqual({});
+  });
+
+  it('drops a provider entry that is not an object', () => {
+    const bad = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        remember: true,
+        providers: { square: 'not-an-object' },
+      }),
+    });
+    expect(loadState(bad)).toEqual({ remember: true, providers: {} });
+  });
+
+  it('drops a provider entry missing creds', () => {
+    const bad = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        remember: true,
+        providers: { square: { env: 'prod' } },
+      }),
+    });
+    expect(loadState(bad)).toEqual({ remember: true, providers: {} });
+  });
+
+  it('drops a provider entry whose env is not a string', () => {
+    const bad = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        remember: true,
+        providers: { square: { creds: { accessToken: 'a' }, env: 42 } },
+      }),
+    });
+    expect(loadState(bad)).toEqual({ remember: true, providers: {} });
+  });
+
+  it('drops only the corrupt entry, keeping valid siblings', () => {
+    const mixed = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        remember: true,
+        providers: {
+          square: 'not-an-object',
+          acuity: { creds: { apiKey: 'b' }, env: 'prod' },
+        },
+      }),
+    });
+    expect(loadState(mixed)).toEqual({
+      remember: true,
+      providers: { acuity: { creds: { apiKey: 'b' }, env: 'prod' } },
+    });
   });
 });
 
@@ -101,9 +174,22 @@ describe('saveProvider', () => {
     expect(loadState(s).providers.square).toBeUndefined();
   });
 
-  it('does not throw when storage throws', () => {
+  it('does not throw when the write itself throws', () => {
+    // remember must already be true in the *stored* state — using hostileStorage
+    // here would make getItem throw too, so loadState would report
+    // remember: false and saveProvider would short-circuit before ever calling
+    // write(), passing even if write()'s try/catch were deleted.
+    const seeded = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({ remember: true, providers: {} }),
+    });
+    const throwsOnWrite: Storage = {
+      ...seeded,
+      setItem: () => {
+        throw new DOMException('denied', 'SecurityError');
+      },
+    };
     expect(() =>
-      saveProvider('square', { creds: { a: 'b' }, env: 'prod' }, hostileStorage()),
+      saveProvider('square', { creds: { a: 'b' }, env: 'prod' }, throwsOnWrite),
     ).not.toThrow();
   });
 });
@@ -118,6 +204,10 @@ describe('clearProvider', () => {
     expect(st.providers.square).toBeUndefined();
     expect(st.providers.acuity).toBeDefined();
   });
+
+  it('does not throw when storage throws', () => {
+    expect(() => clearProvider('square', hostileStorage())).not.toThrow();
+  });
 });
 
 describe('clearAll', () => {
@@ -128,6 +218,10 @@ describe('clearAll', () => {
     const st = loadState(s);
     expect(st.providers).toEqual({});
     expect(st.remember).toBe(true);
+  });
+
+  it('does not throw when storage throws', () => {
+    expect(() => clearAll(hostileStorage())).not.toThrow();
   });
 });
 
@@ -145,6 +239,14 @@ describe('storageAvailable', () => {
     storageAvailable(s);
     expect(s.length).toBe(0);
   });
+
+  it('returns a boolean and does not throw when removeItem throws after a successful setItem', () => {
+    let result: boolean | undefined;
+    expect(() => {
+      result = storageAvailable(removeItemThrowsStorage());
+    }).not.toThrow();
+    expect(result).toBe(true);
+  });
 });
 
 describe('setRemember', () => {
@@ -160,5 +262,9 @@ describe('setRemember', () => {
 
   it('returns the resulting state', () => {
     expect(setRemember(true, s)).toEqual({ remember: true, providers: {} });
+  });
+
+  it('does not throw when storage throws', () => {
+    expect(() => setRemember(true, hostileStorage())).not.toThrow();
   });
 });

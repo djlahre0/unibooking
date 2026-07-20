@@ -28,7 +28,10 @@ export type SavedState = {
   providers: Record<string, SavedProvider>;
 };
 
-const EMPTY: SavedState = { remember: false, providers: {} };
+/** A fresh empty state, never shared — callers may mutate `.providers` freely. */
+function emptyState(): SavedState {
+  return { remember: false, providers: {} };
+}
 
 /** Resolve the store, tolerating SSR and environments without localStorage. */
 function resolve(storage?: Storage): Storage | null {
@@ -40,29 +43,37 @@ function resolve(storage?: Storage): Storage | null {
   }
 }
 
-function isState(v: unknown): v is SavedState {
-  return (
-    typeof v === 'object' &&
-    v !== null &&
-    !Array.isArray(v) &&
-    typeof (v as SavedState).remember === 'boolean' &&
-    typeof (v as SavedState).providers === 'object' &&
-    (v as SavedState).providers !== null &&
-    !Array.isArray((v as SavedState).providers)
-  );
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Structural shape only; `providers` entries are validated individually below. */
+function isState(v: unknown): v is { remember: boolean; providers: Record<string, unknown> } {
+  return isPlainObject(v) && typeof v.remember === 'boolean' && isPlainObject(v.providers);
+}
+
+/** A provider entry parsed from localStorage — attacker-influenceable, so checked field-by-field. */
+function isSavedProvider(v: unknown): v is SavedProvider {
+  return isPlainObject(v) && isPlainObject(v.creds) && typeof v.env === 'string';
 }
 
 /** Never throws. Any failure — absent, corrupt, blocked — yields empty state. */
 export function loadState(storage?: Storage): SavedState {
   const s = resolve(storage);
-  if (!s) return { ...EMPTY };
+  if (!s) return emptyState();
   try {
     const raw = s.getItem(STORAGE_KEY);
-    if (!raw) return { ...EMPTY };
+    if (!raw) return emptyState();
     const parsed: unknown = JSON.parse(raw);
-    return isState(parsed) ? parsed : { ...EMPTY };
+    if (!isState(parsed)) return emptyState();
+    // Drop individually-corrupt provider entries rather than wiping everything.
+    const providers: Record<string, SavedProvider> = {};
+    for (const [name, entry] of Object.entries(parsed.providers)) {
+      if (isSavedProvider(entry)) providers[name] = entry;
+    }
+    return { remember: parsed.remember, providers };
   } catch {
-    return { ...EMPTY };
+    return emptyState();
   }
 }
 
@@ -108,10 +119,16 @@ export function storageAvailable(storage?: Storage): boolean {
   const probe = `${STORAGE_KEY}:probe`;
   try {
     s.setItem(probe, '1');
-    s.removeItem(probe);
     return true;
   } catch {
     return false;
+  } finally {
+    // Best-effort cleanup — a throwing removeItem must not mask the result above.
+    try {
+      s.removeItem(probe);
+    } catch {
+      // Nothing more we can do; the probe key may linger.
+    }
   }
 }
 
