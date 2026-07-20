@@ -31,13 +31,18 @@ export default function EnvironmentControl({
 
   return (
     <div style={{ margin: '0.9rem 0 0.4rem' }}>
-      <div className="section-title" style={{ fontSize: '0.8rem' }}>
+      <div className="section-title" style={{ fontSize: '0.8rem' }} id="environment-heading">
         Environment
       </div>
 
-      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.5rem 0' }}>
+      <div
+        role="group"
+        aria-labelledby="environment-heading"
+        style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.5rem 0' }}
+      >
         <button
           className={`btn btn-sm ${env === 'prod' ? 'btn-primary' : 'btn-secondary'}`}
+          aria-pressed={env === 'prod'}
           onClick={() => pick('prod')}
         >
           Production
@@ -46,6 +51,7 @@ export default function EnvironmentControl({
         {meta.sandbox && (
           <button
             className={`btn btn-sm ${env === 'sandbox' ? 'btn-primary' : 'btn-secondary'}`}
+            aria-pressed={env === 'sandbox'}
             onClick={() => pick('sandbox')}
           >
             Sandbox
@@ -56,6 +62,7 @@ export default function EnvironmentControl({
           <button
             key={k}
             className={`btn btn-sm ${env === k ? 'btn-primary' : 'btn-secondary'}`}
+            aria-pressed={env === k}
             onClick={() => pick(k)}
           >
             {k}
@@ -76,7 +83,7 @@ export default function EnvironmentControl({
       />
 
       {editable ? (
-        env !== 'prod' && (
+        baseUrl !== meta.prod && (
           <button
             className="btn btn-sm btn-secondary"
             style={{ marginTop: '0.4rem' }}

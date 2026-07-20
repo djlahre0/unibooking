@@ -192,6 +192,14 @@ export default function Home() {
   const providerInfo = selectedProvider ? PROVIDERS[selectedProvider] : null;
   const conn = useMemo(() => {
     const prod = selectedProvider ? ENVIRONMENTS[selectedProvider]?.prod : undefined;
+    // Suppress baseUrl when it matches the provider's production default so the
+    // adapter falls back to its own built-in default instead of an explicit
+    // override. This has a surprising consequence: Phorest's `eu` region URL is
+    // byte-identical to its `prod` URL, so selecting "eu" sends no override at
+    // all — the UI shows `eu` selected while the outgoing request carries no
+    // explicit host. That's correct (the table's `prod` is contractually equal
+    // to the adapter's default, enforced by environments-drift.test.ts) but
+    // non-obvious, hence this note.
     return { creds, baseUrl: !baseUrl || baseUrl === prod ? undefined : baseUrl };
   }, [creds, baseUrl, selectedProvider]);
 
