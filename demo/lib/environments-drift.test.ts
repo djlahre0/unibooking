@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ADAPTERS } from './providers';
 import { ENVIRONMENTS } from './environments';
+import type { BookingClient } from 'unibooking';
 
 /**
  * Adapter BASE constants are not exported, so comparing literals would just
@@ -30,11 +31,28 @@ const CREDS: Record<string, Record<string, string>> = {
   setmore: { accessToken: 'x' },
 };
 
-/** Adapters that never issue a request from getBooking — see file header. */
-const UNPROBEABLE = ['mangomint', 'apple', 'setmore'];
-// setmore added: v0.2.0's Booking API has no fetch-by-id endpoint, so getBooking
-// throws UNSUPPORTED before issuing a request. Use searchAvailability or
-// listBookings to probe the host.
+/**
+ * Most adapters are probed via getBooking. Setmore's Booking API has no
+ * fetch-by-id endpoint, so its getBooking throws UNSUPPORTED without issuing a
+ * request — probe it through listBookings instead. Excluding it is not an
+ * option: Setmore's host changed between package versions, which is exactly
+ * the drift this test exists to catch.
+ */
+const PROBE_OP: Record<string, (client: BookingClient) => Promise<unknown>> = {
+  setmore: (c) =>
+    c.listBookings({ range: { start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' } }),
+};
+
+/**
+ * Adapters this suite cannot probe at all, via any operation:
+ *  - mangomint: every method throws UNSUPPORTED (no public API documentation
+ *    exists to implement against), so no method ever issues a request.
+ *  - apple: CalDAV requests go to the user's own `calendarUrl`, not a fixed
+ *    host derived from ENVIRONMENTS — `baseUrlEditable` is false for exactly
+ *    this reason, so there is no single declared prod host to compare a
+ *    request against.
+ */
+const UNPROBEABLE = ['mangomint', 'apple'];
 
 async function observedUrl(provider: string): Promise<string | null> {
   let seen: string | null = null;
@@ -43,8 +61,14 @@ async function observedUrl(provider: string): Promise<string | null> {
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
+  const client = ADAPTERS[provider](CREDS[provider], { fetch: mockFetch });
   try {
-    await ADAPTERS[provider](CREDS[provider], { fetch: mockFetch }).getBooking('probe-id');
+    const probe = PROBE_OP[provider];
+    if (probe) {
+      await probe(client);
+    } else {
+      await client.getBooking('probe-id');
+    }
   } catch {
     // Adapters reject the empty {} body — irrelevant, we only need the URL.
   }
