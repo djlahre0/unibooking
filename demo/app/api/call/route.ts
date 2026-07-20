@@ -2,6 +2,7 @@ import { makeClient, PROXY_PROVIDERS } from '@/lib/providers';
 import { dispatch, OPS, type Op } from '@/lib/dispatch';
 import { serializeError, type ActionResult } from '@/lib/result';
 import { assertSafeCalendarUrl } from '@/lib/validate-caldav';
+import { assertSafeBaseUrl } from '@/lib/environments';
 import { allow } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -10,7 +11,8 @@ export const runtime = 'nodejs';
  * The ONLY server surface in the demo. It exclusively serves the 9 providers
  * that block browser (CORS) calls — a strict allowlist, so it can never be
  * abused to relay to Google/Microsoft/etc. Credentials are used to build the
- * client and then discarded; they are never logged or persisted.
+ * client and then discarded; they are never logged, and never persisted on the
+ * server. (The browser may persist them locally when the visitor opts in.)
  */
 function reply(body: ActionResult, status = 200): Response {
   return Response.json(body, { status });
@@ -35,18 +37,29 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // 2. Parse body.
-  let payload: { provider?: unknown; op?: unknown; creds?: unknown; args?: unknown };
+  let payload: {
+    provider?: unknown;
+    op?: unknown;
+    creds?: unknown;
+    baseUrl?: unknown;
+    args?: unknown;
+  };
   try {
     payload = await req.json();
   } catch {
     return reply({ ok: false, error: { message: 'Invalid JSON body.' } }, 400);
   }
-  const { provider, op, creds, args } = payload ?? {};
+  const { provider, op, creds, baseUrl, args } = payload ?? {};
 
   // 3. Strict allowlist: only the 9 proxied providers.
   if (typeof provider !== 'string' || !PROXY_PROVIDERS.has(provider)) {
     return reply(
-      { ok: false, error: { message: `Provider "${String(provider)}" is not available through the demo proxy.` } },
+      {
+        ok: false,
+        error: {
+          message: `Provider "${String(provider)}" is not available through the demo proxy.`,
+        },
+      },
       400,
     );
   }
@@ -68,15 +81,35 @@ export async function POST(req: Request): Promise<Response> {
       credentials.calendarUrl = assertSafeCalendarUrl(credentials.calendarUrl);
     } catch (e) {
       return reply(
-        { ok: false, error: { code: 'INVALID_INPUT', message: e instanceof Error ? e.message : String(e) } },
+        {
+          ok: false,
+          error: { code: 'INVALID_INPUT', message: e instanceof Error ? e.message : String(e) },
+        },
         400,
       );
     }
   }
 
-  // 7. Run the adapter and normalize the result.
+  // 7. SSRF guard — the client may point us at a sandbox or regional host, but
+  //    only at one this provider actually publishes.
+  let resolvedBaseUrl: string | undefined;
+  if (baseUrl !== undefined && baseUrl !== '') {
+    try {
+      resolvedBaseUrl = assertSafeBaseUrl(provider, baseUrl);
+    } catch (e) {
+      return reply(
+        {
+          ok: false,
+          error: { code: 'INVALID_INPUT', message: e instanceof Error ? e.message : String(e) },
+        },
+        400,
+      );
+    }
+  }
+
+  // 8. Run the adapter and normalize the result.
   try {
-    const client = makeClient(provider, credentials);
+    const client = makeClient(provider, credentials, resolvedBaseUrl);
     const data = await dispatch(client, op as Op, args);
     return reply({ ok: true, data });
   } catch (e) {
