@@ -19,7 +19,9 @@ import {
   verifyWebhook,
 } from '../lib/call';
 import { PROVIDER_META as PROVIDERS } from '../lib/providers';
+import { ENVIRONMENTS } from '../lib/environments';
 import ConnectPanel from './ConnectPanel';
+import EnvironmentControl from './EnvironmentControl';
 import ResultBox from './ResultBox';
 
 /* ═══════════════════════════════════════════════════════════
@@ -149,6 +151,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('connect');
   const [selectedProvider, setSelectedProvider] = useState('');
   const [creds, setCreds] = useState<Record<string, string>>({});
+  const [env, setEnv] = useState('prod');
+  const [baseUrl, setBaseUrl] = useState('');
   const [loadingSection, setLoadingSection] = useState('');
   const busy = (s: string) => loadingSection === s;
 
@@ -186,7 +190,10 @@ export default function Home() {
   );
 
   const providerInfo = selectedProvider ? PROVIDERS[selectedProvider] : null;
-  const conn = useMemo(() => ({ creds }), [creds]);
+  const conn = useMemo(() => {
+    const prod = selectedProvider ? ENVIRONMENTS[selectedProvider]?.prod : undefined;
+    return { creds, baseUrl: !baseUrl || baseUrl === prod ? undefined : baseUrl };
+  }, [creds, baseUrl, selectedProvider]);
 
   return (
     <div className="app-container">
@@ -339,6 +346,8 @@ export default function Home() {
               onSelectProvider={(id) => {
                 setSelectedProvider(id);
                 setCreds({});
+                setEnv('prod');
+                setBaseUrl(ENVIRONMENTS[id]?.prod ?? '');
                 setCapsResult(null);
                 setBookingResult(null);
                 setAvailResult(null);
@@ -353,7 +362,17 @@ export default function Home() {
                 wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)
               }
               busy={busy('caps')}
-            />
+            >
+              <EnvironmentControl
+                provider={selectedProvider}
+                env={env}
+                baseUrl={baseUrl}
+                onChange={(nextEnv, nextUrl) => {
+                  setEnv(nextEnv);
+                  setBaseUrl(nextUrl);
+                }}
+              />
+            </ConnectPanel>
           )}
 
           {/* ═══ CAPABILITIES TAB ═══ */}
