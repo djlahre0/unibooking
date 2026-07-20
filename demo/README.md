@@ -42,11 +42,21 @@ at the root first — a `file:` dependency does not build its own package.
 
 ## Deploy to Vercel
 
-Import the repository and set the **Root Directory** to `demo`, with the Install
-Command overridden to `cd .. && npm install && npm run build && cd demo && npm install`
-so the linked package is built before the demo consumes it. No environment
-variables are required — the proxy runs entirely on the visitor's own
-credentials. A small in-memory rate limit (20 req/min per IP) guards the
+Import the repository and set the **Root Directory** to `demo`. Everything else
+is already in `demo/vercel.json`, which overrides the install step to:
+
+```
+cd .. && npm ci && npm run build && cd demo && npm ci
+```
+
+`unibooking` is linked from the repo root (`file:..`), and a `file:` dependency
+does not build its own package — so the root has to be built before the demo
+consumes it. Keeping that in `vercel.json` rather than in the dashboard means
+the deploy is reproducible from a fresh clone, and `npm ci` preserves the
+lockfile determinism a plain `npm install` would discard.
+
+No environment variables are required — the proxy runs entirely on the visitor's
+own credentials. A small in-memory rate limit (20 req/min per IP) guards the
 function quota; Vercel's platform protection covers the rest.
 
 ## Security notes
