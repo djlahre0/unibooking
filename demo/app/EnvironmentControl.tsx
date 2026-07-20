@@ -9,6 +9,8 @@ export type EnvironmentControlProps = {
   onChange: (env: string, baseUrl: string) => void;
 };
 
+const DISABLED_NOTE_ID = 'base-url-disabled-note';
+
 /**
  * Environment picker + always-visible base URL. Only three providers publish a
  * separate sandbox host, so the toggle renders only where it means something;
@@ -79,6 +81,7 @@ export default function EnvironmentControl({
         type="text"
         value={baseUrl}
         disabled={!editable}
+        aria-describedby={!editable ? DISABLED_NOTE_ID : undefined}
         onChange={(e) => onChange('custom', e.target.value)}
       />
 
@@ -94,6 +97,8 @@ export default function EnvironmentControl({
         )
       ) : (
         <p
+          id={DISABLED_NOTE_ID}
+          role="note"
           style={{ fontSize: '0.75rem', color: 'var(--text-muted, #8888a0)', marginTop: '0.4rem' }}
         >
           Apple/CalDAV takes its host from the Calendar URL below, so this has no effect.

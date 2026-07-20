@@ -24,6 +24,10 @@ export function assertSafeCalendarUrl(raw: unknown): string {
     throw new Error('calendarUrl must use https.');
   }
 
+  if (url.port !== '') {
+    throw new Error('calendarUrl must not specify an explicit port.');
+  }
+
   const host = url.hostname.toLowerCase();
   if (host !== 'icloud.com' && !host.endsWith('.icloud.com')) {
     throw new Error(

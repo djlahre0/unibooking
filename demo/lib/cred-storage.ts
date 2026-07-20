@@ -1,9 +1,13 @@
 /**
  * Opt-in credential persistence for the demo's Connect tab.
  *
- * Everything lives under ONE versioned key so writes are atomic, clear-all is a
- * single removeItem, and a future shape change can be discarded wholesale
- * instead of crashing on stale JSON.
+ * Everything lives under ONE versioned key. That is NOT the same as atomic
+ * writes: every mutator below is a load-modify-write against that single key,
+ * with no cross-tab coordination, so two tabs open at once can each read
+ * stale state and clobber one another's entry. What the single key does buy
+ * is simplicity — clearing everything is one removal, and a future shape
+ * change or a corrupt payload can be discarded wholesale instead of crashing
+ * on stale JSON.
  *
  * `storage` is injectable because vitest runs in the node environment, where
  * localStorage does not exist — the same idiom the library uses for `fetch`.

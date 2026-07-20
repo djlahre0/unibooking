@@ -132,6 +132,9 @@ export function resolveBaseUrl(provider: string, env: string): string | undefine
  * `https://connect.squareup.com@evil.com/` is rejected — the parser assigns
  * `evil.com` to hostname. Matching is EXACT, not suffix-based: a subdomain
  * takeover on a provider's domain must not automatically become our problem.
+ * It also rejects an explicit non-default port (e.g. `:8443`) even on an
+ * otherwise-allowed host; an explicit `:443` is fine since `new URL` on an
+ * https URL normalizes the default port away before we ever see it.
  */
 export function assertSafeBaseUrl(provider: string, raw: unknown): string {
   if (typeof raw !== 'string' || raw.trim() === '') {

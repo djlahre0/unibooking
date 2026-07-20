@@ -385,6 +385,10 @@ export default function Home() {
             <ConnectPanel
               selectedProvider={selectedProvider}
               onSelectProvider={(id) => {
+                // Re-clicking the already-selected chip is a no-op click, not a switch —
+                // running the reset below would blank creds the user just typed (Remember
+                // off means nothing was saved yet to reload from).
+                if (id === selectedProvider) return;
                 // Flush a pending save for the OUTGOING provider before switching —
                 // otherwise the debounce effect's cleanup just clearTimeout()s it and
                 // credentials typed within the last ~300ms are silently lost. Capture
@@ -451,6 +455,8 @@ export default function Home() {
                   if (confirm('Clear saved credentials for every provider on this device?')) {
                     clearAll();
                     setCreds({});
+                    setEnv('prod');
+                    setBaseUrl(ENVIRONMENTS[selectedProvider]?.prod ?? '');
                   }
                 }}
               />

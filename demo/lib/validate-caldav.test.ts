@@ -19,9 +19,25 @@ describe('assertSafeCalendarUrl', () => {
     expect(() => assertSafeCalendarUrl('https://evil.com/cal')).toThrow(/icloud/i);
   });
 
+  it('rejects an explicit non-default port on an otherwise-allowed host', () => {
+    expect(() => assertSafeCalendarUrl('https://p01-caldav.icloud.com:8443/x')).toThrow(/port/i);
+  });
+
+  it('accepts an explicit :443 on https (the parser normalizes it away)', () => {
+    const url = 'https://p01-caldav.icloud.com:443/x';
+    expect(assertSafeCalendarUrl(url)).toBe('https://p01-caldav.icloud.com/x');
+  });
+
+  it('accepts a URL with no explicit port', () => {
+    const url = 'https://p01-caldav.icloud.com/x';
+    expect(assertSafeCalendarUrl(url)).toBe(url);
+  });
+
   it('rejects the credential-in-URL trick (userinfo, not host)', () => {
     // The real host here is evil.com; icloud.com is only the username.
-    expect(() => assertSafeCalendarUrl('https://p01-caldav.icloud.com@evil.com/')).toThrow(/icloud/i);
+    expect(() => assertSafeCalendarUrl('https://p01-caldav.icloud.com@evil.com/')).toThrow(
+      /icloud/i,
+    );
   });
 
   it('rejects a look-alike suffix', () => {
@@ -33,7 +49,9 @@ describe('assertSafeCalendarUrl', () => {
   });
 
   it('rejects internal/loopback hosts', () => {
-    expect(() => assertSafeCalendarUrl('https://169.254.169.254/latest/meta-data/')).toThrow(/icloud/i);
+    expect(() => assertSafeCalendarUrl('https://169.254.169.254/latest/meta-data/')).toThrow(
+      /icloud/i,
+    );
     expect(() => assertSafeCalendarUrl('https://localhost/')).toThrow(/icloud/i);
   });
 

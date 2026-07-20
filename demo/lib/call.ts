@@ -25,13 +25,34 @@ import { type Op } from './dispatch';
 import { serializeError, type ActionResult, type Connection } from './result';
 import { runDirect } from './transport-direct';
 import { runProxy } from './transport-proxy';
+import { assertSafeBaseUrl } from './environments';
 
 export type { ActionResult, Connection } from './result';
 
 /* ═══════════════════════════════════════════════════════════
    Transport picker — the one place that chooses direct vs proxy.
+   This is also the ONE place both transports pass through, so it is where the
+   base URL is validated for BOTH: the proxy route re-validates server-side
+   (that check is the real security boundary and must stay), but the 7 direct
+   providers never reach the server — without a check here, a pasted baseUrl
+   would reach `makeClient` (and the visitor's live token with it) unguarded.
    ═══════════════════════════════════════════════════════════ */
-function run(provider: string, conn: Connection, op: Op, args: unknown): Promise<ActionResult> {
+async function run(
+  provider: string,
+  conn: Connection,
+  op: Op,
+  args: unknown,
+): Promise<ActionResult> {
+  if (conn.baseUrl) {
+    try {
+      assertSafeBaseUrl(provider, conn.baseUrl);
+    } catch (e) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_INPUT', message: e instanceof Error ? e.message : String(e) },
+      };
+    }
+  }
   return isDirect(provider)
     ? runDirect(provider, op, conn, args)
     : runProxy(provider, op, conn, args);
