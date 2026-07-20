@@ -10,6 +10,9 @@ export type PersistenceControlsProps = {
   available: boolean;
 };
 
+const UNAVAILABLE_NOTE_ID = 'persistence-unavailable-note';
+const SAVED_NOTE_ID = 'persistence-saved-note';
+
 export default function PersistenceControls({
   remember,
   onToggleRemember,
@@ -18,6 +21,8 @@ export default function PersistenceControls({
   providerLabel,
   available,
 }: PersistenceControlsProps) {
+  const describedBy = !available ? UNAVAILABLE_NOTE_ID : remember ? SAVED_NOTE_ID : undefined;
+
   return (
     <div
       style={{
@@ -31,6 +36,7 @@ export default function PersistenceControls({
           type="checkbox"
           checked={remember}
           disabled={!available}
+          aria-describedby={describedBy}
           onChange={(e) => onToggleRemember(e.target.checked)}
         />
         Remember credentials on this device
@@ -38,6 +44,8 @@ export default function PersistenceControls({
 
       {!available && (
         <p
+          id={UNAVAILABLE_NOTE_ID}
+          role="note"
           style={{ fontSize: '0.75rem', color: 'var(--text-muted, #8888a0)', marginTop: '0.4rem' }}
         >
           This browser is blocking local storage (private mode, or disabled by policy), so
@@ -47,6 +55,7 @@ export default function PersistenceControls({
 
       {remember && available && (
         <div
+          id={SAVED_NOTE_ID}
           role="note"
           style={{
             marginTop: '0.6rem',
@@ -65,10 +74,14 @@ export default function PersistenceControls({
       )}
 
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
-        <button className="btn btn-sm btn-secondary" onClick={onClearProvider}>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={onClearProvider}
+          disabled={!available}
+        >
           Clear {providerLabel}
         </button>
-        <button className="btn btn-sm btn-secondary" onClick={onClearAll}>
+        <button className="btn btn-sm btn-secondary" onClick={onClearAll} disabled={!available}>
           Clear all saved
         </button>
       </div>

@@ -222,7 +222,16 @@ export default function Home() {
   useEffect(() => {
     if (!remember || !selectedProvider) return;
     const t = setTimeout(() => {
-      saveProvider(selectedProvider, { creds, env, baseUrl });
+      const hasValue = Object.values(creds).some((v) => v.trim() !== '');
+      if (hasValue) {
+        saveProvider(selectedProvider, { creds, env, baseUrl });
+      } else {
+        // Every field is empty/whitespace — keep storage in sync by removing
+        // the entry instead of writing back an empty one. This is what makes
+        // "Clear this provider" and "Clear all saved" stick: those handlers
+        // reset `creds` to {}, which lands here 300ms later.
+        clearProvider(selectedProvider);
+      }
     }, 300);
     return () => clearTimeout(t);
   }, [remember, selectedProvider, creds, env, baseUrl]);
@@ -376,6 +385,25 @@ export default function Home() {
             <ConnectPanel
               selectedProvider={selectedProvider}
               onSelectProvider={(id) => {
+                // Flush a pending save for the OUTGOING provider before switching —
+                // otherwise the debounce effect's cleanup just clearTimeout()s it and
+                // credentials typed within the last ~300ms are silently lost. Capture
+                // the outgoing values now, before any setter below changes them.
+                const outgoingProvider = selectedProvider;
+                const outgoingCreds = creds;
+                const outgoingEnv = env;
+                const outgoingBaseUrl = baseUrl;
+                if (
+                  remember &&
+                  outgoingProvider &&
+                  Object.values(outgoingCreds).some((v) => v.trim() !== '')
+                ) {
+                  saveProvider(outgoingProvider, {
+                    creds: outgoingCreds,
+                    env: outgoingEnv,
+                    baseUrl: outgoingBaseUrl,
+                  });
+                }
                 setSelectedProvider(id);
                 const saved = loadState().providers[id];
                 setCreds(saved?.creds ?? {});
@@ -416,6 +444,8 @@ export default function Home() {
                 onClearProvider={() => {
                   clearProvider(selectedProvider);
                   setCreds({});
+                  setEnv('prod');
+                  setBaseUrl(ENVIRONMENTS[selectedProvider]?.prod ?? '');
                 }}
                 onClearAll={() => {
                   if (confirm('Clear saved credentials for every provider on this device?')) {
