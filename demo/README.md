@@ -18,7 +18,7 @@ credentials:
 - **↗ Proxied (9)** — `square`, `acuity`, `bookeo`, `mindbody`, `boulevard`,
   `setmore`, `vagaro`, `mangomint`, `apple`. These reject browser calls, so the
   request is forwarded once through `/api/call`, then discarded. Credentials are
-  never stored or logged.
+  never stored on this app's server, and never logged.
 
 That split is the point: the 9 that refuse browser calls are exactly why a
 server-side library like unibooking exists.
@@ -32,7 +32,7 @@ needed.
 ```bash
 npm install
 npm run dev      # http://localhost:3000
-npm run test     # unit tests for the SSRF guard + rate limiter
+npm run test     # unit tests for the SSRF guard, credential storage + rate limiter
 npm run build    # production build
 ```
 
@@ -54,6 +54,14 @@ function quota; Vercel's platform protection covers the rest.
 - The proxy serves a **strict allowlist** of the 9 CORS-blocked providers; it
   cannot be used to relay to any other host.
 - Apple/CalDAV's user-supplied `calendarUrl` is validated against `*.icloud.com`
-  (`lib/validate-caldav.ts`) — the only user-controlled URL in the app, and the
-  only SSRF surface.
-- No credentials are ever written to logs or storage.
+  (`lib/validate-caldav.ts`) — one of two user-controlled URLs the proxy will
+  fetch; the other is the base URL override described below.
+- No credentials are ever written to logs, or stored on the server. The browser
+  may store them locally — only if you tick **Remember credentials on this
+  device**, which is off by default and clearable from the Connect tab. That
+  data lives in this origin's `localStorage` and is readable by any script on
+  the page, so don't use it on a shared computer.
+- The client may point the proxy at a non-default provider host (sandbox or
+  regional), but only at one that provider publishes — see
+  `lib/environments.ts`. Hosts are matched exactly on the parsed hostname, the
+  URL must use `https`, and an explicit non-default port is rejected.
