@@ -193,7 +193,7 @@ Breaking defects in otherwise-working adapters:
 - **Full provider audit (2026-07-19)** — all 16 adapters reviewed and verified
   against each vendor's *current* API docs (Square, Microsoft Graph/Bookings,
   Acuity, Calendly, Wix, Mindbody, Bookeo, Zenoti, and the gated tier). Report:
-  [docs/audits/2026-07-19-booking-providers.md](./docs/audits/2026-07-19-booking-providers.md).
+  `docs/audits/2026-07-19-booking-providers.md`.
   - **Microsoft Bookings was broken on every read/write.** The `bookingAppointment`
     resource carries its times as `start`/`end` (`dateTimeTimeZone`), but the
     adapter read and sent `startDateTime`/`endDateTime` — so every
@@ -242,7 +242,7 @@ Breaking defects in otherwise-working adapters:
 
 - **Calendar-integration audit (2026-07-19).** Findings verified against the
   current Google Calendar v3, Microsoft Graph v1.0, and CalDAV (RFC 4791 / RFC
-  5545) specs. See [docs/audits/2026-07-19-calendar.md](./docs/audits/2026-07-19-calendar.md).
+  5545) specs. See `docs/audits/2026-07-19-calendar.md`.
   - **HTTP `412 Precondition Failed` now maps to `CONFLICT`, not `UPSTREAM`.**
     412 is how CalDAV signals an `If-Match` (lost-update) or `If-None-Match:*`
     (create-collision) failure. Mapping it to the retryable `UPSTREAM` meant

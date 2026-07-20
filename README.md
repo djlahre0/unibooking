@@ -1372,8 +1372,6 @@ src/
 
     index.ts           public barrel
 
-docs/
-
 examples/
 
 test/

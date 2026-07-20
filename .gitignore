@@ -11,5 +11,7 @@ coverage/
 # Internal planning artifacts (not shipped, not on GitHub).
 docs/superpowers/
 .superpowers/
-# Anchored to root so it doesn't swallow docs/comparison.md, which the README links to.
+# Anchored to root so it only ignores a stray generated comparison.md, never a
+# tracked one nested under a subdirectory.
 /comparison.md
+tmp

@@ -4,8 +4,7 @@
  * allowlist from the same export, so the UI can never offer a host the server
  * will reject.
  *
- * Hosts verified against official provider documentation on 2026-07-20 —
- * see docs/audits/2026-07-20-provider-environments.md for per-provider sources.
+ * Hosts verified against official provider documentation on 2026-07-20.
  * `prod` values must equal each adapter's built-in default; environments-drift
  * .test.ts proves that by observing real requests.
  *
