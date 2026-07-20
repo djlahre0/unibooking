@@ -50,7 +50,7 @@ describe('resolveBaseUrl', () => {
   it('resolves prod, sandbox and region keys', () => {
     expect(resolveBaseUrl('square', 'prod')).toBe('https://connect.squareup.com/v2/');
     expect(resolveBaseUrl('square', 'sandbox')).toBe('https://connect.squareupsandbox.com/v2/');
-    expect(resolveBaseUrl('phorest', 'us')).toBe(
+    expect(resolveBaseUrl('phorest', 'us-aus')).toBe(
       'https://platform-us.phorest.com/third-party-api-server/api/',
     );
   });

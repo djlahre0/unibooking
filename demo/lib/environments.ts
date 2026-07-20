@@ -88,7 +88,7 @@ export const ENVIRONMENTS: Record<string, ProviderEnvironments> = {
     sandbox: 'https://api-gateway-dev.phorest.com/third-party-api-server/api/',
     regions: {
       eu: 'https://platform.phorest.com/third-party-api-server/api/',
-      us: 'https://platform-us.phorest.com/third-party-api-server/api/',
+      'us-aus': 'https://platform-us.phorest.com/third-party-api-server/api/',
     },
   },
 
