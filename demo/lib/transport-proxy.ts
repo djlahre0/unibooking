@@ -1,5 +1,5 @@
 import type { Op } from './dispatch';
-import type { ActionResult } from './result';
+import type { ActionResult, Connection } from './result';
 
 /**
  * Client-side transport for providers that reject browser calls. Ships the
@@ -10,20 +10,23 @@ import type { ActionResult } from './result';
 export async function runProxy(
   provider: string,
   op: Op,
-  creds: Record<string, string>,
+  conn: Connection,
   args: unknown,
 ): Promise<ActionResult> {
   try {
     const res = await fetch('/api/call', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider, op, creds, args }),
+      body: JSON.stringify({ provider, op, creds: conn.creds, baseUrl: conn.baseUrl, args }),
     });
     const json: unknown = await res.json().catch(() => null);
     if (json && typeof json === 'object' && 'ok' in json) {
       return json as ActionResult;
     }
-    return { ok: false, error: { message: `Demo proxy error (HTTP ${res.status}).`, httpStatus: res.status } };
+    return {
+      ok: false,
+      error: { message: `Demo proxy error (HTTP ${res.status}).`, httpStatus: res.status },
+    };
   } catch (e) {
     return { ok: false, error: { message: e instanceof Error ? e.message : String(e) } };
   }

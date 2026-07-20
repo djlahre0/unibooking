@@ -22,24 +22,19 @@ import { verifyWixWebhook } from 'unibooking/webhooks/wix';
 
 import { ADAPTERS, isDirect } from './providers';
 import { type Op } from './dispatch';
-import { serializeError, type ActionResult } from './result';
+import { serializeError, type ActionResult, type Connection } from './result';
 import { runDirect } from './transport-direct';
 import { runProxy } from './transport-proxy';
 
-export type { ActionResult } from './result';
+export type { ActionResult, Connection } from './result';
 
 /* ═══════════════════════════════════════════════════════════
    Transport picker — the one place that chooses direct vs proxy.
    ═══════════════════════════════════════════════════════════ */
-function run(
-  provider: string,
-  creds: Record<string, string>,
-  op: Op,
-  args: unknown,
-): Promise<ActionResult> {
+function run(provider: string, conn: Connection, op: Op, args: unknown): Promise<ActionResult> {
   return isDirect(provider)
-    ? runDirect(provider, op, creds, args)
-    : runProxy(provider, op, creds, args);
+    ? runDirect(provider, op, conn, args)
+    : runProxy(provider, op, conn, args);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -199,7 +194,7 @@ export async function verifyWebhook(
    ═══════════════════════════════════════════════════════════ */
 export function callCreateBooking(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   input: {
     title: string;
     start: string;
@@ -211,79 +206,79 @@ export function callCreateBooking(
     idempotencyKey?: string;
   },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'createBooking', input);
+  return run(providerId, conn, 'createBooking', input);
 }
 
 export function callGetBooking(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   bookingId: string,
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'getBooking', { bookingId });
+  return run(providerId, conn, 'getBooking', { bookingId });
 }
 
 export function callUpdateBooking(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   bookingId: string,
   input: { title?: string; start?: string; end?: string; staffId?: string; serviceId?: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'updateBooking', { bookingId, input });
+  return run(providerId, conn, 'updateBooking', { bookingId, input });
 }
 
 export function callCancelBooking(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   bookingId: string,
   reason?: string,
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'cancelBooking', { bookingId, reason });
+  return run(providerId, conn, 'cancelBooking', { bookingId, reason });
 }
 
 export function callListBookings(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   query: { start: string; end: string; limit?: number; pageToken?: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'listBookings', query);
+  return run(providerId, conn, 'listBookings', query);
 }
 
 export function callSearchAvailability(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   query: { start: string; end: string; timezone?: string; serviceId?: string; staffId?: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'searchAvailability', query);
+  return run(providerId, conn, 'searchAvailability', query);
 }
 
 export function callFindOrCreateCustomer(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   customer: { name?: string; email?: string; phone?: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'findOrCreate', customer);
+  return run(providerId, conn, 'findOrCreate', customer);
 }
 
 export function demoWithRetry(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   query: { start: string; end: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'withRetryList', query);
+  return run(providerId, conn, 'withRetryList', query);
 }
 
 export function demoCollectAll(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   query: { start: string; end: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'collectAll', query);
+  return run(providerId, conn, 'collectAll', query);
 }
 
 export function demoListAll(
   providerId: string,
-  creds: Record<string, string>,
+  conn: Connection,
   query: { start: string; end: string },
 ): Promise<ActionResult> {
-  return run(providerId, creds, 'listAll', query);
+  return run(providerId, conn, 'listAll', query);
 }

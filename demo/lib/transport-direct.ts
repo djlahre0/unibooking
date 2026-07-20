@@ -1,6 +1,6 @@
 import { makeClient } from './providers';
 import { dispatch, type Op } from './dispatch';
-import { serializeError, type ActionResult } from './result';
+import { serializeError, type ActionResult, type Connection } from './result';
 
 /**
  * Client-side transport for CORS-friendly providers. The adapter runs in the
@@ -10,11 +10,11 @@ import { serializeError, type ActionResult } from './result';
 export async function runDirect(
   provider: string,
   op: Op,
-  creds: Record<string, string>,
+  conn: Connection,
   args: unknown,
 ): Promise<ActionResult> {
   try {
-    const client = makeClient(provider, creds);
+    const client = makeClient(provider, conn.creds, conn.baseUrl);
     const data = await dispatch(client, op, args);
     return { ok: true, data };
   } catch (e) {

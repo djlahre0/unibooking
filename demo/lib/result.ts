@@ -17,6 +17,13 @@ export type ActionResult = {
   };
 };
 
+/** A provider connection: credentials plus an optional base URL override. */
+export type Connection = {
+  creds: Record<string, string>;
+  /** Absent means "use the adapter's default host". */
+  baseUrl?: string;
+};
+
 /** Normalize any thrown value into an ActionResult error. */
 export function serializeError(e: unknown): ActionResult {
   if (isUnibookingError(e)) {

@@ -76,9 +76,13 @@ export function isDirect(provider: string): boolean {
 }
 
 /** Build a BookingClient. `Object.hasOwn` guard avoids prototype-key lookups. */
-export function makeClient(provider: string, creds: Record<string, string>): BookingClient {
+export function makeClient(
+  provider: string,
+  creds: Record<string, string>,
+  baseUrl?: string,
+): BookingClient {
   if (!Object.hasOwn(ADAPTERS, provider)) throw new Error(`Unknown provider: ${provider}`);
-  return ADAPTERS[provider](creds, { timeoutMs: 10_000 });
+  return ADAPTERS[provider](creds, { timeoutMs: 10_000, ...(baseUrl ? { baseUrl } : {}) });
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -109,7 +113,12 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
     label: 'MS Bookings',
     fields: [
       { key: 'accessToken', label: 'Access Token', placeholder: 'OAuth2 bearer token' },
-      { key: 'businessId', label: 'Business ID', placeholder: 'contoso@contoso.onmicrosoft.com', secret: false },
+      {
+        key: 'businessId',
+        label: 'Business ID',
+        placeholder: 'contoso@contoso.onmicrosoft.com',
+        secret: false,
+      },
     ],
   },
   square: {
@@ -158,8 +167,18 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   vagaro: {
     label: 'Vagaro',
     fields: [
-      { key: 'region', label: 'Region', placeholder: 'Account subdomain, e.g. us04', secret: false },
-      { key: 'businessId', label: 'Business ID', placeholder: 'From POST /{region}/api/v2/locations', secret: false },
+      {
+        key: 'region',
+        label: 'Region',
+        placeholder: 'Account subdomain, e.g. us04',
+        secret: false,
+      },
+      {
+        key: 'businessId',
+        label: 'Business ID',
+        placeholder: 'From POST /{region}/api/v2/locations',
+        secret: false,
+      },
       { key: 'accessToken', label: 'Access Token', placeholder: 'From generate-access-token' },
     ],
   },
@@ -173,8 +192,18 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   boulevard: {
     label: 'Boulevard',
     fields: [
-      { key: 'businessId', label: 'Business ID', placeholder: 'Boulevard business ID', secret: false },
-      { key: 'locationId', label: 'Location ID', placeholder: 'urn:blvd:Location:...', secret: false },
+      {
+        key: 'businessId',
+        label: 'Business ID',
+        placeholder: 'Boulevard business ID',
+        secret: false,
+      },
+      {
+        key: 'locationId',
+        label: 'Location ID',
+        placeholder: 'urn:blvd:Location:...',
+        secret: false,
+      },
       { key: 'apiKey', label: 'API Key', placeholder: 'Boulevard API key' },
       { key: 'apiSecret', label: 'API Secret', placeholder: 'Boulevard API secret' },
     ],
@@ -201,7 +230,12 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
     fields: [
       { key: 'username', label: 'Username', placeholder: 'iCloud email', secret: false },
       { key: 'appPassword', label: 'App Password', placeholder: 'App-specific password' },
-      { key: 'calendarUrl', label: 'Calendar URL', placeholder: 'https://p01-caldav.icloud.com/...', secret: false },
+      {
+        key: 'calendarUrl',
+        label: 'Calendar URL',
+        placeholder: 'https://p01-caldav.icloud.com/...',
+        secret: false,
+      },
     ],
   },
 };
