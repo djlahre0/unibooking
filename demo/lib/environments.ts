@@ -149,6 +149,10 @@ export function assertSafeBaseUrl(provider: string, raw: unknown): string {
     throw new Error('baseUrl must use https.');
   }
 
+  if (url.port !== '') {
+    throw new Error('baseUrl must not specify an explicit port.');
+  }
+
   const permitted = allowedHosts(provider);
   const host = url.hostname.toLowerCase();
   if (!permitted.includes(host)) {

@@ -81,6 +81,22 @@ describe('assertSafeBaseUrl', () => {
     expect(() => assertSafeBaseUrl('square', 'http://connect.squareup.com/v2/')).toThrow(/https/i);
   });
 
+  it('rejects an explicit non-default port on an otherwise-allowed host', () => {
+    expect(() => assertSafeBaseUrl('square', 'https://connect.squareup.com:8443/v2/')).toThrow(
+      /port/i,
+    );
+  });
+
+  it('accepts an explicit :443 on https (the parser normalizes it away)', () => {
+    const url = 'https://connect.squareup.com:443/v2/';
+    expect(assertSafeBaseUrl('square', url)).toBe('https://connect.squareup.com/v2/');
+  });
+
+  it('accepts a URL with no explicit port', () => {
+    const url = 'https://connect.squareup.com/v2/';
+    expect(assertSafeBaseUrl('square', url)).toBe(url);
+  });
+
   it('rejects the credential-in-URL trick (userinfo, not host)', () => {
     // The real host is evil.com; connect.squareup.com is only the username.
     expect(() => assertSafeBaseUrl('square', 'https://connect.squareup.com@evil.com/')).toThrow(
