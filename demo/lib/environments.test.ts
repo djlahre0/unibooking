@@ -71,8 +71,10 @@ describe('assertSafeBaseUrl', () => {
     expect(assertSafeBaseUrl('square', url)).toBe(url);
   });
 
-  it('rejects another provider\'s host', () => {
-    expect(() => assertSafeBaseUrl('square', 'https://api.bookeo.com/v2/')).toThrow(/not permitted/i);
+  it("rejects another provider's host", () => {
+    expect(() => assertSafeBaseUrl('square', 'https://api.bookeo.com/v2/')).toThrow(
+      /not permitted/i,
+    );
   });
 
   it('rejects non-https schemes', () => {
@@ -117,10 +119,14 @@ describe('assertSafeBaseUrl', () => {
   });
 
   it('is case-insensitive on the host', () => {
-    expect(assertSafeBaseUrl('square', 'https://Connect.SquareUp.com/v2/')).toContain('squareup.com');
+    expect(assertSafeBaseUrl('square', 'https://Connect.SquareUp.com/v2/')).toContain(
+      'squareup.com',
+    );
   });
 
   it('rejects any base URL for an unknown provider', () => {
-    expect(() => assertSafeBaseUrl('nope', 'https://connect.squareup.com/')).toThrow(/not permitted/i);
+    expect(() => assertSafeBaseUrl('nope', 'https://connect.squareup.com/')).toThrow(
+      /not permitted/i,
+    );
   });
 });
