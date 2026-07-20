@@ -1,13 +1,14 @@
 import type { NextConfig } from "next";
 import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
-// The repo root also has a package-lock.json, so Next can't infer the workspace
-// root. Pin it to this demo directory to silence the multi-lockfile warning and
-// keep local + Vercel builds identical.
+// `unibooking` is linked from the repo root via `file:..`, which npm installs
+// as a symlink. Turbopack will not resolve modules outside its root, so the
+// root must be the repository, not this directory — pinning it to `demo/`
+// makes every `unibooking` import fail to resolve at build time.
 const nextConfig: NextConfig = {
   turbopack: {
-    root: dirname(fileURLToPath(import.meta.url)),
+    root: resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   },
 };
 
