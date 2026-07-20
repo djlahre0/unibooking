@@ -36,12 +36,15 @@ npm run test     # unit tests for the SSRF guard + rate limiter
 npm run build    # production build
 ```
 
-The demo depends on the published `unibooking` package, so it exercises the same
-artifact your app would install.
+The demo links `unibooking` from the repository root (`file:..`), so it always
+exercises this repo's source rather than a published release. Run `npm run build`
+at the root first — a `file:` dependency does not build its own package.
 
 ## Deploy to Vercel
 
-Import the repository and set the **Root Directory** to `demo`. No environment
+Import the repository and set the **Root Directory** to `demo`, with the Install
+Command overridden to `cd .. && npm install && npm run build && cd demo && npm install`
+so the linked package is built before the demo consumes it. No environment
 variables are required — the proxy runs entirely on the visitor's own
 credentials. A small in-memory rate limit (20 req/min per IP) guards the
 function quota; Vercel's platform protection covers the rest.
