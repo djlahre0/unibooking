@@ -828,9 +828,9 @@ unibooking currently supports the following providers.
 
 | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks |
 |-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|
-| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | ✅ |
-| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | ✅ |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | ✅ | ✅ | — |
+| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ |
+| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — |
 | [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
 | [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -875,6 +875,12 @@ unibooking currently supports the following providers.
 > - Apple/CalDAV deletes a whole resource, so cancelling a recurring booking
 >   removes the entire series. Expanded occurrences share one id — tell them
 >   apart via `RECURRENCE-ID` in `raw`.
+> - Google and Outlook are plain calendars with no native slot search, so
+>   `searchAvailability` derives free slots from their free/busy APIs
+>   (`freeBusy` / `getSchedule`). It requires a positive `durationMinutes` to
+>   size each slot, and Outlook additionally needs the mailbox address in
+>   `providerOptions.schedules` (or a UPN-form `userId`) — `getSchedule` cannot
+>   resolve the `me` alias.
 > - Zenoti availability is single-day and needs `providerOptions.guestId` plus a
 >   `durationMinutes`; a multi-day range throws. Each query creates a transient
 >   upstream booking, so fanning out per day would litter throwaway bookings.

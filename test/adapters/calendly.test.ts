@@ -243,3 +243,55 @@ describe('calendly: cancellation response is not a Booking', () => {
     expect(b.range.start).toBe(START);
   });
 });
+
+describe('calendly: no-show', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('updateBooking status no_show posts the invitee uri to /invitee_no_shows then re-reads', async () => {
+    const INVITEE = 'https://api.calendly.com/scheduled_events/EVT1/invitees/INV1';
+    const pool = agent.get(ORIGIN);
+    // 1) read the event's invitees
+    pool
+      .intercept({ path: '/scheduled_events/EVT1/invitees', method: 'GET' })
+      .reply(200, JSON.stringify({ collection: [{ uri: INVITEE, email: 'jane@example.com' }] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    // 2) mark the invitee a no-show
+    let noShowBody: any;
+    pool.intercept({ path: '/invitee_no_shows', method: 'POST' }).reply(
+      201,
+      (opts) => {
+        noShowBody = JSON.parse(String(opts.body));
+        return JSON.stringify({
+          resource: { uri: 'https://api.calendly.com/invitee_no_shows/NS1', invitee: INVITEE, created_at: '2026-07-02T00:00:00Z' },
+        });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+    // 3) re-read the event
+    pool
+      .intercept({ path: '/scheduled_events/EVT1', method: 'GET' })
+      .reply(200, JSON.stringify({ resource: event() }), { headers: { 'content-type': 'application/json' } });
+
+    const b = await calendly({ token: 't', user: USER }).updateBooking('EVT1', { status: 'no_show' });
+    expect(noShowBody.invitee).toBe(INVITEE);
+    expect(b.id).toBe('EVT1');
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('a bare {} update is still unsupported (no range or status)', async () => {
+    const client = calendly({ token: 't', user: USER });
+    await expect(client.updateBooking('EVT1', {})).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+  });
+});

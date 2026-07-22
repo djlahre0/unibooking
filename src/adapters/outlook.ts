@@ -1,13 +1,17 @@
-import type { Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
+import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
+import { freeSlots } from '../availability';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
 
 /**
  * Outlook / Microsoft 365 calendars via Microsoft Graph. A plain calendar (no
- * staff/services/availability). `idempotency` maps to Graph's event
- * `transactionId`. Scope: `Calendars.ReadWrite`.
+ * staff/services). `availability` is derived from the getSchedule API — free
+ * slots are the gaps between busy blocks — which needs a mailbox SMTP address
+ * (supplied via `providerOptions.schedules`/`mailbox`, or a UPN-form `userId`)
+ * plus a positive `durationMinutes` to size each slot. `idempotency` maps to
+ * Graph's event `transactionId`. Scope: `Calendars.ReadWrite`.
  */
 export type OutlookCredentials = {
   accessToken: string;
@@ -19,9 +23,40 @@ export type OutlookCredentials = {
 
 const BASE = 'https://graph.microsoft.com/v1.0/';
 
+/** The mailbox segment of a Graph path: another user by id, or `me`. */
+function who(c: OutlookCredentials): string {
+  return c.userId ? `users/${encodeURIComponent(c.userId)}` : 'me';
+}
+
 function scope(c: OutlookCredentials): string {
-  const who = c.userId ? `users/${encodeURIComponent(c.userId)}` : 'me';
-  return c.calendarId ? `${who}/calendars/${encodeURIComponent(c.calendarId)}` : who;
+  return c.calendarId ? `${who(c)}/calendars/${encodeURIComponent(c.calendarId)}` : who(c);
+}
+
+/** Resolve the mailbox SMTP address(es) getSchedule needs in `schedules`. It is
+ *  NOT part of OutlookCredentials, so look, in order: (1) providerOptions
+ *  (`schedules` string|string[], or `mailbox` string); (2) a UPN/email userId;
+ *  (3) fail — Graph's `me` alias is not a valid schedule id, so there is no
+ *  sensible default to fall back to. */
+function resolveSchedules(
+  c: OutlookCredentials,
+  providerOptions: Record<string, unknown> | undefined,
+): string[] {
+  const po = providerOptions ?? {};
+  const fromSchedules = po.schedules;
+  if (typeof fromSchedules === 'string' && fromSchedules) return [fromSchedules];
+  if (Array.isArray(fromSchedules)) {
+    const list = fromSchedules.filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (list.length > 0) return list;
+  }
+  if (typeof po.mailbox === 'string' && po.mailbox) return [po.mailbox];
+  if (c.userId && c.userId.includes('@')) return [c.userId];
+  throw new UnibookingError({
+    provider: 'outlook',
+    code: 'INVALID_INPUT',
+    message:
+      'getSchedule needs a mailbox address; supply it via providerOptions.schedules ' +
+      "(string or string[]) or providerOptions.mailbox — Graph's `me` alias is not a valid schedule id",
+  });
 }
 
 function mapStatus(e: any): BookingStatus {
@@ -64,7 +99,7 @@ function toBooking(raw: unknown): Booking {
 export const outlook = defineAdapter<OutlookCredentials>({
   id: 'outlook',
   capabilities: {
-    availability: false,
+    availability: true,
     staff: false,
     services: false,
     webhooks: true,
@@ -218,8 +253,46 @@ export const outlook = defineAdapter<OutlookCredentials>({
       return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
     },
 
-    async searchAvailability(_query) {
-      return unsupported('outlook', 'availability');
+    async searchAvailability(query): Promise<AvailabilitySlot[]> {
+      assertValidRange(query.range, 'outlook');
+      // getSchedule returns busy blocks only, so a slot size is required to
+      // derive free slots; it also doubles as the availabilityViewInterval.
+      if (typeof query.durationMinutes !== 'number' || query.durationMinutes <= 0) {
+        throw new UnibookingError({
+          provider: 'outlook',
+          code: 'INVALID_INPUT',
+          message:
+            'getSchedule returns busy blocks only; pass a positive durationMinutes to size each slot',
+        });
+      }
+      const durationMinutes = query.durationMinutes;
+      const c = await http.resolve();
+      const schedules = resolveSchedules(c, query.providerOptions);
+      // getSchedule lives under the mailbox calendar, never a specific
+      // calendarId, so target `${who}/calendar` rather than `scope(c)`.
+      const res = await http.request(c, {
+        method: 'POST',
+        path: `${who(c)}/calendar/getSchedule`,
+        headers: PREFER_UTC,
+        body: {
+          schedules,
+          startTime: graphDateTime(query.range.start),
+          endTime: graphDateTime(query.range.end),
+          availabilityViewInterval: durationMinutes,
+        },
+      });
+      const first = asArray(res?.value, 'outlook', 'getSchedule.value')[0];
+      const items = asArray(first?.scheduleItems, 'outlook', 'getSchedule.scheduleItems');
+      // Everything that is NOT 'free' (busy/tentative/oof/workingElsewhere/
+      // unknown) blocks a booking; drop items whose Graph times don't convert.
+      const busy = items
+        .filter((it: any) => it?.status !== 'free')
+        .flatMap((it: any): Array<{ start: string; end: string }> => {
+          const start = graphToInstant(it?.start);
+          const end = graphToInstant(it?.end);
+          return start !== undefined && end !== undefined ? [{ start, end }] : [];
+        });
+      return freeSlots(query.range, busy, durationMinutes);
     },
   }),
 });

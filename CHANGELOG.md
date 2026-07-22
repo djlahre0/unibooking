@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+Provider capabilities the vendors document but the adapters had not yet exposed
+— each verified against the provider's published API, none against a live
+tenant.
+
+- **Google and Outlook now support `searchAvailability`.** Both are plain
+  calendars with no native slot search, so availability is derived from their
+  free/busy APIs — Google `freeBusy`, Outlook `getSchedule` — via a shared,
+  unit-tested `freeSlots` helper (range minus busy, sliced by `durationMinutes`).
+  A positive `durationMinutes` is required; Outlook additionally needs the
+  mailbox address in `providerOptions.schedules` (or a UPN-form `userId`), since
+  `getSchedule` cannot resolve the `me` alias.
+- **Microsoft Bookings now exposes `customers.findOrCreate`** via the
+  `bookingCustomer` API — matches an existing customer by email (following
+  pagination) or creates one.
+- **Acuity accepts OAuth2 bearer credentials** (`{ accessToken }`) alongside the
+  existing Basic auth (`{ userId, apiKey }`) — the recommended mode for
+  multi-account apps.
+- **Calendly `updateBooking({ status: 'no_show' })`** marks the event's invitee
+  a no-show via `/invitee_no_shows`, instead of throwing `UNSUPPORTED`.
+- **Square `createBooking` now attaches a name-only customer** (previously it
+  resolved a customer only when an email or phone was present, silently dropping
+  a name-only one).
+
 ## [0.2.0] - 2026-07-22
 
 The last published release is 0.1.5. This version carries **two** audit passes:

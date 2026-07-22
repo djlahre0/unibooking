@@ -166,7 +166,15 @@ export const square = defineAdapter<SquareCredentials>({
       assertValidRange(input.range, 'square');
       const c = await http.resolve();
       let customerId = input.customer?.id;
-      if (customerId === undefined && input.customer && (input.customer.email || input.customer.phone)) {
+      // Resolve/attach a customer whenever we have anything to identify them by —
+      // name, email, or phone. `findOrCreateCustomer` handles the name-only case
+      // (no dedup filter, straight create), so gating on email/phone alone
+      // silently dropped a name-only customer.
+      if (
+        customerId === undefined &&
+        input.customer &&
+        (input.customer.name || input.customer.email || input.customer.phone)
+      ) {
         customerId = await findOrCreateCustomer(http, c, input.customer);
       }
       // Square appointment bookings require a `service_variation_version` on the

@@ -85,7 +85,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     services: true,
     webhooks: false,
     idempotency: false,
-    customers: false,
+    customers: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
@@ -255,6 +255,41 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         }
       }
       return out;
+    },
+
+    customers: {
+      findOrCreate: async (customer) => {
+        if (customer.id) return customer.id;
+        const c = await http.resolve();
+        const email = customer.email;
+        if (email) {
+          // Match an existing bookingCustomer by email, following @odata.nextLink
+          // so a business with many customers still resolves. Bounded like the
+          // other paged reads here, so a misbehaving nextLink can't loop forever.
+          const wanted = email.toLowerCase();
+          let page = await http.request(c, { path: `${base(c)}/customers`, query: { $top: 200 } });
+          for (let i = 0; i < 50; i++) {
+            for (const cust of asArray(page?.value, 'microsoft_bookings', 'customers.value')) {
+              if (typeof cust?.emailAddress === 'string' && cust.emailAddress.toLowerCase() === wanted) {
+                return reqString(cust.id, 'microsoft_bookings', 'customer.id');
+              }
+            }
+            const next = nextLinkFrom(page);
+            if (next === undefined) break;
+            page = await http.request(c, { path: next });
+          }
+        }
+        const created = await http.request(c, {
+          method: 'POST',
+          path: `${base(c)}/customers`,
+          body: {
+            '@odata.type': '#microsoft.graph.bookingCustomer',
+            displayName: customer.name ?? customer.email ?? 'Guest',
+            ...(customer.email ? { emailAddress: customer.email } : {}),
+          },
+        });
+        return reqString(created?.id, 'microsoft_bookings', 'customer.id');
+      },
     },
   }),
 });

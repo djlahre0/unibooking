@@ -251,6 +251,23 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         });
         return getEvent(http, c, id);
       }
+      if (input.status === 'no_show') {
+        const uuid = uuidFromUri(id);
+        // A no-show rides on the INVITEE, not the event: read the event's
+        // invitees and flag the first one. `invitee_no_shows` returns an
+        // InviteeNoShow resource (uri/invitee/created_at) — no start_time — so
+        // discard it and re-read the event, like the cancellation branch does.
+        const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
+        const first = asArray(invitees?.collection, 'calendly', 'invitees')[0];
+        const inviteeUri = reqString(String(first?.uri ?? ''), 'calendly', 'invitees[0].uri');
+        await http.request(c, {
+          method: 'POST',
+          path: 'invitee_no_shows',
+          body: { invitee: inviteeUri },
+          parse: 'none',
+        });
+        return getEvent(http, c, id);
+      }
       return unsupported(
         'calendly',
         'updateBooking without a range or cancellation (Calendly has no reschedule; change the time to cancel+rebook)',

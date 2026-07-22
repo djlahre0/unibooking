@@ -1,14 +1,17 @@
-import type { Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
+import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
+import { freeSlots } from '../availability';
 
 /**
- * Google Calendar (v3). A plain calendar: no native concept of staff, services,
- * or availability search, so those capabilities are false and
- * `searchAvailability` throws UNSUPPORTED. `idempotency` is false because Google
- * only accepts client-supplied event ids in a restricted format — pass such an
- * id via `providerOptions.id` if you need it.
+ * Google Calendar (v3). A plain calendar: no native concept of staff or
+ * services, so those capabilities are false. `availability` is derived from the
+ * freeBusy API — free slots are the gaps between busy intervals — which returns
+ * busy blocks only, so `searchAvailability` requires a positive `durationMinutes`
+ * to size each slot. `idempotency` is false because Google only accepts
+ * client-supplied event ids in a restricted format — pass such an id via
+ * `providerOptions.id` if you need it.
  */
 export type GoogleCredentials = {
   /** OAuth2 access token (scope `https://www.googleapis.com/auth/calendar`). */
@@ -121,7 +124,7 @@ function parseGoogleError(_status: number, body: unknown): { providerCode?: stri
 export const google = defineAdapter<GoogleCredentials>({
   id: 'google',
   capabilities: {
-    availability: false,
+    availability: true,
     staff: false,
     services: false,
     webhooks: true,
@@ -226,8 +229,48 @@ export const google = defineAdapter<GoogleCredentials>({
       };
     },
 
-    async searchAvailability(_query) {
-      return unsupported('google', 'availability');
+    async searchAvailability(query): Promise<AvailabilitySlot[]> {
+      assertValidRange(query.range, 'google');
+      // freeBusy returns busy intervals only, so a slot size is required to
+      // derive free slots. A plain calendar has no staff/service, so those are
+      // ignored rather than turned into filters that don't exist.
+      if (typeof query.durationMinutes !== 'number' || query.durationMinutes <= 0) {
+        throw new UnibookingError({
+          provider: 'google',
+          code: 'INVALID_INPUT',
+          message:
+            'Google freeBusy returns busy intervals only; pass a positive durationMinutes to size each slot',
+        });
+      }
+      const durationMinutes = query.durationMinutes;
+      const c = await http.resolve();
+      const id = calId(c);
+      const res = await http.request(c, {
+        method: 'POST',
+        path: 'freeBusy',
+        body: {
+          timeMin: query.range.start,
+          timeMax: query.range.end,
+          items: [{ id }],
+          ...query.providerOptions,
+        },
+      });
+      // Response: { calendars: { [id]: { busy: [{start,end}], errors?: [...] } } }.
+      const cal = asRecord(
+        asRecord(res?.calendars, 'google', 'freeBusy.calendars')[id],
+        'google',
+        'freeBusy.calendars[calendarId]',
+      );
+      const errors = asArray(cal.errors, 'google', 'freeBusy.errors');
+      if (errors.length > 0) {
+        throw new UnibookingError({
+          provider: 'google',
+          code: 'UPSTREAM',
+          message: `freeBusy could not read the calendar: ${errors[0]?.reason ?? 'unknown error'}`,
+        });
+      }
+      const busy = asArray(cal.busy, 'google', 'freeBusy.busy');
+      return freeSlots(query.range, busy, durationMinutes);
     },
   }),
 });

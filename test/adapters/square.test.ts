@@ -249,6 +249,40 @@ describe('square: customer resolution + version fetch', () => {
     await expect(client.getBooking('B1')).rejects.toMatchObject({ code: 'UPSTREAM' });
   });
 
+  it('createBooking with a name-only customer creates one and attaches its id', async () => {
+    const pool = agent.get(ORIGIN);
+    let createCustomerBody: any;
+    let bookingBody: any;
+    // name-only → findOrCreateCustomer skips the dedup search and creates straight away
+    pool
+      .intercept({ path: '/v2/customers', method: 'POST' })
+      .reply(200, (opts) => {
+        createCustomerBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ customer: { id: 'CUST_NAMED' } });
+      }, { headers: { 'content-type': 'application/json' } });
+    pool
+      .intercept({ path: '/v2/bookings', method: 'POST' })
+      .reply(200, (opts) => {
+        bookingBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking({ customer_id: 'CUST_NAMED' }) });
+      }, { headers: { 'content-type': 'application/json' } });
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    const b = await client.createBooking({
+      title: 'Cut',
+      range: RANGE,
+      customer: { name: 'Jane Doe' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+    });
+
+    expect(b.customer?.id).toBe('CUST_NAMED');
+    expect(bookingBody.booking.customer_id).toBe('CUST_NAMED');
+    expect(createCustomerBody.given_name).toBe('Jane');
+    expect(createCustomerBody.family_name).toBe('Doe');
+    agent.assertNoPendingInterceptors(); // no /customers/search happened
+  });
+
   it('findOrCreate searches by phone when no email is given', async () => {
     const pool = agent.get(ORIGIN);
     let searchBody: any;

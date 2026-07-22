@@ -1,5 +1,7 @@
-import { expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { google } from '../../src/adapters/google';
+import { isInstant } from '../../src/time';
 import { runConformance } from '../conformance';
 
 const EVENT = {
@@ -71,5 +73,96 @@ runConformance({
         expect(r.nextPageToken).toBe('next');
       },
     },
+    {
+      name: 'searchAvailability derives free slots from freeBusy',
+      method: 'POST',
+      path: '/calendar/v3/freeBusy',
+      reply: {
+        calendars: {
+          primary: { busy: [{ start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z' }] },
+        },
+      },
+      run: (c) =>
+        c.searchAvailability({
+          range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+          durationMinutes: 60,
+        }),
+      check: (slots) => {
+        // The 10:00–11:00 busy block is excluded; 09–10 and 11–12 remain.
+        expect(slots).toHaveLength(2);
+        expect(slots[0].start).toBe('2026-07-20T09:00:00Z');
+        expect(slots[1].start).toBe('2026-07-20T11:00:00Z');
+        expect(slots.some((s: any) => s.start === '2026-07-20T10:00:00Z')).toBe(false);
+      },
+    },
   ],
+});
+
+describe('google: freeBusy-derived availability', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('rejects a missing durationMinutes with INVALID_INPUT', async () => {
+    const client = google({ accessToken: 't', calendarId: 'primary' });
+    await expect(
+      client.searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('excludes busy intervals and returns offset-bearing slots', async () => {
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          calendars: {
+            primary: { busy: [{ start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z' }] },
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const slots = await google({ accessToken: 't', calendarId: 'primary' }).searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      durationMinutes: 60,
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z']);
+    // The busy hour is never offered as a slot start.
+    expect(slots.some((s) => s.start === '2026-07-20T10:00:00Z')).toBe(false);
+    for (const s of slots) {
+      expect(isInstant(s.start)).toBe(true);
+      expect(isInstant(s.end)).toBe(true);
+    }
+  });
+
+  it('throws UPSTREAM when the calendar entry carries an errors array', async () => {
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({ calendars: { primary: { busy: [], errors: [{ reason: 'notACalendarUser' }] } } }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    await expect(
+      google({ accessToken: 't', calendarId: 'primary' }).searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+        durationMinutes: 60,
+      }),
+    ).rejects.toMatchObject({ code: 'UPSTREAM' });
+  });
 });

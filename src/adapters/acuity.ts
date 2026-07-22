@@ -4,13 +4,15 @@ import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
 
 /**
- * Acuity Scheduling. HTTP Basic auth (user id + API key). "Calendars" act as
+ * Acuity Scheduling. Auth is either HTTP Basic (account user id + API key) or,
+ * for multi-account OAuth2 apps, a bearer access token. "Calendars" act as
  * staff/resources; "appointment types" are services.
  */
-export type AcuityCredentials = {
-  userId: string;
-  apiKey: string;
-};
+export type AcuityCredentials =
+  /** HTTP Basic: your account's user id + API key. */
+  | { userId: string; apiKey: string }
+  /** OAuth2 bearer, for apps acting on behalf of a connected account. */
+  | { accessToken: string };
 
 const BASE = 'https://acuityscheduling.com/api/v1/';
 
@@ -161,7 +163,13 @@ export const acuity = defineAdapter<AcuityCredentials>({
     customers: false,
   },
   baseUrl: BASE,
-  auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.userId}:${c.apiKey}`)}` } }),
+  // OAuth2 apps send a bearer token; single-account keys use HTTP Basic.
+  auth: (c) => ({
+    headers: {
+      authorization:
+        'accessToken' in c ? `Bearer ${c.accessToken}` : `Basic ${btoa(`${c.userId}:${c.apiKey}`)}`,
+    },
+  }),
   parseError: parseAcuityError,
   build: (http) => ({
     async createBooking(input) {

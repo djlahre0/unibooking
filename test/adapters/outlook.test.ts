@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { outlook } from '../../src/adapters/outlook';
+import { isInstant } from '../../src/time';
 import { runConformance } from '../conformance';
 
 const EVENT = {
@@ -73,7 +74,137 @@ runConformance({
         );
       },
     },
+    {
+      name: 'searchAvailability derives free slots from getSchedule',
+      method: 'POST',
+      path: '/v1.0/me/calendar/getSchedule',
+      reply: {
+        value: [
+          {
+            scheduleId: 'jane@example.com',
+            scheduleItems: [
+              {
+                status: 'busy',
+                start: { dateTime: '2026-07-20T10:00:00.0000000', timeZone: 'UTC' },
+                end: { dateTime: '2026-07-20T11:00:00.0000000', timeZone: 'UTC' },
+              },
+            ],
+          },
+        ],
+      },
+      run: (c) =>
+        c.searchAvailability({
+          range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+          durationMinutes: 60,
+          providerOptions: { schedules: 'jane@example.com' },
+        }),
+      check: (slots) => {
+        // The busy 10:00–11:00 block is excluded; 09–10 and 11–12 remain.
+        expect(slots).toHaveLength(2);
+        expect(slots[0].start).toBe('2026-07-20T09:00:00Z');
+        expect(slots[1].start).toBe('2026-07-20T11:00:00Z');
+      },
+    },
   ],
+});
+
+describe('outlook: getSchedule-derived availability', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('rejects when no mailbox can be resolved (me is not a schedule id)', async () => {
+    // No providerOptions and a userId-less client → nothing to use as a schedule.
+    const client = outlook({ accessToken: 't' });
+    await expect(
+      client.searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+        durationMinutes: 60,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('rejects a missing durationMinutes with INVALID_INPUT', async () => {
+    const client = outlook({ accessToken: 't' });
+    await expect(
+      client.searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+        providerOptions: { mailbox: 'jane@example.com' },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('resolves a UPN-form userId as the schedule id', async () => {
+    let sentBody: any;
+    agent
+      .get('https://graph.microsoft.com')
+      // userId is set, so the mailbox segment is `users/{upn}`, not `me`.
+      .intercept({ path: (p) => p.includes('/calendar/getSchedule'), method: 'POST' })
+      .reply(
+        200,
+        (opts) => {
+          sentBody = JSON.parse(String(opts.body));
+          return JSON.stringify({ value: [{ scheduleId: 'jane@contoso.com', scheduleItems: [] }] });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const client = outlook({ accessToken: 't', userId: 'jane@contoso.com' });
+    const slots = await client.searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T11:00:00Z' },
+      durationMinutes: 60,
+    });
+    // Nothing busy → full range sliced, and the UPN went out as the schedule id.
+    expect(sentBody.schedules).toEqual(['jane@contoso.com']);
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z']);
+  });
+
+  it('excludes non-free scheduleItems and keeps free ones bookable', async () => {
+    agent
+      .get('https://graph.microsoft.com')
+      .intercept({ path: (p) => p.startsWith('/v1.0/me/calendar/getSchedule'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          value: [
+            {
+              scheduleId: 'jane@example.com',
+              scheduleItems: [
+                {
+                  status: 'busy',
+                  start: { dateTime: '2026-07-20T10:00:00.0000000', timeZone: 'UTC' },
+                  end: { dateTime: '2026-07-20T11:00:00.0000000', timeZone: 'UTC' },
+                },
+                {
+                  // A 'free' item must NOT block, so 09:00 stays bookable.
+                  status: 'free',
+                  start: { dateTime: '2026-07-20T09:00:00.0000000', timeZone: 'UTC' },
+                  end: { dateTime: '2026-07-20T09:30:00.0000000', timeZone: 'UTC' },
+                },
+              ],
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const slots = await outlook({ accessToken: 't' }).searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      durationMinutes: 60,
+      providerOptions: { schedules: ['jane@example.com'] },
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z']);
+    for (const s of slots) expect(isInstant(s.start)).toBe(true);
+  });
 });
 
 describe('outlook: status, cancel, and $skip pagination', () => {

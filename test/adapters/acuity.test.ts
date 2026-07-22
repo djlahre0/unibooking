@@ -190,3 +190,43 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     expect(paths[1]).not.toContain('admin=true');
   });
 });
+
+describe('acuity: auth', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  function captureAuth(): { get: () => string | undefined } {
+    const pool = agent.get('https://acuityscheduling.com');
+    let auth: string | undefined;
+    pool
+      .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
+      .reply(200, (opts) => {
+        const h = opts.headers as Record<string, string>;
+        auth = h.authorization ?? h.Authorization;
+        return JSON.stringify({ ...APPT });
+      }, { headers: { 'content-type': 'application/json' } });
+    return { get: () => auth };
+  }
+
+  it('sends a Bearer token when built with an accessToken (OAuth2)', async () => {
+    const cap = captureAuth();
+    await acuity({ accessToken: 'oauth-token' }).getBooking('55');
+    expect(cap.get()).toBe('Bearer oauth-token');
+  });
+
+  it('sends a Basic header when built with a userId + apiKey', async () => {
+    const cap = captureAuth();
+    await acuity({ userId: 'u', apiKey: 'k' }).getBooking('55');
+    expect(cap.get()).toBe(`Basic ${btoa('u:k')}`);
+  });
+});
