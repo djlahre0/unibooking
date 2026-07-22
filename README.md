@@ -834,8 +834,8 @@ unibooking currently supports the following providers.
 | [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
 | [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ |
+| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
+| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
 | [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
 | [Setmore](https://setmore.docs.apiary.io/) | — | ✅ | ⚠️ | — | ✅ | ✅ | ✅ | ✅ | — |
 | [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
@@ -851,7 +851,10 @@ unibooking currently supports the following providers.
 > adapter can:
 >
 > - Calendly has no reschedule endpoint; rescheduling is cancel + recreate.
-> - Wix updates support reschedule or cancel, not arbitrary field edits.
+> - Wix updates support reschedule or cancel, not arbitrary field edits. Its
+>   extended-bookings query also exposes no staff/resource filter, so
+>   `listBookings({ staffId })` throws `UNSUPPORTED` rather than silently
+>   returning unfiltered results — filter client-side instead.
 > - Boulevard availability requires the separate Client cart API, and its
 >   `UpdateAppointmentInput` accepts only notes, state and custom fields — staff
 >   and service changes are not expressible. Rescheduling is supported natively.
@@ -861,6 +864,29 @@ unibooking currently supports the following providers.
 > - Vagaro has no date-range list; `listBookings` requires a `customerId`.
 > - Mindbody has no cancel *path* — cancellation is an action on the update
 >   endpoint, which `cancelBooking` handles for you.
+> - Square and Acuity booking `status` is read-only, and Microsoft Bookings has
+>   no status field at all; `updateBooking({ status })` throws on all three, so
+>   use `cancelBooking()` rather than a status write. Acuity also cannot change
+>   an appointment type, and can only reassign staff as part of a reschedule.
+> - Square's availability search window must be at least 24 hours and at most 31
+>   days; its list window is also capped at 31 days.
+> - Acuity has no list cursor — `max` only caps the count (default 100), so
+>   narrow the range or raise `limit` on a busy calendar.
+> - Apple/CalDAV deletes a whole resource, so cancelling a recurring booking
+>   removes the entire series. Expanded occurrences share one id — tell them
+>   apart via `RECURRENCE-ID` in `raw`.
+> - Zenoti availability is single-day and needs `providerOptions.guestId` plus a
+>   `durationMinutes`; a multi-day range throws. Each query creates a transient
+>   upstream booking, so fanning out per day would litter throwaway bookings.
+>   `listBookings` has no cursor — a `pageToken` throws rather than being ignored.
+> - Availability ranges are capped where the provider is single-date and the
+>   adapter fans out one request per day: Vagaro 31 days, Setmore 62, Acuity 31.
+>   Beyond the cap you get an error rather than a silently truncated slot list.
+> - Bookeo needs `providerOptions.participants` (with a `peopleCategoryId`) on
+>   create, and Phorest needs a `staffId` — both are required by their specs and
+>   cannot be defaulted. Bookeo updates reschedule only; its PUT is not a
+>   documented partial-update contract, so title/staff/product edits throw
+>   rather than risk a partial body clearing fields.
 >
 > **Permission caveats:**
 >
@@ -885,13 +911,22 @@ unibooking currently supports the following providers.
 > arranged directly with their support team.
 >
 > **Verification status.** Every adapter is checked against its provider's
-> current published specification, and the conformance suite asserts the wire
-> format — URL, headers and request body — not just the mapped result. Adapters
-> for providers with open sandboxes are additionally exercised against them;
-> Vagaro, Setmore, Boulevard, Zenoti and Phorest require gated credentials, so
-> those are spec-verified rather than live-verified. If you hit a discrepancy
-> against a live tenant, please open an issue — that is exactly the gap this
-> project cannot close on its own.
+> current published specification — an OpenAPI/Swagger document, a GraphQL
+> schema, or an official reference page. **No adapter is verified against a live
+> tenant.** Several providers gate API access behind sales or manual approval,
+> and the rest were not exercised end-to-end either.
+>
+> What the tests actually cover: the shared conformance suite asserts the
+> canonical contract (offset-bearing instants, `end > start`, the status enum,
+> error-code mapping) against mocked HTTP matched on request path and method.
+> Individual adapter tests additionally assert request bodies and headers where
+> a specific wire detail matters, but that is per-case, not blanket coverage.
+> Because the mocks are authored alongside the adapter, they cannot catch a
+> wrong endpoint or a misread response field — only a spec diff can, which is
+> what the audits in [CHANGELOG.md](CHANGELOG.md) do.
+>
+> If you hit a discrepancy against a live tenant, please open an issue — that is
+> exactly the gap this project cannot close on its own.
 
 ---
 
@@ -977,6 +1012,7 @@ Each verifier lives at its own subpath, so you only bundle what you use.
 import { verifySquareSignature } from "unibooking/webhooks/square";
 import { verifyCalendlySignature } from "unibooking/webhooks/calendly";
 import { verifyAcuitySignature } from "unibooking/webhooks/acuity";
+import { verifyBookeoSignature } from "unibooking/webhooks/bookeo";
 import { verifyBoulevardSignature } from "unibooking/webhooks/boulevard";
 import { verifyMindbodySignature } from "unibooking/webhooks/mindbody";
 import { verifyWixWebhook } from "unibooking/webhooks/wix";
@@ -993,12 +1029,19 @@ import {
 | Square | `verifySquareSignature` | ✅ | `boolean` |
 | Calendly | `verifyCalendlySignature` | ✅ | `boolean` |
 | Acuity | `verifyAcuitySignature` | ✅ | `boolean` |
+| Bookeo | `verifyBookeoSignature` | ✅ | `boolean` |
 | Boulevard | `verifyBoulevardSignature` | ✅ | `boolean` |
 | Mindbody | `verifyMindbodySignature` | ✅ | `boolean` |
 | Wix | `verifyWixWebhook` | ✅ | decoded payload, or `null` |
 | Google Calendar | `verifyGoogleChannelToken` | — | `boolean` |
-| Outlook / MS Bookings | `verifyGraphClientState` | — | `boolean` |
+| Outlook | `verifyGraphClientState` | — | `boolean` |
 | Vagaro | `verifyVagaroToken` | — | `boolean` |
+
+Calendly and Bookeo also accept an optional `toleranceMs` (plus an injectable
+`now`) to reject replayed deliveries, as both vendors recommend.
+
+Microsoft Bookings has no webhook helper because Graph v1.0 does not support
+change-notification subscriptions on Bookings resources.
 
 Your application hosts the endpoint.
 
@@ -1191,6 +1234,12 @@ Recurrence is not part of the canonical `Booking` model and has no capability
 flag — pass provider-native recurrence fields through `providerOptions`, and read
 them back from `booking.raw`.
 
+Apple/CalDAV is the exception: it serializes iCalendar rather than JSON, so
+`providerOptions` has nowhere to merge into and is ignored. `updateBooking`
+still preserves an existing `RRULE`, and `listBookings` asks the server to
+expand each in-window occurrence — but creating a recurring series through this
+adapter is not supported.
+
 ---
 
 ## Can I access provider-specific data?
@@ -1222,21 +1271,24 @@ heavily tested.
 
 Per-adapter maturity varies, and it is worth being precise about what the tests
 prove. Every official adapter runs the shared conformance suite, which pins the
-canonical `Booking` shape, status mapping, error normalization and pagination.
-Adapters also have wire-format tests asserting the exact URL, headers and request
-body they send.
+canonical `Booking` shape, status mapping, error normalization and pagination
+against mocked HTTP matched on request path and method. Individual adapters add
+wire-format tests for the specific URLs, headers and request bodies where a
+detail matters.
 
-What that does **not** prove is that a provider accepts those requests. The suite
-mocks the transport, so a wrong endpoint or auth header is invisible to it — an
-adapter can be fully green and still fail against the real API. Adapters for
-providers with open sandboxes get exercised against them; the gated ones
-(Vagaro, Setmore, Boulevard, Zenoti, Phorest) are verified against their
-published specifications instead.
+What that does **not** prove is that a provider accepts those requests. The
+suite mocks the transport, and the mocks are written alongside the adapter — so
+a wrong endpoint, a misread response field, or a bad auth header is invisible to
+it. An adapter can be fully green and still fail against the real API. **No
+adapter is verified against a live tenant**; correctness rests on diffing each
+one against the provider's published spec, which is what the audits recorded in
+[CHANGELOG.md](CHANGELOG.md) do.
 
 So: treat the widely-used adapters (Google, Outlook, Square, Acuity, Calendly)
-as production-ready, and validate the gated ones against your own tenant before
-depending on them. Discrepancy reports are the most useful contribution you can
-make.
+as the best-exercised, and validate any adapter against your own tenant before
+depending on it — especially the gated ones (Vagaro, Setmore, Boulevard, Zenoti,
+Phorest, Mindbody, Wix), whose specs are the only available ground truth.
+Discrepancy reports are the most useful contribution you can make.
 
 ---
 
@@ -1352,7 +1404,7 @@ src/
 
     adapters/          google.ts, square.ts, outlook.ts, ... (16)
 
-    webhooks/          square.ts, calendly.ts, wix.ts, ... (9)
+    webhooks/          square.ts, calendly.ts, wix.ts, ... (10)
 
     adapter-kit.ts     defineAdapter() — the adapter authoring toolkit
 

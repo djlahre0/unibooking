@@ -1,6 +1,7 @@
 /**
  * Tiny Web Crypto helpers for webhook signature verification. Uses the global
- * `crypto.subtle`, available in Node 18+, edge runtimes, Deno, Bun, and browsers.
+ * `crypto.subtle`, available in Node 20+ (this package's floor), edge runtimes,
+ * Deno, Bun, and browsers.
  */
 
 function toBase64(bytes: Uint8Array): string {
@@ -94,8 +95,17 @@ export async function verifyRs256Jwt(
     return null;
   }
   const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+  // The signature segment decode must be guarded too: `atob` throws on invalid
+  // base64url, and an argument throw would bypass the `.catch` on verify(),
+  // turning a malformed token into a rejection instead of the documented null.
+  let sig: Uint8Array<ArrayBuffer>;
+  try {
+    sig = base64UrlToBytes(sigB64!);
+  } catch {
+    return null;
+  }
   const ok = await crypto.subtle
-    .verify({ name: 'RSASSA-PKCS1-v1_5' }, key, base64UrlToBytes(sigB64!), data)
+    .verify({ name: 'RSASSA-PKCS1-v1_5' }, key, sig, data)
     .catch(() => false);
   if (!ok) return null;
   try {
@@ -120,7 +130,9 @@ async function importRsaPublicKey(pem: string): Promise<CryptoKey> {
   );
 }
 
-/** Length-independent, constant-time-ish string comparison. */
+/** Constant-time-ish string comparison. Returns early on a length mismatch
+ *  (leaking only the expected digest's length, which is public per scheme);
+ *  equal-length inputs are compared without early exit. */
 export function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;

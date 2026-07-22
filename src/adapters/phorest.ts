@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
@@ -39,9 +39,27 @@ function recombine(date: unknown, time: unknown): string | undefined {
   return `${date}T${time}Z`;
 }
 
+/** The inverse of `recombine`: an instant -> Phorest's `appointmentDate`
+ *  (yyyy-MM-dd) + LocalTime (HH:mm:ss) pair. Both are derived in UTC because
+ *  "all API times for bookings are in UTC time". */
+function splitUtc(instant: string): { date: string; time: string } {
+  const iso = new Date(instant).toISOString();
+  return { date: iso.slice(0, 10), time: iso.slice(11, 19) };
+}
+
 /** RFC3339-with-offset -> UTC `Z` (Phorest request bodies want UTC ISO-8601). */
 function toUtcZ(instant: string): string {
   return new Date(instant).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Basic auth over credentials that may contain non-Latin-1 characters (Phorest
+ *  passwords are user-chosen). `btoa` throws above U+00FF, so base64 the UTF-8
+ *  bytes instead of the code points. */
+function basicAuth(username: string, password: string): string {
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
 }
 
 function mapStatus(a: any): BookingStatus {
@@ -123,16 +141,42 @@ function requireService(serviceId: string | undefined): string {
   return serviceId;
 }
 
-/** HAL paged models expose entities under `_embedded` (array), sometimes nested
- *  under `data`. Normalize to a plain array. TODO: verify per-endpoint wrapping. */
-function embedded(res: any): any[] {
-  const e = res?._embedded ?? res?.data?._embedded;
-  if (Array.isArray(e)) return e;
-  if (e && typeof e === 'object') {
-    const firstArray = Object.values(e).find((v) => Array.isArray(v));
-    if (Array.isArray(firstArray)) return firstArray;
+/** `ServiceSchedule.staffId` is required on a booking — without it Phorest 400s,
+ *  so reject client-side with a message that names the field. */
+function requireStaff(staffId: string | undefined): string {
+  if (!staffId) {
+    throw new UnibookingError({
+      provider: 'phorest',
+      code: 'INVALID_INPUT',
+      message: 'Phorest requires a staffId on every service schedule to create a booking',
+    });
   }
-  return [];
+  return staffId;
+}
+
+/** Every paged Phorest model is `{ links, _embedded, page }` with `_embedded` a
+ *  bare array at the top level. (The one `data`-wrapped body in the spec is
+ *  availability, which is mapped separately.) */
+function embedded(res: any): any[] {
+  return Array.isArray(res?._embedded) ? res._embedded : [];
+}
+
+/** BookingResponse (`{bookingStatus, clientId, schedules,
+ *  clientAppointmentSchedules, bookingId, links}`) carries no top-level
+ *  appointment id, and `bookingId` is NOT the appointment's `groupBookingId` —
+ *  the created appointment's id lives on the nested service schedule. */
+function createdAppointmentId(res: unknown): string {
+  const b = asRecord(res, 'phorest', 'booking');
+  for (const cs of asArray(b.clientAppointmentSchedules, 'phorest', 'booking.clientAppointmentSchedules')) {
+    for (const ss of asArray(cs?.serviceSchedules, 'phorest', 'booking.serviceSchedules')) {
+      if (ss?.appointmentId) return String(ss.appointmentId);
+    }
+  }
+  throw new UnibookingError({
+    provider: 'phorest',
+    code: 'UPSTREAM',
+    message: 'booking response has no clientAppointmentSchedules[].serviceSchedules[].appointmentId',
+  });
 }
 
 async function findOrCreateClient(
@@ -170,6 +214,23 @@ async function getAppointment(
   return toBooking(res);
 }
 
+/** State transitions are dedicated endpoints, not writable fields. `sub` is
+ *  `appointment/cancel` or `appointment/confirm`; `appointment_id` is repeatable
+ *  upstream, but a single canonical booking maps to exactly one id. */
+async function transition(
+  http: HttpContext<PhorestCredentials>,
+  c: PhorestCredentials,
+  sub: string,
+  id: string,
+): Promise<void> {
+  await http.request(c, {
+    method: 'POST',
+    path: branchPath(c, sub),
+    query: { appointment_id: id },
+    parse: 'none',
+  });
+}
+
 export const phorest = defineAdapter<PhorestCredentials>({
   id: 'phorest',
   capabilities: {
@@ -181,13 +242,14 @@ export const phorest = defineAdapter<PhorestCredentials>({
     customers: true,
   },
   baseUrl: BASE,
-  auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.password}`)}` } }),
+  auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),
   parseError: parsePhorestError,
   build: (http) => ({
     async createBooking(input) {
       assertValidRange(input.range, 'phorest');
       const c = await http.resolve();
       const serviceId = requireService(input.serviceId);
+      const staffId = requireStaff(input.staffId);
       const clientId = input.customer
         ? await findOrCreateClient(http, c, input.customer)
         : undefined;
@@ -209,9 +271,9 @@ export const phorest = defineAdapter<PhorestCredentials>({
               serviceSchedules: [
                 {
                   serviceId,
+                  staffId,
                   startTime: toUtcZ(input.range.start),
                   endTime: toUtcZ(input.range.end),
-                  ...(input.staffId ? { staffId: input.staffId } : {}),
                 },
               ],
             },
@@ -219,17 +281,10 @@ export const phorest = defineAdapter<PhorestCredentials>({
           ...input.providerOptions,
         },
       });
-      // A single-service create yields one appointment. If the response embeds it,
-      // map directly; otherwise fetch by the returned bookingId.
-      if (res?.appointmentId) return toBooking(res);
-      const list = await http.request(c, {
-        path: branchPath(c, 'appointment'),
-        query: { group_booking_id: res?.bookingId },
-      });
-      const first = embedded(list)[0];
-      if (first) return toBooking(first);
-      // Fall back to the raw create response shape.
-      return toBooking(res);
+      // BookingResponse is a booking summary, not an appointment — it carries
+      // none of the fields a canonical Booking needs, so read the new id off the
+      // nested service schedule and fetch the appointment itself.
+      return getAppointment(http, c, createdAppointmentId(res));
     },
 
     getBooking(id) {
@@ -239,11 +294,33 @@ export const phorest = defineAdapter<PhorestCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'phorest');
       const c = await http.resolve();
+      const editsFields =
+        input.range !== undefined || input.staffId !== undefined || input.serviceId !== undefined;
+      // Status is not a writable field on AppointmentUpdateRequest — Phorest
+      // moves an appointment between states through dedicated endpoints. Route
+      // them (never silently drop the caller's status).
+      if (input.status !== undefined) {
+        const sub =
+          input.status === 'cancelled'
+            ? 'appointment/cancel'
+            : input.status === 'confirmed'
+              ? 'appointment/confirm'
+              : undefined;
+        if (sub === undefined) {
+          return unsupported(
+            'phorest',
+            `setting status "${input.status}" (only cancelled and confirmed have a Phorest transition)`,
+          );
+        }
+        await transition(http, c, sub, id);
+        if (!editsFields) return getAppointment(http, c, id);
+      }
       // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
       // version all required — so a partial patch (e.g. serviceId alone) has to
       // backfill the others from current state or the request is rejected.
       let version = input.providerOptions?.version;
       let currentStaffId: string | undefined;
+      let currentDate: string | undefined;
       let currentStartTime: string | undefined;
       const needsBackfill = version === undefined || !input.staffId || !input.range;
       if (needsBackfill) {
@@ -254,8 +331,13 @@ export const phorest = defineAdapter<PhorestCredentials>({
         );
         if (version === undefined) version = current.version;
         if (typeof current.staffId === 'string') currentStaffId = current.staffId;
+        if (typeof current.appointmentDate === 'string') currentDate = current.appointmentDate;
         if (typeof current.startTime === 'string') currentStartTime = current.startTime;
       }
+      // The update request takes the same date + UTC LocalTime pair the read side
+      // returns — not an instant. Sending appointmentDate is what makes a
+      // cross-day reschedule possible at all.
+      const when = input.range ? splitUtc(input.range.start) : undefined;
       const res = await http.request(c, {
         method: 'PUT',
         path: branchPath(c, `appointment/${enc(id)}`),
@@ -263,11 +345,12 @@ export const phorest = defineAdapter<PhorestCredentials>({
           appointmentId: id,
           version,
           staffId: input.staffId ?? currentStaffId,
-          startTime: input.range ? toUtcZ(input.range.start) : currentStartTime,
+          appointmentDate: when?.date ?? currentDate,
+          startTime: when?.time ?? currentStartTime,
           // Note: when the staff or service changes, Phorest recomputes the
           // duration from the new staff/service and IGNORES endTime — so the
           // returned booking may not match the requested range.
-          ...(input.range ? { endTime: toUtcZ(input.range.end) } : {}),
+          ...(input.range ? { endTime: splitUtc(input.range.end).time } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...input.providerOptions,
         },
@@ -278,12 +361,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
     // Phorest's cancel endpoint takes no reason/notify params, so CancelOptions are not forwarded.
     async cancelBooking(id) {
       const c = await http.resolve();
-      await http.request(c, {
-        method: 'POST',
-        path: branchPath(c, 'appointment/cancel'),
-        query: { appointment_id: id },
-        parse: 'none',
-      });
+      await transition(http, c, 'appointment/cancel', id);
     },
 
     async listBookings(query) {
@@ -300,16 +378,34 @@ export const phorest = defineAdapter<PhorestCredentials>({
       const res = await http.request(c, {
         path: branchPath(c, 'appointment'),
         query: {
-          from_date: query.range.start.slice(0, 10),
-          to_date: query.range.end.slice(0, 10),
+          // Phorest dates are UTC, so derive them from the instant rather than
+          // slicing the (possibly offset-local) RFC3339 string.
+          from_date: splitUtc(query.range.start).date,
+          to_date: splitUtc(query.range.end).date,
           staff_id: query.staffId,
           client_id: query.customerId,
-          size: query.limit ?? 100,
+          // fetch_canceled/fetch_deleted both default to false, so a
+          // cancelled-status query would otherwise come back full of live
+          // appointments.
+          ...(query.status === 'cancelled' ? { fetch_canceled: true } : {}),
+          // Documented max is 100; clamp rather than let an upstream 400 through.
+          size: Math.min(query.limit ?? 100, 100),
           page: query.pageToken,
         },
       });
-      const bookings = embedded(res).map(toBooking);
-      const page = res?.page ?? res?.data?.page;
+      // to_date is INCLUSIVE and both bounds are whole UTC days, so the response
+      // overshoots the canonical (exclusive) range at both ends. Trim to the
+      // instants actually asked for, then honor the requested status.
+      const from = Date.parse(query.range.start);
+      const to = Date.parse(query.range.end);
+      const bookings = embedded(res)
+        .map(toBooking)
+        .filter((b) => {
+          const s = Date.parse(b.range.start);
+          return s >= from && s < to;
+        })
+        .filter((b) => query.status === undefined || b.status === query.status);
+      const page = res?.page;
       const next =
         page && typeof page.number === 'number' && page.number + 1 < page.totalPages
           ? String(page.number + 1)
@@ -338,20 +434,31 @@ export const phorest = defineAdapter<PhorestCredentials>({
           ],
         },
       });
-      // TODO: verify against live API — Phorest may wrap availability slots in a HAL
-      // envelope (_embedded) rather than returning a bare array.
-      const slots = asArray(res, 'phorest', 'availability');
-      return slots.flatMap((s: any) => {
-        if (typeof s.startTime !== 'string' || typeof s.endTime !== 'string') return [];
-        return [
-          {
-            start: s.startTime,
-            end: s.endTime,
-            ...(s.staffId ? { staffId: String(s.staffId) } : {}),
-            raw: s,
-          },
-        ];
-      });
+      // Availability is the one `data`-wrapped body in the spec: `{ data: [...],
+      // links: [...] }`. Each entry carries only the slot's startTime — the end
+      // and the staff live one level down, per staff/service schedule, so a
+      // single entry fans out to one slot per bookable staff member.
+      const body = asRecord(res, 'phorest', 'availability');
+      const out: AvailabilitySlot[] = [];
+      for (const entry of asArray(body.data, 'phorest', 'availability.data')) {
+        const start = entry?.startTime;
+        if (typeof start !== 'string' || !start) continue;
+        for (const cs of asArray(entry.clientSchedules, 'phorest', 'availability.clientSchedules')) {
+          for (const ss of asArray(cs?.serviceSchedules, 'phorest', 'availability.serviceSchedules')) {
+            // No endTime means no derivable end — skip rather than invent one.
+            if (typeof ss?.endTime !== 'string' || !ss.endTime) continue;
+            out.push({
+              start,
+              end: ss.endTime,
+              ...(ss.staffId ? { staffId: String(ss.staffId) } : {}),
+              // Both levels are kept: the schedule is what a follow-up booking
+              // needs, the entry is the slot Phorest actually offered.
+              raw: { availability: entry, serviceSchedule: ss },
+            });
+          }
+        }
+      }
+      return out;
     },
 
     customers: {

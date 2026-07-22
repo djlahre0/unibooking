@@ -100,6 +100,15 @@ function gqlRouter(
     .persist();
 }
 
+/** Reply with a GraphQL error envelope: HTTP 200 plus `errors[]`, which is how
+ *  Boulevard reports validation, not-found and permission failures. */
+function gqlErrorEnvelope(agent: MockAgent, error: unknown): void {
+  agent
+    .get(ORIGIN)
+    .intercept({ path: ADMIN, method: 'POST' })
+    .reply(200, JSON.stringify({ errors: [error], data: null }), { headers: JSON_HEADERS });
+}
+
 describe('boulevard GraphQL shapes', () => {
   let agent: MockAgent;
   let previous: Dispatcher;
@@ -203,13 +212,14 @@ describe('boulevard GraphQL shapes', () => {
     gqlRouter(
       agent,
       {
+        // The field returns a LIST of payloads, one per bookable service — not a
+        // single object. Reading `.availableTimes` off the list yields undefined
+        // and every reschedule fails with a spurious CONFLICT.
         appointmentRescheduleAvailableTimes: {
-          appointmentRescheduleAvailableTimes: {
-            availableTimes: [
-              { bookableTimeId: 'bt-early', startTime: '2026-07-20T15:00:00Z' },
-              { bookableTimeId: 'bt-match', startTime: '2026-07-20T17:00:00Z' },
-            ],
-          },
+          appointmentRescheduleAvailableTimes: [
+            { availableTimes: [{ bookableTimeId: 'bt-early', startTime: '2026-07-20T15:00:00Z' }] },
+            { availableTimes: [{ bookableTimeId: 'bt-match', startTime: '2026-07-20T17:00:00Z' }] },
+          ],
         },
         appointmentReschedule: { appointmentReschedule: { appointment: APPT } },
       },
@@ -230,9 +240,9 @@ describe('boulevard GraphQL shapes', () => {
   it('fails cleanly when no bookable slot matches the requested time', async () => {
     gqlRouter(agent, {
       appointmentRescheduleAvailableTimes: {
-        appointmentRescheduleAvailableTimes: {
-          availableTimes: [{ bookableTimeId: 'bt-early', startTime: '2026-07-20T15:00:00Z' }],
-        },
+        appointmentRescheduleAvailableTimes: [
+          { availableTimes: [{ bookableTimeId: 'bt-early', startTime: '2026-07-20T15:00:00Z' }] },
+        ],
       },
     });
 
@@ -297,5 +307,161 @@ describe('boulevard GraphQL shapes', () => {
     await makeClient().updateBooking('urn:blvd:Appointment:1', { title: 'VIP' });
     expect(vars.input.notes).toBe('VIP');
     expect(vars.input.note).toBeUndefined();
+  });
+
+  it('maps GraphQL error envelopes to non-retryable canonical codes', async () => {
+    // These arrive as HTTP 200, so without classification they land on UPSTREAM,
+    // which isRetryable() re-issues — against non-idempotent mutations.
+    const table: Array<[any, string]> = [
+      [{ message: 'Appointment not found', extensions: { code: 'NOT_FOUND' } }, 'NOT_FOUND'],
+      [{ message: 'You are not authorized to access this location' }, 'FORBIDDEN'],
+      [{ message: 'startTime is invalid', extensions: { code: 'BAD_USER_INPUT' } }, 'INVALID_INPUT'],
+      [{ message: 'Variable $input of type X was provided invalid value' }, 'INVALID_INPUT'],
+      [{ message: 'Something went wrong' }, 'UPSTREAM'],
+    ];
+    for (const [error, code] of table) {
+      gqlErrorEnvelope(agent, error);
+      const err = await makeClient()
+        .getBooking('urn:blvd:Appointment:1')
+        .then(() => null)
+        .catch((e: any) => e);
+      expect(err?.code, String(error.message)).toBe(code);
+    }
+  });
+
+  it('reports a null appointment as NOT_FOUND, not a malformed response', async () => {
+    gqlRouter(agent, { appointment: { appointment: null } });
+    const err = await makeClient()
+      .getBooking('urn:blvd:Appointment:missing')
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('NOT_FOUND');
+    expect(err?.message).not.toContain('expected an object');
+  });
+
+  it('stops the booking chain when bookingCreate reports errors', async () => {
+    const seen: string[] = [];
+    gqlRouter(
+      agent,
+      {
+        bookingCreate: {
+          bookingCreate: {
+            booking: {
+              id: 'bk1',
+              bookingClients: [{ id: 'bc1' }],
+              errors: [{ code: 'SERVICE_UNAVAILABLE', message: 'Service is not bookable then' }],
+            },
+          },
+        },
+        bookingAddService: { bookingAddService: { bookingService: { id: 'bs1' } } },
+      },
+      (op) => seen.push(op),
+    );
+
+    const err = await makeClient()
+      .createBooking({
+        title: 'Haircut',
+        range: { start: '2026-07-20T09:00:00-07:00', end: '2026-07-20T09:30:00-07:00' },
+        serviceId: 'svc1',
+        staffId: 'st1',
+        customer: { id: 'c1' },
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.providerCode).toBe('SERVICE_UNAVAILABLE');
+    expect(err?.message).toContain('Service is not bookable then');
+    // The chain must not proceed to addService/complete on a failed booking.
+    expect(seen).toEqual(['bookingCreate']);
+  });
+
+  it('sends cancelled both ways and post-filters the rest of the statuses', async () => {
+    let vars: any;
+    gqlRouter(
+      agent,
+      {
+        appointments: {
+          appointments: {
+            edges: [{ node: APPT }, { node: { ...APPT, id: 'urn:blvd:Appointment:2', state: 'FINAL' } }],
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      },
+      (_op, v) => (vars = v),
+    );
+
+    const page = await makeClient().listBookings({ range: RANGE, status: 'confirmed' });
+
+    // Without `cancelled = false` a confirmed-only query still returns cancellations.
+    expect(vars.query).toContain('cancelled = false');
+    expect(page.bookings.map((b) => b.id)).toEqual(['urn:blvd:Appointment:1']);
+  });
+
+  it('asks for cancellations when the status filter is cancelled or no_show', async () => {
+    let vars: any;
+    gqlRouter(
+      agent,
+      { appointments: { appointments: { edges: [], pageInfo: { hasNextPage: false } } } },
+      (_op, v) => (vars = v),
+    );
+    for (const status of ['cancelled', 'no_show'] as const) {
+      await makeClient().listBookings({ range: RANGE, status });
+      // no_show is modelled as a cancellation reason, so it lives on this side too.
+      expect(vars.query, status).toContain('cancelled = true');
+    }
+  });
+
+  it('keeps the free-text cancellation reason as notes', async () => {
+    let vars: any;
+    gqlRouter(agent, { cancelAppointment: { cancelAppointment: { appointment: APPT } } }, (_op, v) => (vars = v));
+    await makeClient().cancelBooking('urn:blvd:Appointment:1', { reason: 'client cancel' });
+    // The enum is lossy; `notes` is where the original wording survives.
+    expect(vars.input.reason).toBe('CLIENT_CANCEL');
+    expect(vars.input.notes).toBe('client cancel');
+  });
+
+  it('applies a title alongside a reschedule instead of dropping it', async () => {
+    const seen: Array<{ op: string; vars: any }> = [];
+    gqlRouter(
+      agent,
+      {
+        appointmentRescheduleAvailableTimes: {
+          appointmentRescheduleAvailableTimes: [
+            { availableTimes: [{ bookableTimeId: 'bt-match', startTime: '2026-07-20T17:00:00Z' }] },
+          ],
+        },
+        appointmentReschedule: { appointmentReschedule: { appointment: APPT } },
+        updateAppointment: { updateAppointment: { appointment: { ...APPT, notes: 'VIP' } } },
+      },
+      (op, vars) => seen.push({ op, vars }),
+    );
+
+    await makeClient().updateBooking('urn:blvd:Appointment:1', {
+      range: { start: '2026-07-20T10:00:00-07:00', end: '2026-07-20T10:30:00-07:00' },
+      title: 'VIP',
+    });
+
+    expect(seen.map((s) => s.op)).toEqual([
+      'appointmentRescheduleAvailableTimes',
+      'appointmentReschedule',
+      'updateAppointment',
+    ]);
+    expect(seen[2]!.vars.input.notes).toBe('VIP');
+  });
+
+  it('rejects an unsupported field before issuing the reschedule', async () => {
+    const seen: string[] = [];
+    gqlRouter(agent, { appointmentRescheduleAvailableTimes: {} }, (op) => seen.push(op));
+    const err = await makeClient()
+      .updateBooking('urn:blvd:Appointment:1', {
+        range: { start: '2026-07-20T10:00:00-07:00', end: '2026-07-20T10:30:00-07:00' },
+        staffId: 'st2',
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('UNSUPPORTED');
+    // Nothing may be mutated before the whole patch is known to be applicable.
+    expect(seen).toEqual([]);
   });
 });

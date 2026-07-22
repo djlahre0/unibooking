@@ -122,7 +122,10 @@ function toBooking(raw: unknown): Booking {
     ...(a.calendarID !== undefined ? { staffId: String(a.calendarID) } : {}),
     ...(a.appointmentTypeID !== undefined ? { serviceId: String(a.appointmentTypeID) } : {}),
     ...(customer ? { customer } : {}),
-    status: a.canceled === true ? 'cancelled' : a.noShow === true ? 'no_show' : 'confirmed',
+    // A no-show IS a cancelled appointment in Acuity's model (`noShow` rides on
+    // top of `canceled`), so check the more specific flag first — testing
+    // `canceled` first made 'no_show' unreachable on real data.
+    status: a.noShow === true ? 'no_show' : a.canceled === true ? 'cancelled' : 'confirmed',
     raw: a,
   };
 }
@@ -171,7 +174,10 @@ export const acuity = defineAdapter<AcuityCredentials>({
         // REQUIRES a valid `calendarID` in admin mode — so only enable it when a
         // staffId (calendarID) is present; otherwise Acuity picks the calendar and
         // validates availability normally.
-        query: input.staffId ? { admin: true } : {},
+        query: {
+          ...(input.staffId ? { admin: true } : {}),
+          ...(input.notify === false ? { noEmail: true } : {}),
+        },
         body: {
           appointmentTypeID: requireService(input.serviceId),
           datetime: input.range.start,
@@ -192,6 +198,36 @@ export const acuity = defineAdapter<AcuityCredentials>({
 
     async updateBooking(id, input) {
       const c = await http.resolve();
+      // Acuity's plain PUT silently ignores anything outside its white-list, so
+      // reject the inputs it cannot honor rather than pretend they applied.
+      if (input.status !== undefined) {
+        throw new UnibookingError({
+          provider: 'acuity',
+          code: 'INVALID_INPUT',
+          message:
+            input.status === 'cancelled'
+              ? 'Acuity appointment status is not writable; use cancelBooking() to cancel'
+              : `Acuity appointment status is not writable (cannot set "${input.status}")`,
+        });
+      }
+      if (input.serviceId !== undefined) {
+        throw new UnibookingError({
+          provider: 'acuity',
+          code: 'UNSUPPORTED',
+          message:
+            'Acuity cannot change an appointment type on an existing appointment; ' +
+            'cancel and rebook, or use the change-type flow via providerOptions',
+        });
+      }
+      if (input.staffId !== undefined && input.range === undefined) {
+        throw new UnibookingError({
+          provider: 'acuity',
+          code: 'UNSUPPORTED',
+          message:
+            'Acuity can only reassign the calendar (staffId) as part of a reschedule; ' +
+            'pass a range alongside staffId',
+        });
+      }
       if (input.range) {
         assertValidRange(input.range, 'acuity');
         // Reschedule can also reassign the calendar (staff); Acuity derives the
@@ -199,6 +235,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
         const res = await http.request(c, {
           method: 'PUT',
           path: `appointments/${encodeURIComponent(id)}/reschedule`,
+          query: { ...(input.notify === false ? { noEmail: true } : {}) },
           body: {
             datetime: input.range.start,
             ...(input.staffId ? { calendarID: input.staffId } : {}),
@@ -255,7 +292,17 @@ export const acuity = defineAdapter<AcuityCredentials>({
           canceled: query.status === 'cancelled' ? true : undefined,
         },
       });
-      const bookings = asArray(res, 'acuity', 'appointments').map(toBooking);
+      // minDate/maxDate are whole dates in the business timezone, so Acuity
+      // returns the entire end day (and part of the start day) regardless of the
+      // range's times. Trim to the instants the caller actually asked for.
+      const from = Date.parse(query.range.start);
+      const to = Date.parse(query.range.end);
+      const bookings = asArray(res, 'acuity', 'appointments')
+        .map(toBooking)
+        .filter((b) => {
+          const s = Date.parse(b.range.start);
+          return s >= from && s < to;
+        });
       return { bookings };
     },
 

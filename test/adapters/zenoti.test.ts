@@ -14,7 +14,7 @@ const APPT = {
   invoice_item_id: 'inv-item-1',
   start_time_utc: '2026-07-20T22:00:00',
   end_time_utc: '2026-07-20T22:45:00',
-  status: 6, // Confirmed
+  status: 4, // Confirm (documented enum; there is no 6)
   therapist: { id: 'th1', first_name: 'Jo' },
   service: { id: 'svc1', name: 'Facial' },
   guest: {
@@ -93,6 +93,20 @@ describe('zenoti flows', () => {
       .reply(200, typeof body === 'string' ? body : JSON.stringify(body), {
         headers: { 'content-type': 'application/json' },
       });
+
+  /** Same, but records the query string and body the adapter actually sent. */
+  const capture = (method: string, path: string, body: unknown) => {
+    const seen: { query: URLSearchParams; body?: any } = { query: new URLSearchParams() };
+    agent
+      .get('https://api.zenoti.com')
+      .intercept({ path: (p: string) => p.split('?')[0] === path, method })
+      .reply(200, (opts: any) => {
+        seen.query = new URLSearchParams(String(opts.path).split('?')[1] ?? '');
+        seen.body = opts.body ? JSON.parse(String(opts.body)) : undefined;
+        return typeof body === 'string' ? body : JSON.stringify(body);
+      }, { headers: { 'content-type': 'application/json' } });
+    return seen;
+  };
 
   it('createBooking runs the reserve/confirm flow', async () => {
     intercept('POST', '/v1/bookings', { id: 'bk1' });
@@ -198,5 +212,170 @@ describe('zenoti flows', () => {
       customer: { id: 'g1' },
     });
     expect(b.id).toBe('appt3');
+  });
+
+  // The documented enum is NoShow=-2, Cancelled=-1, New=0, Closed=1, Checkin=2,
+  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21. The previous
+  // table inverted -2/-1 and invented 5/6/99.
+  it('maps the documented status enum, with no-show and cancelled the right way round', async () => {
+    const table: Array<[number, string]> = [
+      [-2, 'no_show'],
+      [-1, 'cancelled'],
+      [0, 'pending'],
+      [1, 'completed'],
+      [2, 'confirmed'],
+      [4, 'confirmed'],
+      [10, 'unknown'],
+      [11, 'unknown'],
+      [20, 'unknown'],
+      [21, 'cancelled'],
+    ];
+    for (const [code, expected] of table) {
+      intercept('GET', '/v1/appointments/appt1', { ...APPT, status: code });
+      expect((await makeClient().getBooking('appt1')).status, `status ${code}`).toBe(expected);
+    }
+  });
+
+  it('widens a same-day listBookings window — end_date is exclusive', async () => {
+    const seen = capture('GET', '/v1/appointments', { appointments: [APPT] });
+    const r = await makeClient().listBookings({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T23:00:00Z' },
+    });
+    expect(seen.query.get('start_date')).toBe('2026-07-20');
+    // Same start/end dates collapse to an empty window upstream.
+    expect(seen.query.get('end_date')).toBe('2026-07-21');
+    expect(r.bookings).toHaveLength(1);
+  });
+
+  it('trims listBookings back to the caller instants', async () => {
+    // The widened day window returns the 22:00Z appointment; the caller asked
+    // only for 09:00–17:00.
+    capture('GET', '/v1/appointments', { appointments: [APPT] });
+    const r = await makeClient().listBookings({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T17:00:00Z' },
+    });
+    expect(r.bookings).toHaveLength(0);
+  });
+
+  it('asks for cancelled appointments explicitly and filters on mapped status', async () => {
+    const seen = capture('GET', '/v1/appointments', {
+      appointments: [APPT, { ...APPT, appointment_id: 'appt2', status: -1 }],
+    });
+    const r = await makeClient().listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+      status: 'cancelled',
+    });
+    // Without this flag Zenoti omits cancelled/no-show rows entirely.
+    expect(seen.query.get('include_no_show_cancel')).toBe('true');
+    expect(r.bookings.map((b) => b.id)).toEqual(['appt2']);
+  });
+
+  it('honors a listBookings limit client-side', async () => {
+    capture('GET', '/v1/appointments', {
+      appointments: [APPT, { ...APPT, appointment_id: 'appt2' }],
+    });
+    const r = await makeClient().listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+      limit: 1,
+    });
+    expect(r.bookings).toHaveLength(1);
+    // The endpoint exposes no cursor, so none is fabricated.
+    expect(r.nextPageToken).toBeUndefined();
+  });
+
+  it('rejects a listBookings pageToken rather than silently ignoring it', async () => {
+    const err = await makeClient()
+      .listBookings({
+        range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+        pageToken: '2',
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('UNSUPPORTED');
+  });
+
+  it('rejects a multi-day availability range instead of returning day one', async () => {
+    const err = await makeClient()
+      .searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-22T09:00:00Z' },
+        serviceId: 'svc1',
+        durationMinutes: 45,
+        providerOptions: { guestId: 'g1' },
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('single');
+  });
+
+  it('anchors an offset-less slot Time in the caller range offset, not UTC', async () => {
+    intercept('POST', '/v1/bookings', { id: 'bk4' });
+    intercept('GET', '/v1/bookings/bk4/slots', { slots: [{ Time: '2026-07-20T14:00:00' }] });
+    const slots = await makeClient().searchAvailability({
+      range: { start: '2026-07-20T09:00:00-05:00', end: '2026-07-20T18:00:00-05:00' },
+      serviceId: 'svc1',
+      durationMinutes: 45,
+      providerOptions: { guestId: 'g1' },
+    });
+    // Appending `Z` would claim a UTC instant the center-local wall clock is not.
+    expect(slots[0]?.start).toBe('2026-07-20T14:00:00-05:00');
+    expect(slots[0]?.end).toBe('2026-07-20T14:45:00-05:00');
+  });
+
+  it('forwards providerOptions to the availability booking, minus consumed keys', async () => {
+    const seen = capture('POST', '/v1/bookings', { id: 'bk5' });
+    intercept('GET', '/v1/bookings/bk5/slots', { slots: [] });
+    await makeClient().searchAvailability({
+      range: RANGE,
+      serviceId: 'svc1',
+      durationMinutes: 45,
+      providerOptions: { guestId: 'g1', roomId: 'room9' },
+    });
+    expect(seen.body.roomId).toBe('room9');
+    expect(seen.body.guestId).toBeUndefined();
+  });
+
+  it('does not leak consumed providerOptions into the booking body', async () => {
+    const seen = capture('POST', '/v1/bookings', { id: 'bk6' });
+    intercept('GET', '/v1/bookings/bk6/slots', { slots: [{ Time: '2026-07-20T22:00:00Z' }] });
+    intercept('POST', '/v1/bookings/bk6/slots/reserve', { status: 'Reserved' });
+    intercept('POST', '/v1/bookings/bk6/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('GET', '/v1/appointments/appt1', APPT);
+    await makeClient().createBooking({
+      title: 'x',
+      range: RANGE,
+      serviceId: 'svc1',
+      providerOptions: { guestId: 'g1', countryCode: 91, roomId: 'room9' },
+    });
+    expect(seen.body.roomId).toBe('room9');
+    expect(seen.body.guestId).toBeUndefined();
+    expect(seen.body.countryCode).toBeUndefined();
+  });
+
+  it('sends country_code alongside the guest mobile when providerOptions supplies one', async () => {
+    intercept('GET', '/v1/guests/search', { guests: [] });
+    const guest = capture('POST', '/v1/guests', { id: 'g7' });
+    intercept('POST', '/v1/bookings', { id: 'bk7' });
+    intercept('GET', '/v1/bookings/bk7/slots', { slots: [{ Time: '2026-07-20T22:00:00Z' }] });
+    intercept('POST', '/v1/bookings/bk7/slots/reserve', { status: 'Reserved' });
+    intercept('POST', '/v1/bookings/bk7/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('GET', '/v1/appointments/appt1', APPT);
+    await makeClient().createBooking({
+      title: 'x',
+      range: RANGE,
+      serviceId: 'svc1',
+      customer: { name: 'Jane Doe', email: 'jane@example.com', phone: '9885517727' },
+      providerOptions: { countryCode: 91 },
+    });
+    expect(guest.body.personal_info.mobile_phone).toEqual({ number: '9885517727', country_code: 91 });
+  });
+
+  it('reads the guest phone from display_number when number is null', async () => {
+    intercept('GET', '/v1/appointments/appt1', {
+      ...APPT,
+      guest: { ...APPT.guest, mobile: { number: null, display_number: '+91 9885517727' } },
+    });
+    const b = await makeClient().getBooking('appt1');
+    expect(b.customer?.phone).toBe('+91 9885517727');
   });
 });

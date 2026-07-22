@@ -89,6 +89,14 @@ function customerOf(ev: VEvent): Customer | undefined {
   return { ...(email ? { email } : {}), ...(name ? { name } : {}) };
 }
 
+/** The series master (the VEVENT with no RECURRENCE-ID), or the first component
+ *  when a resource holds only overrides. Override-before-master ordering is
+ *  legal, so reading `events[0]` can report an overridden occurrence's times as
+ *  if they were the booking's. */
+function masterEvent(events: VEvent[]): VEvent | undefined {
+  return events.find((ev) => ev.recurrenceId === undefined) ?? events[0];
+}
+
 function toBooking(ev: VEvent): Booking {
   if (ev.start === undefined || ev.end === undefined) {
     throw new UnibookingError({
@@ -127,6 +135,12 @@ function calendarQuery(startBasic: string, endBasic: string): string {
 
 const now = (): string => new Date().toISOString();
 
+// CalDAV speaks iCalendar and WebDAV XML, never JSON — the shared default
+// `accept: application/json` would be wrong on every request here, and a strict
+// server may answer it with 406.
+const ACCEPT_ICS = { accept: 'text/calendar' };
+const ACCEPT_XML = { accept: 'application/xml' };
+
 export const apple = defineAdapter<AppleCredentials>({
   id: 'apple',
   capabilities: {
@@ -159,7 +173,11 @@ export const apple = defineAdapter<AppleCredentials>({
         // If-None-Match:* makes the PUT a create-only: a colliding UID (or a
         // replayed idempotencyKey) fails with 412 instead of silently
         // overwriting an existing event.
-        headers: { 'content-type': 'text/calendar; charset=utf-8', 'if-none-match': '*' },
+        headers: {
+          ...ACCEPT_ICS,
+          'content-type': 'text/calendar; charset=utf-8',
+          'if-none-match': '*',
+        },
         body: ics,
         parse: 'none',
       });
@@ -178,15 +196,16 @@ export const apple = defineAdapter<AppleCredentials>({
       const c = await http.resolve();
       const text = await http.request<string>(c, {
         path: resourceUrl(c.calendarUrl, id),
+        headers: ACCEPT_ICS,
         parse: 'text',
       });
-      const events = parseICS(text);
-      if (events.length === 0 || !events[0]) {
+      const event = masterEvent(parseICS(text));
+      if (!event) {
         throw new UnibookingError({ provider: 'apple', code: 'NOT_FOUND', message: `event ${id} not found` });
       }
       // Address by the resource id the caller passed, not the VEVENT UID (they
       // can differ), so the returned booking stays re-fetchable.
-      return { ...toBooking(events[0]), id };
+      return { ...toBooking(event), id };
     },
 
     async updateBooking(id, input) {
@@ -195,12 +214,13 @@ export const apple = defineAdapter<AppleCredentials>({
       let etag: string | undefined;
       const text = await http.request<string>(c, {
         path: resourceUrl(c.calendarUrl, id),
+        headers: ACCEPT_ICS,
         parse: 'text',
         onResponse: ({ headers }) => {
           etag = etagOf(headers);
         },
       });
-      const current = parseICS(text)[0];
+      const current = masterEvent(parseICS(text));
       if (!current || current.start === undefined || current.end === undefined) {
         throw new UnibookingError({ provider: 'apple', code: 'NOT_FOUND', message: `event ${id} not found` });
       }
@@ -223,20 +243,25 @@ export const apple = defineAdapter<AppleCredentials>({
         // If-Match on the captured ETag makes the write fail (412) rather than
         // silently clobber a concurrent edit (lost-update protection).
         headers: {
+          ...ACCEPT_ICS,
           'content-type': 'text/calendar; charset=utf-8',
           ...(etag ? { 'if-match': etag } : {}),
         },
         body: ics,
         parse: 'none',
       });
-      return { ...toBooking(parseICS(ics)[0]!), id };
+      return { ...toBooking(masterEvent(parseICS(ics))!), id };
     },
 
+    /** Deletes the whole DAV resource. For a recurring series that means the
+     *  entire series — CalDAV has no single-instance delete here, and expanded
+     *  instances from `listBookings` all share this one id. */
     async cancelBooking(id) {
       const c = await http.resolve();
       await http.request(c, {
         method: 'DELETE',
         path: resourceUrl(c.calendarUrl, id),
+        headers: ACCEPT_XML,
         parse: 'none',
       });
     },
@@ -247,13 +272,13 @@ export const apple = defineAdapter<AppleCredentials>({
       const xml = await http.request<string>(c, {
         method: 'REPORT',
         path: c.calendarUrl,
-        headers: { 'content-type': 'application/xml; charset=utf-8', depth: '1' },
+        headers: { ...ACCEPT_XML, 'content-type': 'application/xml; charset=utf-8', depth: '1' },
         body: calendarQuery(instantToICalUTC(query.range.start), instantToICalUTC(query.range.end)),
         parse: 'text',
       });
       // Pair each event with its DAV href so the booking id addresses the real
       // resource (a server may store an event under a name that isn't its UID).
-      const bookings = parseCalendarEntries(xml).flatMap((entry) => {
+      let bookings = parseCalendarEntries(xml).flatMap((entry) => {
         const name = entry.href ? resourceNameFromHref(entry.href) : undefined;
         return parseICS(entry.ics)
           .filter((ev) => ev.start !== undefined && ev.end !== undefined)
@@ -262,6 +287,11 @@ export const apple = defineAdapter<AppleCredentials>({
             return name ? { ...b, id: name } : b;
           });
       });
+      // CalDAV's calendar-query filters by time range only, so `status` and
+      // `limit` are applied here rather than silently ignored. There is no
+      // paging to resume, hence never a nextPageToken.
+      if (query.status !== undefined) bookings = bookings.filter((b) => b.status === query.status);
+      if (query.limit !== undefined && query.limit >= 0) bookings = bookings.slice(0, query.limit);
       return { bookings };
     },
 

@@ -117,7 +117,7 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
       provider: config.provider,
       code: 'INVALID_INPUT',
       message:
-        'No fetch implementation available. Use Node >= 18, or pass options.fetch explicitly.',
+        'No fetch implementation available. Use Node >= 20, or pass options.fetch explicitly.',
     });
   }
 

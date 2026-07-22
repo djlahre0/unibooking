@@ -15,6 +15,10 @@ export interface VEvent {
   start?: string;
   end?: string;
   attendee?: { email?: string; name?: string };
+  /** Present only on an overridden occurrence of a recurring series. Expanded
+   *  instances of one series share a DAV resource (and so a booking id) — this
+   *  is what tells them apart. */
+  recurrenceId?: string;
   raw: string;
 }
 
@@ -136,9 +140,16 @@ export function parseICS(text: string): VEvent[] {
     | (Partial<VEvent> & { _duration?: string; _allDayStart?: boolean; _rawLines: string[] })
     | null = null;
 
+  // Depth of components nested inside the current VEVENT (VALARM, and anything
+  // else a server may embed). Their properties describe the sub-component, not
+  // the event — an EMAIL VALARM carries its own SUMMARY/ATTENDEE/DURATION, which
+  // would otherwise overwrite the booking's title, customer, and end time.
+  let nested = 0;
+
   for (const line of lines) {
     if (line === 'BEGIN:VEVENT') {
       cur = { _rawLines: [line] };
+      nested = 0;
       continue;
     }
     if (line === 'END:VEVENT') {
@@ -150,6 +161,9 @@ export function parseICS(text: string): VEvent[] {
         }
         // RFC5545 default end when neither DTEND nor DURATION is present: an
         // all-day (DATE) event lasts one day; a timed event has zero duration.
+        // A zero-length event therefore reports `end === start`, which canonical
+        // *inputs* forbid — but reporting it truthfully beats inventing a
+        // duration or dropping the event outright.
         if (cur.end === undefined && cur.start !== undefined) {
           cur.end = cur._allDayStart
             ? formatWithOffset(Date.parse(cur.start) + 86_400_000, 0)
@@ -163,6 +177,7 @@ export function parseICS(text: string): VEvent[] {
           ...(cur.start !== undefined ? { start: cur.start } : {}),
           ...(cur.end !== undefined ? { end: cur.end } : {}),
           ...(cur.attendee !== undefined ? { attendee: cur.attendee } : {}),
+          ...(cur.recurrenceId !== undefined ? { recurrenceId: cur.recurrenceId } : {}),
         });
       }
       cur = null;
@@ -170,6 +185,16 @@ export function parseICS(text: string): VEvent[] {
     }
     if (!cur) continue;
     cur._rawLines.push(line);
+
+    if (/^BEGIN:/i.test(line)) {
+      nested++;
+      continue;
+    }
+    if (/^END:/i.test(line)) {
+      if (nested > 0) nested--;
+      continue;
+    }
+    if (nested > 0) continue;
 
     const split = splitAtValueColon(line);
     if (!split) continue;
@@ -205,6 +230,9 @@ export function parseICS(text: string): VEvent[] {
       }
       case 'DURATION':
         cur._duration = value;
+        break;
+      case 'RECURRENCE-ID':
+        cur.recurrenceId = value;
         break;
       case 'ATTENDEE': {
         // Keep the FIRST attendee (the canonical `customer` is a single person);
@@ -245,7 +273,21 @@ function applyDuration(start: string, dur: string): string | undefined {
 /** Canonical instant → iCal UTC basic form (`20260720T220000Z`). */
 export function instantToICalUTC(instant: string): string {
   const utc = formatWithOffset(Date.parse(instant), 0); // 2026-07-20T22:00:00Z
-  return utc.replace(/[-:]/g, '').replace(/\.\d+/, '');
+  return utc.replace(/[-:]/g, '');
+}
+
+/** Drop characters that would break out of a content line (CR/LF and other C0
+ *  controls). UID and CAL-ADDRESS are opaque tokens rather than TEXT values, so
+ *  they are sanitized rather than backslash-escaped — escaping them would not
+ *  round-trip, and a raw newline would let a caller-supplied id inject
+ *  arbitrary iCalendar properties. */
+function sanitizeValue(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 0x20 && cp !== 0x7f) out += ch;
+  }
+  return out;
 }
 
 export interface BuildVEventInput {
@@ -254,7 +296,6 @@ export interface BuildVEventInput {
   end: string;
   stamp: string;
   summary?: string;
-  status?: string;
   attendeeEmail?: string;
   attendeeName?: string;
 }
@@ -267,14 +308,16 @@ export function buildICS(e: BuildVEventInput): string {
     'PRODID:-//unibooking//EN',
     'CALSCALE:GREGORIAN',
     'BEGIN:VEVENT',
-    `UID:${e.uid}`,
+    `UID:${sanitizeValue(e.uid)}`,
     `DTSTAMP:${instantToICalUTC(e.stamp)}`,
     `DTSTART:${instantToICalUTC(e.start)}`,
     `DTEND:${instantToICalUTC(e.end)}`,
     ...(e.summary ? [`SUMMARY:${escapeText(e.summary)}`] : []),
-    ...(e.status ? [`STATUS:${e.status}`] : []),
     ...(e.attendeeEmail
-      ? [`ATTENDEE${e.attendeeName ? `;CN=${quoteParam(e.attendeeName)}` : ''}:mailto:${e.attendeeEmail}`]
+      ? [
+          `ATTENDEE${e.attendeeName ? `;CN=${quoteParam(e.attendeeName)}` : ''}` +
+            `:mailto:${sanitizeValue(e.attendeeEmail)}`,
+        ]
       : []),
     'END:VEVENT',
     'END:VCALENDAR',
@@ -302,9 +345,37 @@ function propertyName(line: string): string {
   return (cut === -1 ? line : line.slice(0, cut)).toUpperCase();
 }
 
+/** Ordinal of the VEVENT that represents the series master: the first one with
+ *  no RECURRENCE-ID. RFC5545 does not require the master to precede its
+ *  overrides, so "the first VEVENT" can be an overridden occurrence — editing
+ *  that would silently change one instance instead of the series. */
+function masterEventOrdinal(lines: string[]): number {
+  const overridden: boolean[] = [];
+  const stack: string[] = [];
+  let ordinal = -1;
+  for (const line of lines) {
+    const begin = /^BEGIN:(.+)$/i.exec(line);
+    if (begin) {
+      const comp = begin[1]!.trim().toUpperCase();
+      stack.push(comp);
+      if (comp === 'VEVENT') overridden[++ordinal] = false;
+      continue;
+    }
+    if (/^END:/i.test(line)) {
+      stack.pop();
+      continue;
+    }
+    if (ordinal >= 0 && stack[stack.length - 1] === 'VEVENT' && propertyName(line) === 'RECURRENCE-ID') {
+      overridden[ordinal] = true;
+    }
+  }
+  const master = overridden.indexOf(false);
+  return master === -1 ? 0 : master;
+}
+
 /**
  * Patch a fetched VCALENDAR in place, replacing only the given properties on the
- * first VEVENT and preserving everything else (VTIMEZONE, RRULE, LOCATION,
+ * series master VEVENT and preserving everything else (VTIMEZONE, RRULE, LOCATION,
  * DESCRIPTION, extra ATTENDEEs, VALARMs, X- props). This is what `updateBooking`
  * uses instead of rebuilding from the lean model, so a round-trip can't silently
  * drop event data. DTSTAMP is always refreshed; a property that is set but absent
@@ -326,16 +397,20 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
    *  wall-clock series into a fixed-offset one, which then drifts by an hour at
    *  every DST transition (and orphans the VTIMEZONE). */
   function retimed(existing: string, name: 'DTSTART' | 'DTEND', instant: string): string {
-    const tzid = /^[^:]*;(?:[^:]*;)*TZID=([^;:]+)/i.exec(existing)?.[1];
+    // The TZID param may be DQUOTEd (`TZID="America/New_York"`, legal per
+    // RFC5545 §3.2); keeping the quotes would fail zone resolution and silently
+    // flatten the property to UTC.
+    const tzid = stripQuotes(/^[^:]*;(?:[^:]*;)*TZID=("[^"]*"|[^;:]+)/i.exec(existing)?.[1] ?? '');
     if (tzid) {
       const local = instantToICalLocal(instant, tzid);
-      if (local !== undefined) return `${name};TZID=${tzid}:${local}`;
+      if (local !== undefined) return `${name};TZID=${quoteParam(tzid)}:${local}`;
     }
     return `${name}:${instantToICalUTC(instant)}`;
   }
   const out: string[] = [];
   const stack: string[] = [];
-  let patchedEvent = false; // only the first VEVENT is patched
+  const target = masterEventOrdinal(lines); // only the master VEVENT is patched
+  let ordinal = -1;
   let inTargetEvent = false;
   const seen = new Set<string>();
 
@@ -344,7 +419,7 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
     if (begin) {
       const comp = begin[1]!.trim().toUpperCase();
       stack.push(comp);
-      if (comp === 'VEVENT' && !patchedEvent) inTargetEvent = true;
+      if (comp === 'VEVENT' && ++ordinal === target) inTargetEvent = true;
       out.push(line);
       continue;
     }
@@ -356,7 +431,6 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
           if (replacements[key] !== undefined && !seen.has(key)) out.push(replacements[key]!);
         }
         inTargetEvent = false;
-        patchedEvent = true;
       }
       stack.pop();
       out.push(line);
@@ -366,6 +440,11 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
     // VALARM, or a VTIMEZONE's STANDARD/DAYLIGHT (which also carry DTSTART).
     if (inTargetEvent && stack[stack.length - 1] === 'VEVENT') {
       const name = propertyName(line);
+      // RFC5545 §3.6.1 forbids DTEND and DURATION in one VEVENT. When a
+      // reschedule writes a DTEND, an existing DURATION must go — otherwise the
+      // object carries two conflicting ends and a server may reject it or pick
+      // the stale one.
+      if (name === 'DURATION' && changes.end !== undefined) continue;
       const replacement = replacements[name];
       if (replacement !== undefined) {
         if (name === 'DTSTART' && changes.start !== undefined) {
@@ -448,17 +527,34 @@ function foldLine(line: string): string {
   return out.join('\r\n');
 }
 
+const XML_ENTITIES: Record<string, string> = {
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  amp: '&',
+};
+
+/** Decode XML character data. Numeric character references matter as much as the
+ *  named entities: sabre-based servers (Nextcloud, Baïkal, …) routinely escape
+ *  the CR in folded calendar-data as `&#13;`, and leaving it encoded made every
+ *  ICS line end in a literal `&#13;` — so `BEGIN:VEVENT` never matched and
+ *  `listBookings` silently returned nothing. Single pass, so an escaped `&amp;`
+ *  can't be re-expanded into the entity it encodes. */
 function unescapeXml(s: string): string {
-  return s
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&');
+  return s.replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (match, body: string) => {
+    if (body.startsWith('#')) {
+      const hex = body[1] === 'x' || body[1] === 'X';
+      const cp = hex ? Number.parseInt(body.slice(2), 16) : Number(body.slice(1));
+      if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) return match;
+      return String.fromCodePoint(cp);
+    }
+    return XML_ENTITIES[body.toLowerCase()] ?? match;
+  });
 }
 
 /** Extract the iCalendar payloads from a CalDAV multistatus response body. */
-export function extractCalendarData(multistatusXml: string): string[] {
+function extractCalendarData(multistatusXml: string): string[] {
   const re = /<[a-z0-9]*:?calendar-data[^>]*>([\s\S]*?)<\/[a-z0-9]*:?calendar-data>/gi;
   const out: string[] = [];
   let m: RegExpExecArray | null;

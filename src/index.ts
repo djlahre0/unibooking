@@ -55,5 +55,6 @@ export {
   type HttpConfig,
   type HttpRequest,
   type AuthFn,
+  type AuthResult,
   type QueryValue,
 } from './http';

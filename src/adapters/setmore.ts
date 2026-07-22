@@ -27,8 +27,10 @@ export type SetmoreCredentials = {
 
 const BASE = 'https://developer.setmore.com/';
 
-/** Setmore caps a list page at 150 appointments and a staff page at 50. */
-const MAX_APPOINTMENTS_PER_PAGE = 150;
+/** The slots endpoint is single-date, so a multi-day availability query fans out
+ *  one request per day. Cap the fan-out so a pathological range can't issue
+ *  hundreds of calls. */
+const MAX_AVAILABILITY_DAYS = 62;
 
 function enc(id: string): string {
   return encodeURIComponent(id);
@@ -81,7 +83,10 @@ function toSlashDate(y: number, m: number, d: number): string {
   return `${pad(d)}/${pad(m)}/${y}`;
 }
 
-/** `yyyy-MM-ddTHH:mmZ` — create/response format. Setmore documents no seconds. */
+/** `yyyy-MM-ddTHH:mmZ` — create/response format. Setmore documents no seconds,
+ *  so this conversion is lossy by design: `09:00:45Z` goes out as `09:00Z`. It
+ *  truncates rather than rounds, which can only move a bound earlier — never
+ *  past an instant the caller excluded. */
 function toSetmoreInstant(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) {
@@ -94,20 +99,27 @@ function toSetmoreInstant(iso: string): string {
   return `${new Date(ms).toISOString().slice(0, 16)}Z`;
 }
 
-/** Each calendar day touched by the range, in the range's own offset. The slots
- *  endpoint is single-date, so a multi-day query has to fan out. */
+/** Each calendar day the range touches, each endpoint read in its OWN offset —
+ *  RFC3339 lets `end` carry a different one (e.g. across a DST change), and
+ *  reusing the start's offset shifts the last day. */
 function datesInRange(startIso: string, endIso: string): Array<{ y: number; m: number; d: number }> {
-  const offset = parseOffsetMinutes(startIso) ?? 0;
-  const startMs = Date.parse(startIso) + offset * 60_000;
-  const endMs = Date.parse(endIso) + offset * 60_000;
+  const startMs = Date.parse(startIso) + (parseOffsetMinutes(startIso) ?? 0) * 60_000;
+  const endMs = Date.parse(endIso) + (parseOffsetMinutes(endIso) ?? 0) * 60_000;
   const out: Array<{ y: number; m: number; d: number }> = [];
   const cursor = new Date(Date.UTC(
     new Date(startMs).getUTCFullYear(),
     new Date(startMs).getUTCMonth(),
     new Date(startMs).getUTCDate(),
   ));
-  // Guard against a pathological range producing an unbounded fan-out.
-  for (let i = 0; i < 62 && cursor.getTime() <= endMs; i++) {
+  while (cursor.getTime() <= endMs) {
+    // An over-wide range is a caller error, not something to quietly truncate.
+    if (out.length >= MAX_AVAILABILITY_DAYS) {
+      throw new UnibookingError({
+        provider: 'setmore',
+        code: 'INVALID_INPUT',
+        message: `Setmore availability ranges may not exceed ${MAX_AVAILABILITY_DAYS} days (the slots endpoint is one request per day)`,
+      });
+    }
     out.push({ y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
@@ -293,6 +305,15 @@ export const setmore = defineAdapter<SetmoreCredentials>({
           'updateBooking of time/staff/service (the only mutation Setmore exposes is a label change)',
         );
       }
+      // An appointment carries no status field and there is no cancel endpoint,
+      // so a status change has to be rejected here — otherwise it falls through
+      // to the label path and surfaces as a bogus "requires a title".
+      if (input.status !== undefined) {
+        return unsupported(
+          'setmore',
+          'updateBooking of status (an appointment has no status field, and no cancel endpoint exists)',
+        );
+      }
       const label = requireField(input.title, 'a title (label) — the only updatable field');
       const c = await http.resolve();
       const res = await http.request(c, {
@@ -361,6 +382,10 @@ export const setmore = defineAdapter<SetmoreCredentials>({
             service_key: serviceKey,
             selected_date: toSlashDate(day.y, day.m, day.d),
             timezone,
+            // `slot_limit` caps how many slots the day returns and defaults to 30
+            // upstream, so a full day of short slots is truncated server-side.
+            // It is deliberately not defaulted here (the account's own default is
+            // the honest one); raise it via providerOptions when you need more.
             ...(query.providerOptions ?? {}),
           },
         });
@@ -393,5 +418,3 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     },
   }),
 });
-
-export { MAX_APPOINTMENTS_PER_PAGE as SETMORE_MAX_PAGE_SIZE };

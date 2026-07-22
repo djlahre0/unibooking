@@ -1,7 +1,8 @@
 import { timingSafeEqual } from '../crypto';
 
 /**
- * Microsoft Graph webhooks (Outlook & Microsoft Bookings) use two mechanisms:
+ * Microsoft Graph webhooks (Outlook calendar events — Graph v1.0 does not
+ * support subscriptions on Bookings resources) use two mechanisms:
  *
  *  1. A validation handshake: when you create a subscription, Graph immediately
  *     GETs/POSTs your notification URL with a `validationToken` query param that
@@ -27,8 +28,12 @@ export function graphValidationToken(
   return token !== null && token !== '' ? token : undefined;
 }
 
-/** True if every notification in the payload carries the expected clientState. */
+/** True if every notification in the payload carries the expected clientState.
+ *  An empty `expectedClientState` always fails: clientState is the shared
+ *  secret, and a missing/empty one would accept any forged payload that also
+ *  sends an empty string. */
 export function verifyGraphClientState(payload: unknown, expectedClientState: string): boolean {
+  if (!expectedClientState) return false;
   const notifications = (payload as any)?.value;
   if (!Array.isArray(notifications) || notifications.length === 0) return false;
   return notifications.every(

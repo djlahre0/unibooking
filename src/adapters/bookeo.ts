@@ -5,8 +5,9 @@ import { assertValidRange } from '../time';
 
 /**
  * Bookeo. Auth is an API key + secret key passed as query params. Products are
- * services. Pagination beyond one page and async availability operations are not
- * modeled — pass extra fields through `providerOptions` when needed.
+ * services. Booking pagination is modeled (see `listBookings`); availability
+ * paging and the async availability operations are not — pass extra fields
+ * through `providerOptions` when needed.
  */
 export type BookeoCredentials = {
   apiKey: string;
@@ -41,8 +42,19 @@ function toBooking(raw: unknown): Booking {
     range: { start, end },
     ...(b.productId ? { serviceId: String(b.productId) } : {}),
     ...(customer ? { customer } : {}),
-    status: b.canceled === true ? 'cancelled' : 'confirmed',
+    // `noShow` rides on top of `canceled`, and `accepted: false` is a booking
+    // still awaiting approval — check the most specific flag first, or the
+    // narrower statuses become unreachable on real data.
+    status:
+      b.noShow === true
+        ? 'no_show'
+        : b.canceled === true
+          ? 'cancelled'
+          : b.accepted === false
+            ? 'pending'
+            : 'confirmed',
     ...(typeof b.creationTime === 'string' ? { createdAt: b.creationTime } : {}),
+    ...(typeof b.lastChangeTime === 'string' ? { updatedAt: b.lastChangeTime } : {}),
     raw: b,
   };
 }
@@ -69,6 +81,39 @@ function requireProduct(serviceId: string | undefined): string {
   return serviceId;
 }
 
+/** `PeopleNumber` requires a `peopleCategoryId`, and the valid ids are defined
+ *  per account/product — there is no safe default to invent, and a number-only
+ *  block is rejected upstream. Make the caller supply it. */
+function requireParticipants(providerOptions: Record<string, unknown> | undefined): void {
+  if (providerOptions?.participants !== undefined) return;
+  throw new UnibookingError({
+    provider: 'bookeo',
+    code: 'INVALID_INPUT',
+    message:
+      'Bookeo requires providerOptions.participants with a peopleCategoryId, e.g. ' +
+      '{ numbers: [{ peopleCategoryId: "Cadults", number: 2 }] } — ' +
+      'list the ids for your account via GET /settings/peoplecategories',
+  });
+}
+
+/** Notification switches shared by POST /bookings and DELETE /bookings/{n}. The
+ *  canonical `notify` is a single flag, so it drives both. */
+function notifyQuery(notify: boolean | undefined): Record<string, boolean> {
+  return notify === undefined ? {} : { notifyUsers: notify, notifyCustomer: notify };
+}
+
+/** Documented limit: startTime..endTime may not span more than 31 days. Surface
+ *  it here rather than as an opaque upstream 400. */
+function assertWithin31Days(start: string, end: string): void {
+  if (Date.parse(end) - Date.parse(start) > 31 * 24 * 60 * 60 * 1000) {
+    throw new UnibookingError({
+      provider: 'bookeo',
+      code: 'INVALID_INPUT',
+      message: 'Bookeo booking ranges may not exceed 31 days',
+    });
+  }
+}
+
 export const bookeo = defineAdapter<BookeoCredentials>({
   id: 'bookeo',
   capabilities: {
@@ -87,29 +132,35 @@ export const bookeo = defineAdapter<BookeoCredentials>({
   build: (http) => ({
     async createBooking(input) {
       assertValidRange(input.range, 'bookeo');
+      // `participants` is required by the Booking schema and only the caller
+      // knows their people categories, so it arrives via providerOptions.
+      requireParticipants(input.providerOptions);
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'POST',
         path: 'bookings',
+        query: notifyQuery(input.notify),
         body: {
           productId: requireProduct(input.serviceId),
-          // `participants` is required by the Booking schema; without it creates
-          // fail for essentially every product. Callers override the category
-          // split via providerOptions.
-          participants: { numbers: [{ number: 1 }] },
+          // `title` is required by the schema, and `toBooking` reads it back.
+          title: input.title,
           startTime: input.range.start,
           endTime: input.range.end,
-          ...(input.customer
-            ? {
-                customer: {
-                  ...(input.customer.name ? nameFields(input.customer.name) : {}),
-                  ...(input.customer.email ? { emailAddress: input.customer.email } : {}),
-                  ...(input.customer.phone
-                    ? { phoneNumbers: [{ number: input.customer.phone, type: 'mobile' }] }
-                    : {}),
-                },
-              }
-            : {}),
+          // An existing customer is booked by id; describing them inline again
+          // would create a duplicate record.
+          ...(input.customer?.id
+            ? { customerId: input.customer.id }
+            : input.customer
+              ? {
+                  customer: {
+                    ...(input.customer.name ? nameFields(input.customer.name) : {}),
+                    ...(input.customer.email ? { emailAddress: input.customer.email } : {}),
+                    ...(input.customer.phone
+                      ? { phoneNumbers: [{ number: input.customer.phone, type: 'mobile' }] }
+                      : {}),
+                  },
+                }
+              : {}),
           ...input.providerOptions,
         },
       });
@@ -118,12 +169,38 @@ export const bookeo = defineAdapter<BookeoCredentials>({
 
     async getBooking(id) {
       const c = await http.resolve();
-      const res = await http.request(c, { path: `bookings/${encodeURIComponent(id)}` });
+      const res = await http.request(c, {
+        path: `bookings/${encodeURIComponent(id)}`,
+        // Bookeo omits the customer entirely unless this is set.
+        query: { expandCustomer: true },
+      });
       return toBooking(res);
     },
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'bookeo');
+      // Bookeo cancels via DELETE, and its PUT is not a documented partial-update
+      // contract — so only the times are safe to send. Reject the rest rather
+      // than accept a field this call will quietly discard.
+      if (input.status !== undefined) {
+        throw new UnibookingError({
+          provider: 'bookeo',
+          code: 'INVALID_INPUT',
+          message:
+            input.status === 'cancelled'
+              ? 'Bookeo booking status is not writable; use cancelBooking() to cancel'
+              : `Bookeo booking status is not writable (cannot set "${input.status}")`,
+        });
+      }
+      if (input.title !== undefined || input.staffId !== undefined || input.serviceId !== undefined) {
+        throw new UnibookingError({
+          provider: 'bookeo',
+          code: 'UNSUPPORTED',
+          message:
+            'Bookeo updates only reschedule (startTime/endTime); change title, staff or ' +
+            'product via providerOptions once you have confirmed the PUT contract for your product type',
+        });
+      }
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'PUT',
@@ -141,13 +218,17 @@ export const bookeo = defineAdapter<BookeoCredentials>({
       await http.request(c, {
         method: 'DELETE',
         path: `bookings/${encodeURIComponent(id)}`,
-        query: { ...(options?.reason ? { reason: options.reason } : {}) },
+        query: {
+          ...(options?.reason ? { reason: options.reason } : {}),
+          ...notifyQuery(options?.notify),
+        },
         parse: 'none',
       });
     },
 
     async listBookings(query) {
       assertValidRange(query.range, 'bookeo');
+      assertWithin31Days(query.range.start, query.range.end);
       const c = await http.resolve();
       // Bookeo paginates with an opaque pageNavigationToken + a 1-based page
       // number. We pack both into the canonical pageToken as `token|page`.
@@ -156,13 +237,20 @@ export const bookeo = defineAdapter<BookeoCredentials>({
       const pageNumber = sep >= 0 ? query.pageToken!.slice(sep + 1) : undefined;
       const res = await http.request(c, {
         path: 'bookings',
-        query: navToken
-          ? { pageNavigationToken: navToken, pageNumber }
-          : {
-              startTime: query.range.start,
-              endTime: query.range.end,
-              itemsPerPage: Math.min(query.limit ?? 100, 100),
-            },
+        query: {
+          // Without this the customer field is omitted from every booking.
+          expandCustomer: true,
+          ...(navToken
+            ? { pageNavigationToken: navToken, pageNumber }
+            : {
+                startTime: query.range.start,
+                endTime: query.range.end,
+                itemsPerPage: Math.min(query.limit ?? 100, 100),
+                // Cancelled bookings are excluded by default, so asking for them
+                // would otherwise return nothing.
+                ...(query.status === 'cancelled' ? { includeCanceled: true } : {}),
+              }),
+        },
       });
       const bookings = asArray(res?.data, 'bookeo', 'bookings.data').map(toBooking);
       const info = res?.info;
@@ -203,7 +291,9 @@ export const bookeo = defineAdapter<BookeoCredentials>({
   }),
 });
 
-function nameFields(name: string): { firstName: string; lastName: string } {
+function nameFields(name: string): { firstName: string; lastName?: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
-  return { firstName: first ?? name, lastName: rest.join(' ') };
+  // Omit lastName rather than sending '' — an explicit empty surname overwrites
+  // whatever the customer record already has.
+  return { firstName: first ?? name, ...(rest.length ? { lastName: rest.join(' ') } : {}) };
 }

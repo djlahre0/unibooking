@@ -1,4 +1,11 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, CreateBookingInput } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  Customer,
+  CreateBookingInput,
+  TimeRange,
+} from '../types';
 import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
@@ -9,6 +16,14 @@ import { assertValidRange, endFromDuration } from '../time';
  * scopes every call. Booking is multi-step (create booking -> get slots -> reserve
  * -> confirm); there is no single create and no clean reschedule, so updateBooking
  * re-books and cancels the old invoice. Times use the *_utc fields (append `Z`).
+ *
+ * **Center-timezone caveat.** Booking *slots* are not *_utc: their `Time` is
+ * center-local wall clock with no offset, and neither the API nor the canonical
+ * model carries the center's zone. The adapter's single stated assumption is
+ * therefore that **the caller expresses times in the center's own UTC offset** —
+ * slot starts are anchored in `range.start`'s offset (`anchorSlotTime`) and
+ * booking-time matching compares wall clocks (`matchesRequestedTime`). Pass
+ * ranges in the center's offset, or slots will be anchored to the wrong instant.
  */
 export type ZenotiCredentials = {
   apiKey: string;
@@ -27,11 +42,41 @@ function utc(v: unknown): string | undefined {
   return v.endsWith('Z') ? v : `${v}Z`;
 }
 
+/** True when an ISO string already pins an absolute instant. */
+function hasOffset(s: string): boolean {
+  return s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s);
+}
+
+/** `yyyy-mm-dd` shifted by whole days. */
+function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** The last wall-clock date a window touches. An end landing exactly on midnight
+ *  touches nothing of its own date. */
+function lastDateTouched(range: TimeRange): string {
+  const endDate = range.end.slice(0, 10);
+  const local = range.end.replace(/([+-]\d{2}:?\d{2}|Z)$/i, '');
+  return /T00:00(:00(\.0+)?)?$/.test(local) ? addDays(endDate, -1) : endDate;
+}
+
+/** Anchor a slot `Time` as an absolute instant. Slot times are center-local wall
+ *  clock with no offset, so — per the center-timezone caveat on this module —
+ *  they are read in the offset of the caller's own range rather than fabricating
+ *  a `Z`, which would claim a UTC instant the value is not. */
+function anchorSlotTime(time: unknown, offsetSource: string): string | undefined {
+  if (typeof time !== 'string' || !time) return undefined;
+  if (hasOffset(time)) return time;
+  const m = /([+-]\d{2}:\d{2}|Z)$/i.exec(offsetSource);
+  return `${time.slice(0, 19)}${m ? m[1] : 'Z'}`;
+}
+
 function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolean {
   if (typeof slotTime !== 'string') return false;
   // Absolute-instant match (when the slot carries an offset/Z).
-  const withZ =
-    slotTime.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(slotTime) ? slotTime : `${slotTime}Z`;
+  const withZ = hasOffset(slotTime) ? slotTime : `${slotTime}Z`;
   const ts = Date.parse(withZ);
   if (!Number.isNaN(ts) && ts === Date.parse(requestedStart)) return true;
   // Wall-clock match: Zenoti slot Time is center-local without an offset, so also match
@@ -45,24 +90,25 @@ function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolea
 
 function mapStatus(s: unknown): BookingStatus {
   // Zenoti returns integer codes; some list endpoints return strings. Handle both.
+  // The documented enum is NoShow=-2, Cancelled=-1, New=0, Closed=1, Checkin=2,
+  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21 — note that -2
+  // and -1 are no-show and cancelled in that order, and that 3/5/6/99 do not exist.
   const n = typeof s === 'number' ? s : Number(s);
   if (!Number.isNaN(n)) {
     switch (n) {
       case -2:
-      case 99:
-        return 'cancelled';
-      case -1:
         return 'no_show';
+      case -1:
+      case 21:
+        return 'cancelled';
       case 0:
-      case 1:
-      case 2:
-      case 3:
         return 'pending';
-      case 4:
+      case 1:
         return 'completed';
-      case 5:
-      case 6:
+      case 2:
+      case 4:
         return 'confirmed';
+      // Break/NotSpecified/Available (10/11/20) are not appointment outcomes.
       default:
         return 'unknown';
     }
@@ -92,10 +138,16 @@ function mapStatus(s: unknown): BookingStatus {
 function customerOf(g: any): Booking['customer'] | undefined {
   if (!g) return undefined;
   const name = `${g.first_name ?? ''} ${g.last_name ?? ''}`.trim();
-  // TODO: verify against live API — appointment guest may expose the phone as
-  // `mobile.number` (docs) or `mobile_phone.number` (create side).
+  // The appointment guest carries the phone under `mobile`; on real payloads
+  // `number` is null and `display_number` holds the value ("+91 9885517727"), so
+  // reading `number` alone usually drops the phone. `mobile_phone` is the
+  // create-side spelling of the same object.
   const phone =
-    g.mobile?.number ?? g.mobile_phone?.number ?? (typeof g.phone === 'string' ? g.phone : undefined);
+    g.mobile?.number ??
+    g.mobile?.display_number ??
+    g.mobile_phone?.number ??
+    g.mobile_phone?.display_number ??
+    (typeof g.phone === 'string' ? g.phone : undefined);
   if (!g.id && !name && !g.email && !phone) return undefined;
   return {
     ...(g.id ? { id: String(g.id) } : {}),
@@ -152,10 +204,25 @@ function requireService(serviceId: string | undefined): string {
   return serviceId;
 }
 
+/** `providerOptions` keys this adapter consumes itself. They steer the guest
+ *  resolution above and are meaningless to Zenoti, so they are stripped before
+ *  the rest of `providerOptions` is merged into an outgoing body. */
+const CONSUMED_OPTION_KEYS = ['guestId', 'countryCode'] as const;
+
+function bookingExtras(
+  providerOptions: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!providerOptions) return undefined;
+  const rest = { ...providerOptions };
+  for (const key of CONSUMED_OPTION_KEYS) delete rest[key];
+  return rest;
+}
+
 async function findOrCreateGuest(
   http: HttpContext<ZenotiCredentials>,
   c: ZenotiCredentials,
   customer: Customer,
+  providerOptions?: Record<string, unknown>,
 ): Promise<string> {
   if (customer.id) return customer.id;
   if (customer.email) {
@@ -167,6 +234,10 @@ async function findOrCreateGuest(
     if (found?.id) return String(found.id);
   }
   const [firstName, ...rest] = (customer.name ?? 'Guest').trim().split(/\s+/);
+  // `mobile_phone` is `{country_code, number}`. The canonical Customer has no
+  // country code and guessing one would misroute the number, so it is passed
+  // through from providerOptions when the caller knows it and omitted otherwise.
+  const countryCode = providerOptions?.countryCode;
   const created = await http.request(c, {
     method: 'POST',
     path: 'guests',
@@ -176,12 +247,19 @@ async function findOrCreateGuest(
         first_name: firstName ?? 'Guest',
         last_name: rest.join(' ') || 'Guest',
         ...(customer.email ? { email: customer.email } : {}),
-        ...(customer.phone ? { mobile_phone: { number: customer.phone } } : {}),
+        ...(customer.phone
+          ? {
+              mobile_phone: {
+                number: customer.phone,
+                ...(countryCode !== undefined ? { country_code: countryCode } : {}),
+              },
+            }
+          : {}),
       },
     },
   });
-  // TODO: verify against live API — guest-create response id field name unconfirmed (id vs guest.id)
-  return reqString(String(created?.id ?? created?.guest?.id ?? ''), 'zenoti', 'guest.id');
+  // The guest-create response is flat, with the new guest's `id` at the top level.
+  return reqString(String(created?.id ?? ''), 'zenoti', 'guest.id');
 }
 
 async function resolveGuestId(
@@ -191,7 +269,7 @@ async function resolveGuestId(
 ): Promise<string> {
   const fromOpts = input.providerOptions?.guestId;
   if (typeof fromOpts === 'string') return fromOpts;
-  if (input.customer) return findOrCreateGuest(http, c, input.customer);
+  if (input.customer) return findOrCreateGuest(http, c, input.customer, input.providerOptions);
   throw new UnibookingError({
     provider: 'zenoti',
     code: 'INVALID_INPUT',
@@ -245,8 +323,8 @@ async function bookAndConfirm(
       ...extra,
     },
   });
-  // TODO: verify against live API — create-booking response id field name unconfirmed (id vs booking_id)
-  const bookingId = reqString(String(booking?.id ?? booking?.booking_id ?? ''), 'zenoti', 'booking.id');
+  // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+  const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
   const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
   const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
   const match = slots.find((s: any) => s.Available !== false && matchesRequestedTime(s.Time, start));
@@ -306,7 +384,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         serviceId,
         input.range.start,
         input.staffId,
-        input.providerOptions,
+        bookingExtras(input.providerOptions),
       );
       return getAppointment(http, c, apptId);
     },
@@ -349,7 +427,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         serviceId,
         input.range.start,
         staffId,
-        input.providerOptions,
+        bookingExtras(input.providerOptions),
         { invoiceId, invoiceItemId },
       );
       return getAppointment(http, c, apptId);
@@ -382,18 +460,47 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           message: 'Zenoti listBookings supports a maximum 7-day range',
         });
       }
+      if (query.pageToken !== undefined) {
+        throw new UnibookingError({
+          provider: 'zenoti',
+          code: 'UNSUPPORTED',
+          message:
+            'Zenoti appointments exposes no pagination cursor; narrow range/limit instead of paging',
+        });
+      }
       const c = await http.resolve();
+      // `start_date` and `end_date` are whole dates, must differ, and `end_date`
+      // is EXCLUSIVE — so a same-day window (09:00 → 17:00) collapses to nothing.
+      // Ask for every date the window touches, plus one, then trim below.
+      const startDate = query.range.start.slice(0, 10);
+      const lastDate = lastDateTouched(query.range);
       const res = await http.request(c, {
         path: 'appointments',
         query: {
           center_id: c.centerId,
-          start_date: query.range.start.slice(0, 10),
-          end_date: query.range.end.slice(0, 10),
+          start_date: startDate,
+          end_date: addDays(lastDate > startDate ? lastDate : startDate, 1),
           therapist_id: query.staffId,
+          // Cancelled and no-show appointments are omitted unless this is set,
+          // so `status: 'cancelled'` could otherwise never match anything.
+          ...(query.status === 'cancelled' || query.status === 'no_show'
+            ? { include_no_show_cancel: true }
+            : {}),
         },
       });
-      const bookings = asArray(res?.appointments, 'zenoti', 'appointments').map(toBooking);
-      return { bookings };
+      const from = Date.parse(query.range.start);
+      const to = Date.parse(query.range.end);
+      const bookings = asArray(res?.appointments, 'zenoti', 'appointments')
+        .map(toBooking)
+        // Whole-date fetching overshoots the caller's instants at both ends.
+        .filter((b) => {
+          const s = Date.parse(b.range.start);
+          return s >= from && s < to;
+        })
+        .filter((b) => query.status === undefined || b.status === query.status);
+      // The endpoint returns no cursor, so `limit` is applied client-side and no
+      // nextPageToken is fabricated.
+      return { bookings: query.limit !== undefined ? bookings.slice(0, query.limit) : bookings };
     },
 
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
@@ -418,9 +525,19 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         });
       }
       const durationMinutes = query.durationMinutes;
+      // A booking — and therefore its slot list — is scoped to one date. Fanning
+      // out over a range would create one throwaway booking per day upstream, so
+      // reject a multi-day window rather than silently answering for day one.
+      const date = query.range.start.slice(0, 10);
+      if (lastDateTouched(query.range) !== date) {
+        throw new UnibookingError({
+          provider: 'zenoti',
+          code: 'INVALID_INPUT',
+          message: `Zenoti availability covers a single center-local date; ${date} and ${lastDateTouched(query.range)} span more than one`,
+        });
+      }
       // Zenoti has no stateless availability endpoint — create a transient booking
       // and read its slots. The booking is unconfirmed and Zenoti expires it.
-      const date = query.range.start.slice(0, 10);
       const booking = await http.request(c, {
         method: 'POST',
         path: 'bookings',
@@ -433,14 +550,17 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
               items: [{ item: { id: serviceId, item_type: 0 }, ...(query.staffId ? { therapist: { id: query.staffId } } : {}) }],
             },
           ],
+          // Same escape hatch createBooking honors — availability must be
+          // requested under the same provider-specific fields it will be booked with.
+          ...bookingExtras(query.providerOptions),
         },
       });
-      // TODO: verify against live API — create-booking response id field name unconfirmed (id vs booking_id)
-      const bookingId = reqString(String(booking?.id ?? booking?.booking_id ?? ''), 'zenoti', 'booking.id');
+      // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+      const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
       const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
       const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
       return slots.flatMap((s: any) => {
-        const start = utc(s.Time) ?? (typeof s.Time === 'string' ? s.Time : undefined);
+        const start = anchorSlotTime(s.Time, query.range.start);
         if (start === undefined) return [];
         // Each slot carries an Available flag; an unavailable slot is not
         // bookable, so emitting it as a candidate misleads the caller.

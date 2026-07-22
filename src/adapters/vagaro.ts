@@ -26,7 +26,8 @@ import { assertValidRange, endFromDuration, parseOffsetMinutes } from '../time';
  *    emit the wall-clock time as written in the caller's own offset.
  *  - **There is no date-range list.** `POST /appointments` requires
  *    `appointmentId` or `customerId`, so `listBookings` is only supported when a
- *    `customerId` is supplied.
+ *    `customerId` is supplied — and since it returns that customer's whole
+ *    history, `query.range` is applied client-side.
  */
 export type VagaroCredentials = {
   /** Account subdomain, e.g. `us04`. */
@@ -66,6 +67,27 @@ function toVagaroLocal(iso: string): string {
 /** `yyyy-mm-dd` in the caller's own offset. */
 function toVagaroDate(iso: string): string {
   return toVagaroLocal(iso).slice(0, 10);
+}
+
+/** `appointments/availability` answers for a single `appointmentDate`, so a
+ *  multi-day range needs one call per day. Capped so an over-wide range cannot
+ *  fan out unboundedly (see MAX_AVAILABILITY_DAYS). */
+const MAX_AVAILABILITY_DAYS = 31;
+
+/** The `yyyy-mm-dd` dates (in `range.start`'s offset) that a window overlaps. */
+function datesInRange(startIso: string, endIso: string): string[] {
+  const offset = /([+-]\d{2}:\d{2}|Z)$/i.exec(startIso)?.[1] ?? 'Z';
+  const endMs = Date.parse(endIso);
+  const dates: string[] = [];
+  let dateStr = toVagaroDate(startIso);
+  for (let i = 0; i < MAX_AVAILABILITY_DAYS; i++) {
+    if (Date.parse(`${dateStr}T00:00:00${offset}`) >= endMs) break;
+    dates.push(dateStr);
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    dateStr = d.toISOString().slice(0, 10);
+  }
+  return dates.length > 0 ? dates : [toVagaroDate(startIso)];
 }
 
 function mapStatus(s: unknown): BookingStatus {
@@ -209,9 +231,23 @@ export const vagaro = defineAdapter<VagaroCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'vagaro');
+      // The PUT has no status field, and cancelBooking deletes rather than
+      // transitions — so a status here would look applied and change nothing.
+      if (input.status !== undefined) {
+        throw new UnibookingError({
+          provider: 'vagaro',
+          code: 'INVALID_INPUT',
+          message:
+            input.status === 'cancelled'
+              ? 'Vagaro appointment status is not writable; use cancelBooking() to cancel'
+              : `Vagaro appointment status is not writable (cannot set "${input.status}")`,
+        });
+      }
       const c = await http.resolve();
       // Update is full-replace: serviceId, serviceProviderId, appointmentType and
       // startTime are all required on every call, so backfill from current state.
+      // A missing backfill would be dropped by JSON.stringify and silently omit a
+      // required field, so fail fast instead.
       const current = await fetchAppointment(http, c, id);
       const raw = asRecord(current.raw, 'vagaro', 'appointment');
       const startIso = input.range?.start ?? current.range.start;
@@ -220,12 +256,22 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         path: apiPath(c, `appointments/${enc(id)}`),
         body: {
           businessId: c.businessId,
-          serviceId: input.serviceId ?? current.serviceId,
-          serviceProviderId: input.staffId ?? current.staffId,
+          serviceId: requireField(
+            input.serviceId ?? current.serviceId,
+            'a serviceId to update — the current appointment carries none to fall back on',
+          ),
+          serviceProviderId: requireField(
+            input.staffId ?? current.staffId,
+            'a staffId (serviceProviderId) to update — the current appointment carries none to fall back on',
+          ),
           appointmentType: typeof raw.eventType === 'string' && raw.eventType.toLowerCase() === 'class'
             ? 'class'
             : 'appointment',
           startTime: toVagaroLocal(startIso),
+          // createBooking maps title to appointmentNote; update must not drop it.
+          // (`notify` has no equivalent field and is ignored, as the canonical
+          // type allows.)
+          ...(input.title !== undefined ? { appointmentNote: input.title.slice(0, 500) } : {}),
           ...input.providerOptions,
         },
         // Update returns `data: ""` — nothing useful to parse.
@@ -250,6 +296,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     },
 
     async listBookings(query) {
+      assertValidRange(query.range, 'vagaro');
       if (!query.customerId) {
         return unsupported(
           'vagaro',
@@ -269,11 +316,20 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         body: { businessId: c.businessId, customerId: query.customerId },
       });
       const rows = asArray((res as any)?.data, 'vagaro', 'appointments');
-      const bookings = rows.map(toBooking);
-      // No pagination envelope exists — page numerically until a short page.
-      const pageSize = query.limit ?? rows.length;
+      // The endpoint takes no date window — it returns the customer's whole
+      // history — so trim to the instants the caller actually asked for.
+      const from = Date.parse(query.range.start);
+      const to = Date.parse(query.range.end);
+      const bookings = rows.map(toBooking).filter((b) => {
+        const s = Date.parse(b.range.start);
+        return s >= from && s < to;
+      });
+      // No pagination envelope exists — page numerically until a short page, and
+      // only when a real page size was asked for. Falling back to `rows.length`
+      // made `rows.length >= pageSize` true on every non-empty page, so a caller
+      // looping to exhaustion never terminated.
       const page = Number(query.pageToken ?? '1');
-      const hasMore = pageSize > 0 && rows.length >= pageSize;
+      const hasMore = query.limit !== undefined && query.limit > 0 && rows.length >= query.limit;
       return {
         bookings,
         ...(hasMore ? { nextPageToken: String(page + 1) } : {}),
@@ -283,49 +339,71 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
       assertValidRange(query.range, 'vagaro');
       const serviceId = requireField(query.serviceId, 'a serviceId for availability');
+      // One request per day, so bound the fan-out explicitly rather than letting
+      // a year-wide range issue 365 calls.
+      if (
+        Date.parse(query.range.end) - Date.parse(query.range.start) >
+        MAX_AVAILABILITY_DAYS * 24 * 60 * 60 * 1000
+      ) {
+        throw new UnibookingError({
+          provider: 'vagaro',
+          code: 'INVALID_INPUT',
+          message: `Vagaro availability is queried one day at a time; ranges may not exceed ${MAX_AVAILABILITY_DAYS} days`,
+        });
+      }
       const c = await http.resolve();
-      const res = await http.request(c, {
-        method: 'POST',
-        path: apiPath(c, 'appointments/availability'),
-        body: {
-          businessId: c.businessId,
-          appointmentDate: toVagaroDate(query.range.start),
-          bookingItems: [
-            {
-              serviceId,
-              ...(query.staffId ? { serviceProviderIds: [query.staffId] } : {}),
-            },
-          ],
-          ...(query.providerOptions ?? {}),
-        },
-      });
-      const days = asArray((res as any)?.data, 'vagaro', 'availability');
+      const windowStart = Date.parse(query.range.start);
+      const windowEnd = Date.parse(query.range.end);
       const out: AvailabilitySlot[] = [];
-      for (const day of days) {
-        const d = asRecord(day, 'vagaro', 'availability entry');
-        const date = typeof d.appointmentDate === 'string' ? d.appointmentDate : undefined;
-        if (!date) continue;
-        const items = asArray(d.items ?? [], 'vagaro', 'availability.items');
-        const first = items[0] as any;
-        const duration =
-          typeof first?.duration === 'number' && first.duration > 0
-            ? first.duration
-            : query.durationMinutes;
-        if (typeof duration !== 'number' || duration <= 0) continue;
-        // Slots are bare "HH:MM" wall-clock with no zone; the date is on the
-        // sibling field. Anchor them in the caller's own offset.
-        const offset = query.range.start.slice(-6);
-        const suffix = /^[+-]\d{2}:\d{2}$/.test(offset) ? offset : 'Z';
-        for (const t of asArray(d.timeSlot ?? [], 'vagaro', 'availability.timeSlot')) {
-          const m = /^(\d{1,2}):(\d{2})$/.exec(String(t).trim());
-          if (!m) continue;
-          const start = `${date}T${m[1]!.padStart(2, '0')}:${m[2]}:00${suffix}`;
-          out.push({
-            start,
-            end: endFromDuration(start, duration),
-            ...(first?.serviceProviderId ? { staffId: String(first.serviceProviderId) } : {}),
-            raw: { date, time: t, items },
-          });
+      // `appointmentDate` is a single date, so page a call per day the window
+      // overlaps and keep only slots that actually fall inside the range.
+      for (const appointmentDate of datesInRange(query.range.start, query.range.end)) {
+        const res = await http.request(c, {
+          method: 'POST',
+          path: apiPath(c, 'appointments/availability'),
+          body: {
+            businessId: c.businessId,
+            appointmentDate,
+            bookingItems: [
+              {
+                serviceId,
+                ...(query.staffId ? { serviceProviderIds: [query.staffId] } : {}),
+              },
+            ],
+            ...(query.providerOptions ?? {}),
+          },
+        });
+        const days = asArray((res as any)?.data, 'vagaro', 'availability');
+        for (const day of days) {
+          const d = asRecord(day, 'vagaro', 'availability entry');
+          const date = typeof d.appointmentDate === 'string' ? d.appointmentDate : undefined;
+          if (!date) continue;
+          const items = asArray(d.items ?? [], 'vagaro', 'availability.items');
+          const first = items[0] as any;
+          const duration =
+            typeof first?.duration === 'number' && first.duration > 0
+              ? first.duration
+              : query.durationMinutes;
+          if (typeof duration !== 'number' || duration <= 0) continue;
+          // Slots are bare "HH:MM" wall-clock with no zone; the date is on the
+          // sibling field. Anchor them in the caller's own offset.
+          const offset = query.range.start.slice(-6);
+          const suffix = /^[+-]\d{2}:\d{2}$/.test(offset) ? offset : 'Z';
+          for (const t of asArray(d.timeSlot ?? [], 'vagaro', 'availability.timeSlot')) {
+            const m = /^(\d{1,2}):(\d{2})$/.exec(String(t).trim());
+            if (!m) continue;
+            const start = `${date}T${m[1]!.padStart(2, '0')}:${m[2]}:00${suffix}`;
+            // A day's slots cover the whole business day, so a partial-day window
+            // would otherwise return times the caller excluded.
+            const startMs = Date.parse(start);
+            if (startMs < windowStart || startMs >= windowEnd) continue;
+            out.push({
+              start,
+              end: endFromDuration(start, duration),
+              ...(first?.serviceProviderId ? { staffId: String(first.serviceProviderId) } : {}),
+              raw: { date, time: t, items },
+            });
+          }
         }
       }
       return out;

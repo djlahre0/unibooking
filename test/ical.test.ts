@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildICS, parseICS, patchICS } from '../src/ical';
+import { buildICS, parseCalendarEntries, parseICS, patchICS } from '../src/ical';
 
 function vcal(...lines: string[]): string {
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', ...lines, 'END:VEVENT', 'END:VCALENDAR'].join(
@@ -56,6 +56,111 @@ describe('ical: DURATION forms', () => {
     // 1 week = 7 days later, not end === start.
     expect(ev.end).toBe('2026-07-27T22:00:00Z');
     expect(ev.end).not.toBe(ev.start);
+  });
+});
+
+describe('ical: nested components', () => {
+  it('ignores VALARM properties instead of letting them overwrite the event', () => {
+    // An EMAIL alarm legally carries its own SUMMARY/ATTENDEE/DURATION
+    // (RFC5545 3.6.6). Reading them flat made the alarm's subject the booking
+    // title, its recipient the customer, and its snooze the event's end.
+    const ics = vcal(
+      'UID:n1',
+      'SUMMARY:Real appointment',
+      'DTSTART:20260720T220000Z',
+      'BEGIN:VALARM',
+      'ACTION:EMAIL',
+      'SUMMARY:Reminder alarm subject',
+      'ATTENDEE:mailto:alarm-recipient@example.com',
+      'DURATION:PT5M',
+      'END:VALARM',
+      'DTEND:20260720T224500Z',
+    );
+    const ev = parseICS(ics)[0]!;
+    expect(ev.summary).toBe('Real appointment');
+    expect(ev.attendee).toBeUndefined();
+    expect(ev.end).toBe('2026-07-20T22:45:00Z');
+  });
+
+  it('exposes RECURRENCE-ID so expanded instances sharing an id can be told apart', () => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:series',
+      'RECURRENCE-ID:20260720T090000Z',
+      'DTSTART:20260720T090000Z',
+      'DTEND:20260720T093000Z',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:series',
+      'RECURRENCE-ID:20260721T090000Z',
+      'DTSTART:20260721T090000Z',
+      'DTEND:20260721T093000Z',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const events = parseICS(ics);
+    expect(events.map((e) => e.recurrenceId)).toEqual(['20260720T090000Z', '20260721T090000Z']);
+  });
+});
+
+describe('ical: multistatus XML decoding', () => {
+  it('decodes numeric character references in calendar-data', () => {
+    // sabre-based servers (Nextcloud, Baikal) escape the CR of a folded line as
+    // &#13;. Leaving it encoded meant BEGIN:VEVENT never matched and the whole
+    // listing came back empty.
+    const xml =
+      '<multistatus><response><href>/c/e1.ics</href><calendar-data>' +
+      'BEGIN:VCALENDAR&#13;\nBEGIN:VEVENT&#13;\nUID:x1&#13;\n' +
+      'DTSTART:20260720T220000Z&#13;\nDTEND:20260720T224500Z&#13;\n' +
+      'END:VEVENT&#13;\nEND:VCALENDAR' +
+      '</calendar-data></response></multistatus>';
+    const entries = parseCalendarEntries(xml);
+    expect(entries).toHaveLength(1);
+    const ev = parseICS(entries[0]!.ics)[0];
+    expect(ev?.uid).toBe('x1');
+    expect(ev?.start).toBe('2026-07-20T22:00:00Z');
+  });
+
+  it('does not re-expand an escaped ampersand into the entity it encodes', () => {
+    const xml =
+      '<multistatus><response><calendar-data>' +
+      'BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:x2\nSUMMARY:A &amp;#13; B\n' +
+      'DTSTART:20260720T220000Z\nDTEND:20260720T224500Z\nEND:VEVENT\nEND:VCALENDAR' +
+      '</calendar-data></response></multistatus>';
+    const ev = parseICS(parseCalendarEntries(xml)[0]!.ics)[0]!;
+    expect(ev.summary).toBe('A &#13; B');
+  });
+});
+
+describe('ical: value sanitization', () => {
+  // A CRLF in an opaque value (UID, CAL-ADDRESS) would end the content line and
+  // start a new property line — letting a caller-supplied id rewrite the event.
+  const injected = (ics: string): boolean => ics.split('\r\n').includes('SUMMARY:injected');
+
+  it('does not let a newline in the UID inject an iCalendar property', () => {
+    const ics = buildICS({
+      uid: 'u1\r\nSUMMARY:injected',
+      start: '2026-07-20T22:00:00Z',
+      end: '2026-07-20T22:45:00Z',
+      stamp: '2026-07-20T00:00:00Z',
+      summary: 'Real title',
+    });
+    expect(injected(ics)).toBe(false);
+    expect(parseICS(ics)[0]!.summary).toBe('Real title');
+  });
+
+  it('does not let a newline in the attendee email inject a property', () => {
+    const ics = buildICS({
+      uid: 'u2',
+      start: '2026-07-20T22:00:00Z',
+      end: '2026-07-20T22:45:00Z',
+      stamp: '2026-07-20T00:00:00Z',
+      summary: 'Real title',
+      attendeeEmail: 'jane@example.com\r\nSUMMARY:injected',
+    });
+    expect(injected(ics)).toBe(false);
+    expect(parseICS(ics)[0]!.summary).toBe('Real title');
   });
 });
 
@@ -175,6 +280,77 @@ describe('patchICS TZID preservation', () => {
     // The RRULE and its VTIMEZONE must survive intact.
     expect(out).toContain('RRULE:FREQ=WEEKLY');
     expect(out).toContain('TZID:America/New_York');
+  });
+
+  it('keeps a DQUOTEd TZID anchored instead of flattening it to UTC', () => {
+    // RFC5545 3.2 allows a quoted param value. Capturing the quotes with the
+    // zone name made the lookup fail, silently dropping the TZID anchoring.
+    const quoted = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:evt-quoted',
+      'DTSTART;TZID="America/New_York":20260720T090000',
+      'DTEND;TZID="America/New_York":20260720T093000',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const out = patchICS(quoted, {
+      stamp: '2026-07-19T00:00:00Z',
+      start: '2026-07-27T13:00:00Z',
+      end: '2026-07-27T13:30:00Z',
+    });
+    expect(out).toContain('DTSTART;TZID=America/New_York:20260727T090000');
+    expect(out).not.toContain('DTSTART:20260727T130000Z');
+  });
+
+  it('drops DURATION when a reschedule writes a DTEND', () => {
+    // RFC5545 3.6.1 forbids both in one VEVENT; leaving the stale DURATION gives
+    // the event two conflicting ends.
+    const durationEvent = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:evt-duration',
+      'DTSTART:20260720T220000Z',
+      'DURATION:PT45M',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const out = patchICS(durationEvent, {
+      stamp: '2026-07-19T00:00:00Z',
+      start: '2026-07-27T22:00:00Z',
+      end: '2026-07-27T23:00:00Z',
+    });
+    expect(out).toContain('DTSTART:20260727T220000Z');
+    expect(out).toContain('DTEND:20260727T230000Z');
+    expect(out).not.toContain('DURATION');
+  });
+
+  it('patches the series master even when an override VEVENT comes first', () => {
+    const overrideFirst = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:evt-series',
+      'RECURRENCE-ID:20260721T090000Z',
+      'DTSTART:20260721T100000Z',
+      'DTEND:20260721T103000Z',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:evt-series',
+      'DTSTART:20260720T090000Z',
+      'DTEND:20260720T093000Z',
+      'RRULE:FREQ=DAILY',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const out = patchICS(overrideFirst, {
+      stamp: '2026-07-19T00:00:00Z',
+      start: '2026-07-20T11:00:00Z',
+      end: '2026-07-20T11:30:00Z',
+    });
+    // The master moved; the override kept its own times.
+    expect(out).toContain('DTSTART:20260720T110000Z');
+    expect(out).toContain('DTSTART:20260721T100000Z');
+    expect(out).not.toContain('DTSTART:20260720T090000Z');
   });
 
   it('still uses UTC when the original DTSTART was a UTC instant', () => {

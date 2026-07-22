@@ -79,6 +79,15 @@ describe('setmore: operations the API genuinely lacks', () => {
       .catch((e: any) => e);
     expect(err?.code).toBe('UNSUPPORTED');
   });
+
+  it('updateBooking rejects a status change as UNSUPPORTED, not as a missing title', async () => {
+    const err = await makeClient()
+      .updateBooking('A1', { status: 'cancelled' })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('UNSUPPORTED');
+    expect(err?.message).toContain('status');
+  });
 });
 
 describe('setmore wire format', () => {
@@ -158,6 +167,68 @@ describe('setmore wire format', () => {
       durationMinutes: 30,
     });
     expect(slots).toHaveLength(1);
+  });
+
+  it('forwards slot_limit from providerOptions', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
+      .reply(200, (opts: any) => {
+        seen = opts;
+        return JSON.stringify({ response: true, data: [] });
+      }, { headers: JSON_HEADERS });
+
+    await makeClient().searchAvailability({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-20T23:00:00Z', timezone: 'UTC' },
+      serviceId: 'svc1',
+      staffId: 's1',
+      durationMinutes: 30,
+      providerOptions: { slot_limit: 100 },
+    });
+
+    expect(JSON.parse(seen.body).slot_limit).toBe(100);
+  });
+
+  it('fans out one slots request per day using each endpoint\'s own offset', async () => {
+    const dates: string[] = [];
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
+      .reply(200, (opts: any) => {
+        dates.push(JSON.parse(String(opts.body)).selected_date);
+        return JSON.stringify({ response: true, data: [] });
+      }, { headers: JSON_HEADERS })
+      .persist();
+
+    await makeClient().searchAvailability({
+      // The end carries -07:00 (post-DST) while the start is -08:00; using the
+      // start's offset for both would drop the final day.
+      range: {
+        start: '2026-03-07T23:00:00-08:00',
+        end: '2026-03-09T00:30:00-07:00',
+        timezone: 'America/Los_Angeles',
+      },
+      serviceId: 'svc1',
+      staffId: 's1',
+      durationMinutes: 30,
+    });
+
+    expect(dates).toEqual(['07/03/2026', '08/03/2026', '09/03/2026']);
+  });
+
+  it('rejects an availability range wider than the per-day fan-out cap', async () => {
+    const err = await makeClient()
+      .searchAvailability({
+        range: { start: '2026-01-01T00:00:00Z', end: '2026-06-01T00:00:00Z', timezone: 'UTC' },
+        serviceId: 'svc1',
+        staffId: 's1',
+        durationMinutes: 30,
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('62');
   });
 
   it('requires an IANA timezone for availability — slot times carry no offset', async () => {

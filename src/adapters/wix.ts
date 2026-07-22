@@ -2,7 +2,7 @@ import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../type
 import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
-import { assertValidRange, endFromDuration, formatWithOffset, isInstant } from '../time';
+import { assertValidRange, formatWithOffset } from '../time';
 import { localToInstant, zoneOffsetMinutes } from '../tz';
 
 /**
@@ -14,9 +14,10 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * token). It is sent verbatim in the `Authorization` header — no `Bearer`
  * prefix, which is how Wix expects app tokens.
  *
- * NOTE: shapes here are docs-derived, not verified against a live Wix tenant.
- * Fields marked `TODO: verify against live API` are the ones most likely to need
- * a tweak once run against a real site.
+ * NOTE: the paths and payload shapes here match the published reference. The one
+ * thing still unverified is which fields Query Extended Bookings accepts in its
+ * `filter` — Wix publishes no exhaustive list — so `listBookings`' date-window
+ * filter carries a TODO.
  */
 export type WixCredentials = {
   accessToken: string;
@@ -52,6 +53,51 @@ function mapStatus(s: unknown): BookingStatus {
     default:
       return 'unknown';
   }
+}
+
+/** Canonical status → the Wix `status` filter value(s) covering it. Wix's enum is
+ *  CREATED/CONFIRMED/CANCELED/PENDING/DECLINED/WAITING_LIST and `mapStatus` folds
+ *  several of those into one canonical status, so the inverse of a canonical
+ *  status can be a set. Undefined for statuses Wix has no equivalent of
+ *  (no_show/completed), so the filter is left off rather than sending a wrong one. */
+function wixStatusFilter(s: BookingStatus | undefined): string | { $in: string[] } | undefined {
+  const values =
+    s === 'confirmed'
+      ? ['CONFIRMED', 'CREATED']
+      : s === 'pending'
+        ? ['PENDING', 'WAITING_LIST']
+        : s === 'cancelled'
+          ? ['CANCELED']
+          : s === 'declined'
+            ? ['DECLINED']
+            : undefined;
+  if (!values) return undefined;
+  return values.length === 1 ? values[0]! : { $in: values };
+}
+
+function requireService(serviceId: string | undefined): string {
+  if (!serviceId) {
+    throw new UnibookingError({
+      provider: 'wix',
+      code: 'INVALID_INPUT',
+      message:
+        'Wix availability (Time Slots V2) requires a serviceId — it is mandatory except when paging by cursor',
+    });
+  }
+  return serviceId;
+}
+
+/** Reschedule and cancel both mark `revision` REQUIRED. When none can be resolved
+ *  the request is guaranteed to be rejected, so fail here instead of sending it. */
+function requireRevision(revision: unknown, id: string): string | number {
+  if (revision === undefined || revision === null || revision === '') {
+    throw new UnibookingError({
+      provider: 'wix',
+      code: 'UPSTREAM',
+      message: `could not resolve the current revision of booking ${id} (Wix requires it to reschedule/cancel)`,
+    });
+  }
+  return revision as string | number;
 }
 
 /** The bookable slot lives under `bookedEntity.slot` (single session) — Wix also
@@ -137,7 +183,7 @@ async function findOrCreateContact(
   customer: Customer,
 ): Promise<string> {
   if (customer.id) return customer.id;
-  // TODO: verify against live API — Contacts v4 query filter uses `info.emails.email`.
+  // Contacts v4 queries emails through the `info.emails.email` path.
   if (customer.email) {
     const search = await http.request(c, {
       method: 'POST',
@@ -233,6 +279,22 @@ export const wix = defineAdapter<WixCredentials>({
       const hasParticipants =
         input.providerOptions?.totalParticipants !== undefined ||
         input.providerOptions?.participantsChoices !== undefined;
+      // Create Booking takes several params BESIDE `booking`. Pull those out so
+      // they land at the top level of the request body; everything else still
+      // merges into `booking`, which is where providerOptions always went.
+      const {
+        participantNotification: notificationOption,
+        flowControlSettings,
+        sendSmsReminder,
+        formSubmission,
+        ...bookingOptions
+      } = input.providerOptions ?? {};
+      // Canonical `notify` is Wix's `participantNotification.notifyParticipants`;
+      // an explicit providerOptions.participantNotification still wins.
+      const participantNotification = {
+        ...(input.notify !== undefined ? { notifyParticipants: input.notify } : {}),
+        ...(notificationOption && typeof notificationOption === 'object' ? notificationOption : {}),
+      };
       const res = await http.request(c, {
         method: 'POST',
         path: 'bookings/v2/bookings',
@@ -258,8 +320,12 @@ export const wix = defineAdapter<WixCredentials>({
                 }
               : {}),
             ...(hasParticipants ? {} : { totalParticipants: 1 }),
-            ...input.providerOptions,
+            ...bookingOptions,
           },
+          ...(Object.keys(participantNotification).length ? { participantNotification } : {}),
+          ...(flowControlSettings !== undefined ? { flowControlSettings } : {}),
+          ...(sendSmsReminder !== undefined ? { sendSmsReminder } : {}),
+          ...(formSubmission !== undefined ? { formSubmission } : {}),
         },
       });
       return toBooking(res?.booking);
@@ -275,19 +341,33 @@ export const wix = defineAdapter<WixCredentials>({
       // reschedule. Cancellation routes to the cancel endpoint.
       if (input.range) {
         assertValidRange(input.range, 'wix');
-        // `revision` is REQUIRED on reschedule (optimistic concurrency).
-        const { revision: optRevision, ...rest } = input.providerOptions ?? {};
-        const revision = optRevision ?? (await currentRevision(http, c, id));
+        // `revision` is REQUIRED on reschedule (optimistic concurrency). The slot
+        // identifiers have no canonical field, so they come through
+        // providerOptions — echo back the full slot you got from
+        // `searchAvailability` (its `raw`) rather than assembling one by hand.
+        const {
+          revision: optRevision,
+          scheduleId,
+          sessionId,
+          timezone,
+          ...rest
+        } = input.providerOptions ?? {};
+        const revision = requireRevision(optRevision ?? (await currentRevision(http, c, id)), id);
         const res = await http.request(c, {
           method: 'POST',
           path: `bookings/v2/bookings/${enc(id)}/reschedule`,
           body: {
-            ...(revision !== undefined ? { revision } : {}),
+            revision,
             slot: {
               startDate: input.range.start,
               endDate: input.range.end,
               ...(input.staffId ? { resource: { id: input.staffId } } : {}),
               ...(input.serviceId ? { serviceId: input.serviceId } : {}),
+              ...(scheduleId !== undefined ? { scheduleId } : {}),
+              ...(sessionId !== undefined ? { sessionId } : {}),
+              ...(timezone ?? input.range.timezone
+                ? { timezone: timezone ?? input.range.timezone }
+                : {}),
             },
             ...rest,
           },
@@ -296,12 +376,15 @@ export const wix = defineAdapter<WixCredentials>({
       }
       if (input.status === 'cancelled') {
         // Wix's cancel endpoint returns the updated booking, so map it directly
-        // rather than making a second round-trip. `revision` is REQUIRED.
-        const revision = input.providerOptions?.revision ?? (await currentRevision(http, c, id));
+        // rather than making a second round-trip. `revision` is REQUIRED; the
+        // remaining providerOptions (flowControlSettings, participantNotification)
+        // are forwarded, same as on the reschedule branch.
+        const { revision: optRevision, ...rest } = input.providerOptions ?? {};
+        const revision = requireRevision(optRevision ?? (await currentRevision(http, c, id)), id);
         const res = await http.request(c, {
           method: 'POST',
           path: `bookings/v2/bookings/${enc(id)}/cancel`,
-          body: { ...(revision !== undefined ? { revision } : {}) },
+          body: { revision, ...rest },
         });
         return toBooking(res?.booking);
       }
@@ -313,16 +396,22 @@ export const wix = defineAdapter<WixCredentials>({
 
     async cancelBooking(id, options) {
       const c = await http.resolve();
-      // `revision` is REQUIRED on cancel; `participantNotification` controls emails.
-      const revision = await currentRevision(http, c, id);
+      // `revision` is REQUIRED on cancel. `CancelOptions` has no field to carry
+      // one, so it is always read back first — and if it can't be resolved we
+      // fail here rather than sending a request Wix is certain to reject.
+      // (`updateBooking({ status: 'cancelled' })` accepts one via providerOptions.)
+      const revision = requireRevision(await currentRevision(http, c, id), id);
+      // Wix only delivers `message` when `notifyParticipants` is true.
+      const participantNotification = {
+        ...(options?.notify !== undefined ? { notifyParticipants: options.notify } : {}),
+        ...(options?.reason ? { message: options.reason } : {}),
+      };
       await http.request(c, {
         method: 'POST',
         path: `bookings/v2/bookings/${enc(id)}/cancel`,
         body: {
-          ...(revision !== undefined ? { revision } : {}),
-          ...(options?.notify !== undefined
-            ? { participantNotification: { notifyParticipants: options.notify } }
-            : {}),
+          revision,
+          ...(Object.keys(participantNotification).length ? { participantNotification } : {}),
         },
         parse: 'none',
       });
@@ -330,18 +419,37 @@ export const wix = defineAdapter<WixCredentials>({
 
     async listBookings(query) {
       assertValidRange(query.range, 'wix');
+      if (query.staffId) {
+        // The documented filterable set is id / status / paymentStatus /
+        // contactDetails.* / the date fields / the slot fields under
+        // `bookedEntity.item.slot.*` — none of which is a staff or resource. A
+        // guessed field name would either 400 or be silently ignored (returning
+        // every staff member's bookings as if they matched), so refuse instead.
+        // TODO: revisit if Wix ever documents a staff/resource filter here.
+        return unsupported(
+          'wix',
+          "filtering bookings by staffId — Query Extended Bookings exposes no staff/resource filter, so list the window and filter on the result's staffId client-side",
+        );
+      }
       const c = await http.resolve();
+      const status = wixStatusFilter(query.status);
       // Reader V2's only list method is Query Extended Bookings.
-      // TODO: verify against live API — the exact filterable field name for the
-      // date window (`startDate` here) isn't published; confirm on a live tenant.
+      // TODO: verify against live API — Wix publishes no exhaustive list of
+      // filterable fields, so the date-window field name (`startDate` here) is
+      // still unconfirmed; check it on a live tenant.
       const { raw, next } = await queryExtendedBookings(
         http,
         c,
         {
           startDate: { $gte: query.range.start, $lte: query.range.end },
-          ...(query.staffId ? { 'bookedEntity.slot.resource.id': query.staffId } : {}),
+          ...(status !== undefined ? { status } : {}),
+          ...(query.customerId ? { 'contactDetails.contactId': query.customerId } : {}),
         },
-        { limit: query.limit ?? 50, ...(query.pageToken ? { cursor: query.pageToken } : {}) },
+        {
+          // Documented max is 100; clamp rather than let an upstream 400 through.
+          limit: Math.min(query.limit ?? 50, 100),
+          ...(query.pageToken ? { cursor: query.pageToken } : {}),
+        },
       );
       const bookings = raw.map(toBooking);
       return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
@@ -349,6 +457,9 @@ export const wix = defineAdapter<WixCredentials>({
 
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
       assertValidRange(query.range, 'wix');
+      // `serviceId` is required unless the request pages by cursor (which this
+      // adapter never does), so demand it here rather than take the 400.
+      const serviceId = requireService(query.serviceId);
       // Time Slots V2 works in LOCAL time: it takes `fromLocalDate`/`toLocalDate`
       // (no offset) plus an IANA `timeZone`, and returns `localStartDate`/
       // `localEndDate` (also offset-less). Convert those back to canonical instants
@@ -363,33 +474,38 @@ export const wix = defineAdapter<WixCredentials>({
         });
       }
       const c = await http.resolve();
-      // TODO: verify against live API — Time Slots V2 public path + resource-filter shape.
+      // List Availability Time Slots covers appointment-based services only —
+      // class and course sessions come from List Event Time Slots instead.
       const res = await http.request(c, {
         method: 'POST',
         path: '_api/service-availability/v2/time-slots',
         body: {
-          ...(query.serviceId ? { serviceId: query.serviceId } : {}),
+          serviceId,
           fromLocalDate: toLocalWallClock(query.range.start, tz),
           toLocalDate: toLocalWallClock(query.range.end, tz),
           timeZone: tz,
+          // The default returns bookable AND un-bookable slots; availability
+          // means the bookable ones.
+          bookable: true,
+          // `availableResources` comes back empty unless the request asks for
+          // resources — either this staff filter or a caller-supplied
+          // `includeResourceTypeIds` (passed through providerOptions below).
           ...(query.staffId ? { resourceTypes: [{ resourceIds: [query.staffId] }] } : {}),
+          ...query.providerOptions,
         },
       });
-      const slots = asArray(res?.timeSlots ?? res?.availabilityTimeSlots, 'wix', 'timeSlots');
+      const slots = asArray(res?.timeSlots, 'wix', 'timeSlots');
       const toInstant = (local: unknown): string | undefined =>
         typeof local === 'string' && local
           ? localToInstant(local, tz, (ms) => formatWithOffset(ms, 0))
           : undefined;
       return slots.flatMap((s: any): AvailabilitySlot[] => {
-        const start = toInstant(s.localStartDate) ?? (isInstant(s.startDate) ? s.startDate : undefined);
-        if (start === undefined) return [];
-        const end =
-          toInstant(s.localEndDate) ??
-          (isInstant(s.endDate) ? s.endDate : undefined) ??
-          (query.durationMinutes ? endFromDuration(start, query.durationMinutes) : undefined);
-        if (end === undefined) return [];
-        const staffId =
-          s.availableResources?.[0]?.resources?.[0]?.id ?? s.resource?.id ?? query.staffId;
+        // A TimeSlot carries only localStartDate/localEndDate — there is no
+        // offset-bearing pair and no duration to derive an end from.
+        const start = toInstant(s.localStartDate);
+        const end = toInstant(s.localEndDate);
+        if (start === undefined || end === undefined) return [];
+        const staffId = s.availableResources?.[0]?.resources?.[0]?.id ?? query.staffId;
         return [{ start, end, ...(staffId ? { staffId: String(staffId) } : {}), raw: s }];
       });
     },

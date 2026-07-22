@@ -6,6 +6,245 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+A second audit pass, again diffing each adapter against its provider's current
+published documentation, plus RFC 4791/5545 for the CalDAV stack.
+
+### Breaking
+
+- **`SETMORE_MAX_PAGE_SIZE` is removed** from `unibooking/adapters/setmore`. It
+  documented a 150-appointment cap that `listBookings` never actually applied
+  (no page-size parameter is sent), so it described behavior the adapter did not
+  have. Nothing in the package referenced it.
+- **Several `updateBooking` calls that silently did nothing now throw.** Square,
+  Acuity, Mindbody and Microsoft Bookings cannot write a booking `status`, and
+  Acuity cannot change a service (or reassign staff outside a reschedule). These
+  previously returned a healthy-looking `Booking` while the provider ignored the
+  field. Use `cancelBooking()` to cancel. Setmore likewise rejects `status`, and
+  Wix rejects `listBookings({ staffId })` — Wix exposes no staff filter, so the
+  old behavior sent a filter that was ignored or rejected upstream.
+- **Bookeo `createBooking` requires `providerOptions.participants`** with a
+  `peopleCategoryId`. The previous hard-coded participants block omitted that
+  required field, so every create failed upstream anyway; there is no safe
+  default to infer, so it now fails client-side with a message naming the field.
+- **Phorest `createBooking` requires `staffId`** — `ServiceSchedule.staffId` is
+  required by the spec, so a create without it was a guaranteed 400.
+- **Bookeo `updateBooking` rejects `title`/`staffId`/`serviceId`/`status`.** Its
+  PUT is not a documented partial-update contract, so only a reschedule is safe
+  to send; these fields were previously accepted and dropped.
+- **Zenoti `searchAvailability` rejects a multi-day range,** and `listBookings`
+  rejects a `pageToken`. Both previously accepted the input and silently
+  returned partial results. Availability stays single-day deliberately: each
+  query creates a transient upstream booking, so fanning out per day would leave
+  a throwaway booking behind for every day in the range.
+- **Vagaro and Setmore availability ranges are capped** (31 and 62 days) with a
+  clear error, replacing a silent truncation to a partial slot list.
+
+### Fixed
+
+- **Microsoft Bookings `searchAvailability` returned nothing.** It read the
+  OData `value` wrapper, but `getStaffAvailability` returns its collection under
+  `staffAvailabilityItem`. It also dropped `slotsAvailable` windows (bookable
+  capacity on 1:n group services) and truncated businesses with more than one
+  page of staff members.
+- **Microsoft Bookings availability times could be 8 hours off.** Bookings
+  labels offset-less times with a Windows *display* name
+  (`"(UTC-08:00) Pacific Time (US & Canada)"`), which resolves via neither the
+  IANA map nor `Intl`; the value silently fell back to UTC. The `(UTC±HH:MM)`
+  prefix is now parsed as a last-resort offset.
+- **Microsoft Bookings `updateBooking` silently swallowed `status` and `title`,**
+  and omitted the `@odata.type` annotation its own create path sends. A
+  `status: 'cancelled'` update now throws and points at `cancelBooking()`.
+- **Calendly `createBooking` failed whenever `range.timezone` was unset.** The
+  Create Event Invitee API requires `invitee.timezone`, but the canonical
+  `TimeRange.timezone` is optional and display-only. It now falls back to a new
+  `defaultTimezone` credential, then `UTC`. The cancel-and-rebook path also
+  carries the original invitee's timezone across.
+- **Calendly `listBookings` ignored `status: 'confirmed'`** (which maps to
+  `active`) and forwarded a `limit` above the documented `count` max of 100.
+- **iCalendar: a VALARM overwrote its event.** `parseICS` had no
+  component-nesting guard, so an EMAIL alarm's `SUMMARY`, `ATTENDEE` and
+  `DURATION` became the booking's title, customer and end time.
+- **iCalendar: rescheduling a DURATION-sized event produced an invalid object.**
+  `patchICS` inserted a `DTEND` while leaving the existing `DURATION`, which
+  RFC 5545 §3.6.1 forbids in the same VEVENT.
+- **CalDAV: `listBookings` could return nothing at all.** XML numeric character
+  references were never decoded, so servers that escape the CR of a folded line
+  as `&#13;` (sabre-based: Nextcloud, Baïkal) yielded ICS lines ending in a
+  literal `&#13;` — `BEGIN:VEVENT` never matched.
+- **iCalendar: a DQUOTEd `TZID` was dropped on reschedule,** flattening a zoned
+  series to a fixed UTC offset that drifts an hour at every DST transition.
+- **iCalendar: a CRLF in `uid` or the attendee email could inject arbitrary
+  properties.** Both are now sanitized (they are opaque tokens, not TEXT).
+- **CalDAV `getBooking`/`updateBooking` could act on the wrong occurrence.**
+  Both used the first VEVENT; override-before-master ordering is legal, so they
+  now select the component with no `RECURRENCE-ID`. `parseICS` exposes
+  `recurrenceId`, and requests now send CalDAV-appropriate `accept` headers
+  instead of the shared `application/json` default.
+- **Acuity never reported a no-show.** `noShow` rides on top of `canceled` in
+  Acuity's model, so testing `canceled` first made `'no_show'` unreachable.
+- **Acuity `listBookings` returned bookings outside the requested range,** since
+  `minDate`/`maxDate` are whole dates; results are now trimmed to the instants.
+- **Acuity `updateBooking` silently discarded `status`, `serviceId`, and a
+  `staffId` without a range.** Acuity ignores non-white-listed fields, so these
+  now throw rather than report a success that never happened.
+- **Square `createBooking` dropped the title** — it is written as
+  `customer_note`, which is what reads back as the title.
+- **Square `updateBooking` accepted a `status` it cannot apply** (the field is
+  read-only); it now throws and points at `cancelBooking()`.
+- **`verifyGraphClientState` accepted forged payloads when the expected
+  `clientState` was empty** (e.g. an unset env var). Matches the guard the
+  Google and Vagaro verifiers already had.
+- **`verifyRs256Jwt` rejected instead of returning `null`** for a token whose
+  signature segment is not valid base64url — the decode ran outside the guarded
+  `verify()`, so a malformed Wix webhook threw instead of cleanly failing.
+- **`createRegistry` suggested an import that does not exist** for
+  `microsoft_bookings` (the export is `microsoftBookings`).
+- **Mindbody `getBooking` only worked for appointments happening today.** It sent
+  `AppointmentIds` alone, but `StartDate` defaults to today and `EndDate` to
+  `StartDate` — so any other booking came back empty and surfaced as `NOT_FOUND`.
+- **Mindbody `updateBooking` turned every reschedule into a resize.** It omitted
+  `EndDateTime`, which defaults to the staff member's default duration, silently
+  discarding `range.end`. It also dropped `serviceId` and `title`, and accepted a
+  `status` it cannot write.
+- **Mindbody `searchAvailability` reported a whole shift as one slot.** An
+  `Availabilities[]` entry is a staff availability *window*, not a bookable slot;
+  it is now sliced by `durationMinutes` (or the session type's default length),
+  honoring `BookableEndDateTime` as the last permitted start.
+- **Mindbody `createBooking` discarded the title** even though `toBooking` reads
+  it back from `Notes`, so every created booking returned titled "Appointment".
+- **Bookeo creates were schema-invalid.** The participants block hard-coded
+  `{ number: 1 }` without the required `peopleCategoryId`. There is no safe
+  default, so `createBooking` now fails client-side with a message naming the
+  field, rather than sending a request the API always rejects.
+- **Bookeo never returned a customer.** `expandCustomer` defaults to false and
+  was never sent, so `booking.customer` was always undefined. It also ignored
+  `customer.id` (the documented way to book an existing customer), reported
+  no-shows and unaccepted bookings as `confirmed`, and never set `updatedAt`.
+- **Wix `searchAvailability` sent an invalid request and returned unbookable
+  slots.** `serviceId` is required (it was conditional), `bookable: true` was
+  never sent (the default returns un-bookable slots too), and the staff id was
+  read from a list that is empty unless resources are explicitly requested.
+- **Wix reschedule and cancel could send a request guaranteed to fail.**
+  `revision` is required on both; when it could not be resolved the field was
+  simply omitted. They now fail fast client-side.
+- **Wix `createBooking` could not reach its own top-level parameters.**
+  `providerOptions` was merged into the `booking` object, making
+  `participantNotification`, `flowControlSettings`, `sendSmsReminder` and
+  `formSubmission` unreachable and silently dropping `notify`.
+- **Phorest `searchAvailability` could never return a slot.** It expected a
+  top-level array, but the endpoint returns `{data: [...]}` with `endTime` and
+  `staffId` nested under `clientSchedules[].serviceSchedules[]` — so the guard
+  filtered out 100% of results and the call threw `UPSTREAM`.
+- **Phorest `createBooking` always threw.** Its post-processing read an
+  `appointmentId` that the create response does not carry, then fell back to
+  filtering by `group_booking_id` (a different field from the `bookingId` it
+  was given), and finally mapped the booking envelope as if it were an
+  appointment. The id is read from `clientAppointmentSchedules[]` instead.
+- **Phorest reschedule sent the wrong time type and could not cross days.**
+  `startTime`/`endTime` are `LocalTime` paired with a separate `appointmentDate`,
+  but full ISO instants were sent — and inconsistently, since the backfill path
+  copied the provider's already-correct `LocalTime`.
+- **Phorest `listBookings` returned an extra day and could shift the window.**
+  `to_date` is inclusive, and the dates were sliced off the offset-local string
+  although Phorest dates are UTC. It also ignored `status` entirely (cancelled
+  bookings need `fetch_canceled`) and forwarded an unclamped `size` past the
+  documented maximum of 100.
+- **Phorest `updateBooking` silently dropped `status`;** it now routes to the
+  documented cancel/confirm transitions and rejects statuses with no equivalent.
+- **Phorest basic auth threw on non-Latin-1 credentials** — `btoa` now receives
+  UTF-8 bytes.
+- **Setmore `updateBooking({ status })` failed with a misleading error** about a
+  missing title, because the unsupported-field guard did not check `status`. Its
+  availability fan-out also truncated ranges past 62 days silently, and computed
+  the last day using the start's offset for both endpoints.
+- **Zenoti had cancelled and no-show inverted,** plus four more values wrong
+  against the documented status enum (`NoShow = -2, Cancelled = -1, New = 0,
+  Closed = 1, Checkin = 2, Confirm = 4, Voided = 21`). `Closed` was reported as
+  `pending` rather than `completed`, `Confirm` as `completed` rather than
+  `confirmed`, `Voided` fell through to `unknown`, and three branches matched
+  values Zenoti never sends.
+- **Zenoti `listBookings` returned nothing for a same-day range.** Both endpoints
+  were sliced to a date, but the API requires `start_date` and `end_date` to
+  differ and treats the end as exclusive — so a 09:00–17:00 window collapsed to
+  an empty one. It also silently dropped `status`, `limit` and `pageToken`, and
+  could never return cancellations (`include_no_show_cancel` was never sent).
+- **Zenoti availability fabricated a UTC offset.** Slot `Time` values are
+  center-local without an offset, but one code path appended `Z` while another
+  treated the same value as wall-clock, so the two disagreed and
+  `AvailabilitySlot.start` claimed an instant it was not.
+- **Zenoti usually lost the guest phone** — it read `mobile.number`, which the
+  documented sample shows as null, ignoring the populated `display_number`.
+- **Boulevard reschedule failed every time** with a spurious `CONFLICT`.
+  `appointmentRescheduleAvailableTimes` returns a *list* of payloads, but
+  `.availableTimes` was read off the array itself, yielding `undefined` and an
+  empty candidate set.
+- **Boulevard retried failures that can never succeed.** GraphQL errors arrive as
+  HTTP 200 with an `errors[]` body and were all mapped to `UPSTREAM`, which
+  `withRetry` treats as retryable — re-issuing non-idempotent mutations. They are
+  now classified from `extensions.code` (falling back to the message) into
+  `NOT_FOUND`/`AUTH`/`FORBIDDEN`/`CONFLICT`/`INVALID_INPUT`. A missing booking
+  also returned `UPSTREAM` instead of `NOT_FOUND`, because GraphQL answers a bad
+  id with `data.appointment: null` and HTTP 200.
+- **Boulevard ignored the booking errors it asked for.** `bookingCreate` selected
+  `booking { errors { code message } }` but never read them, so a booking that
+  came back with errors proceeded to add a service and complete regardless.
+- **Vagaro `listBookings` ignored the requested range entirely** — never
+  validated, never filtered — returning the customer's whole history. It could
+  also emit a `nextPageToken` forever (`rows.length >= rows.length` is always
+  true), so paginating to exhaustion never terminated.
+- **Vagaro `searchAvailability` returned only the first day** of a multi-day
+  range and never filtered slots to the window; it now iterates days, capped at
+  31 with a clear error beyond it.
+- **Vagaro `updateBooking` could omit a field it documents as required**
+  (`serviceProviderId` resolved to `undefined` and was dropped by
+  `JSON.stringify`), and silently discarded `title`.
+- **Wix `listBookings` filtered staff on an undocumented field.** Wix exposes no
+  staff/resource filter on extended-bookings, so `staffId` now throws
+  `UNSUPPORTED` instead of sending a filter that 400s or is ignored. `status` and
+  `customerId` are now forwarded, and the page limit is clamped to 100.
+
+### Added
+
+- `verifyCalendlySignature` accepts `toleranceMs` (and an injectable `now`) to
+  reject replayed deliveries, as Calendly's docs recommend — the same opt-in
+  shape the Bookeo verifier already had.
+- `CalendlyCredentials.defaultTimezone`.
+- Square `searchAvailability` honors `query.providerOptions`.
+- Acuity honors `notify: false` on create and reschedule (`noEmail`).
+- Mindbody honors `notify` on create (`SendEmail`), and forwards `customerId`
+  (`ClientId`) and the site location on `listBookings`.
+- Bookeo honors `notify` on create and cancel (`notifyCustomer`/`notifyUsers`),
+  returns cancelled bookings when asked (`includeCanceled`), and rejects a range
+  wider than the documented 31-day maximum client-side.
+- Wix maps `notify` and a cancellation `reason` onto `participantNotification`,
+  and passes `scheduleId`/`sessionId`/`timezone` through on reschedule.
+- Apple/CalDAV `listBookings` honors `query.limit` and `query.status`
+  client-side (CalDAV has no server-side paging or status filter).
+- `AuthResult` is exported from the package root; it was reachable only as the
+  return type of the already-exported `AuthFn`.
+- 60+ additional Windows/Exchange timezone ids, all validated against `Intl`.
+
+### Changed
+
+- **The README's verification claims were overstated and are now accurate.** It
+  said the conformance suite asserts "URL, headers and request body"; it matches
+  on request path and method only, and never inspects headers or bodies. It also
+  implied adapters with open sandboxes are exercised live — none are. No adapter
+  is verified against a live tenant; correctness rests on spec diffs like this
+  one.
+
+### Removed
+
+- `BuildVEventInput.status` and the `STATUS` branch in `buildICS` — no caller.
+- Mindbody's `AppointmentTypeId` fallback (not a field in v6) and Wix's
+  `availabilityTimeSlots`/`startDate`/`endDate`/`resource` response branches
+  (none exist on the documented Time Slots V2 shape).
+- Vestigial `export` on `extractCalendarData` and `WINDOWS_TO_IANA`; a no-op
+  fractional-seconds strip in `instantToICalUTC`; five unreferenced Next.js
+  template SVGs in the demo; and several stale comments (a Node 18 floor that is
+  now 20, a "live integration tests" note for tests that do not exist, a
+  resolved Calendly `TODO`).
+
 ## [0.2.0] - 2026-07-20
 
 Every adapter was diffed against its provider's current published API

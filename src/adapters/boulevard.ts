@@ -1,7 +1,7 @@
 import type { Booking, BookingStatus, Customer } from '../types';
 import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
 import type { HttpContext } from '../http';
-import { UnibookingError } from '../errors';
+import { UnibookingError, type ErrorCode } from '../errors';
 import { assertValidRange, parseOffsetMinutes } from '../time';
 import { base64ToBytes, hmacSha256BytesBase64 } from '../crypto';
 
@@ -62,27 +62,28 @@ const LIST_APPOINTMENTS = `query ListAppointments($locationId: ID!, $query: Quer
   }
 }`;
 
+// Selections are kept to what the mapper actually reads — an unread field is a
+// claim about the schema nobody verifies.
 const BOOKING_CREATE = `mutation BookingCreate($input: BookingCreateInput!) {
   bookingCreate(input: $input) {
-    booking { id startTime bookingClients { id clientId } errors { code message } }
-    bookingWarnings { code message }
+    booking { id bookingClients { id } errors { code message } }
   }
 }`;
 
 const BOOKING_ADD_SERVICE = `mutation BookingAddService($input: BookingAddServiceInput!) {
   bookingAddService(input: $input) {
-    bookingService { id serviceId staffId }
-    bookingWarnings { code message }
+    bookingService { id }
   }
 }`;
 
 const BOOKING_COMPLETE = `mutation BookingComplete($input: BookingCompleteInput!) {
   bookingComplete(input: $input) {
     bookingAppointments { appointment { ${APPOINTMENT_FIELDS} } }
-    bookingWarnings { code message }
   }
 }`;
 
+// Returns `[AppointmentRescheduleAvailableTimesPayload]` — a list, one payload
+// per bookable service, each carrying its own availableTimes.
 const RESCHEDULE_AVAILABLE_TIMES = `mutation RescheduleTimes($input: AppointmentRescheduleAvailableTimesInput!) {
   appointmentRescheduleAvailableTimes(input: $input) {
     availableTimes { bookableTimeId startTime }
@@ -210,6 +211,52 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
+/**
+ * Classify a GraphQL error. Boulevard reports validation, not-found and
+ * permission failures as HTTP 200 + `errors[]`, and UPSTREAM is retryable — so
+ * blanket-mapping them there makes `withRetry` re-issue non-idempotent
+ * mutations. Prefer the machine-readable `extensions.code`, fall back to a
+ * conservative message match, and leave anything genuinely unrecognized (i.e.
+ * possibly transient) on UPSTREAM.
+ */
+function gqlErrorCode(err: any): ErrorCode {
+  const extension = String(err?.extensions?.code ?? '').toUpperCase();
+  if (extension) {
+    if (extension.includes('NOT_FOUND')) return 'NOT_FOUND';
+    if (extension.includes('UNAUTHENTICATED')) return 'AUTH';
+    if (
+      extension.includes('FORBIDDEN') ||
+      extension.includes('UNAUTHORIZED') ||
+      extension.includes('PERMISSION')
+    ) {
+      return 'FORBIDDEN';
+    }
+    if (extension.includes('CONFLICT')) return 'CONFLICT';
+    if (
+      extension.includes('BAD_USER_INPUT') ||
+      extension.includes('VALIDATION') ||
+      extension.includes('INVALID') ||
+      extension.includes('ARGUMENT')
+    ) {
+      return 'INVALID_INPUT';
+    }
+  }
+  const message = String(err?.message ?? '').toLowerCase();
+  if (/not found|does not exist|no such|couldn't find|could not find/.test(message)) return 'NOT_FOUND';
+  if (/unauthenticated|invalid credentials|not signed in/.test(message)) return 'AUTH';
+  if (/forbidden|not authorized|unauthorized|not allowed|permission/.test(message)) return 'FORBIDDEN';
+  // Document-level GraphQL failures (unknown field, wrong type, missing
+  // variable) will never succeed on a retry either.
+  if (
+    /invalid|must be|is required|can't be blank|cannot be blank|expected type|unknown (field|argument)|didn't provide/.test(
+      message,
+    )
+  ) {
+    return 'INVALID_INPUT';
+  }
+  return 'UPSTREAM';
+}
+
 /** POST a GraphQL document and return `data`, mapping a GraphQL `errors` array
  *  (which Boulevard returns with HTTP 200) to a UnibookingError. */
 async function gql<T = any>(
@@ -224,12 +271,26 @@ async function gql<T = any>(
     const first = errors[0];
     throw new UnibookingError({
       provider: 'boulevard',
-      code: 'UPSTREAM',
+      code: gqlErrorCode(first),
       message: first?.message ? String(first.message) : 'GraphQL error',
       ...(first?.extensions?.code ? { providerCode: String(first.extensions.code) } : {}),
     });
   }
   return (res as any)?.data as T;
+}
+
+/** The booking flow reports per-booking failures in a payload-level `errors`
+ *  list rather than the GraphQL envelope, so a booking can come back "created"
+ *  and unusable. Surface it before the chain proceeds to addService/complete. */
+function assertNoBookingErrors(errors: unknown, ctx: string): void {
+  const first = asArray(errors, 'boulevard', ctx)[0];
+  if (!first) return;
+  throw new UnibookingError({
+    provider: 'boulevard',
+    code: 'INVALID_INPUT',
+    message: first.message ? String(first.message) : `${ctx} failed`,
+    ...(first.code ? { providerCode: String(first.code) } : {}),
+  });
 }
 
 function requireField(value: string | undefined, hint: string): string {
@@ -269,7 +330,16 @@ async function getAppointment(
   id: string,
 ): Promise<Booking> {
   const data = await gql(http, c, GET_APPOINTMENT, { id });
-  return toBooking(data?.appointment);
+  // A missing appointment is `data.appointment: null` under HTTP 200 — without
+  // this it surfaces as UPSTREAM "expected an object, got object".
+  if (data?.appointment == null) {
+    throw new UnibookingError({
+      provider: 'boulevard',
+      code: 'NOT_FOUND',
+      message: `appointment ${id} not found`,
+    });
+  }
+  return toBooking(data.appointment);
 }
 
 export const boulevard = defineAdapter<BoulevardCredentials>({
@@ -316,6 +386,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         },
       });
       const booking = created?.bookingCreate?.booking;
+      assertNoBookingErrors(booking?.errors, 'bookingCreate');
       const bookingId = reqString(String(booking?.id ?? ''), 'boulevard', 'booking.id');
       // bookingAddService wants the BookingClient id, not the Client id.
       const bookingClientId = reqString(
@@ -324,10 +395,16 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         'booking.bookingClients[0].id',
       );
 
-      // Step 2 — attach the service.
-      await gql(http, c, BOOKING_ADD_SERVICE, {
+      // Step 2 — attach the service. No bookingService id back means nothing was
+      // attached, and completing would commit an empty booking.
+      const added = await gql(http, c, BOOKING_ADD_SERVICE, {
         input: { bookingId, bookingClientId, serviceId, staffId },
       });
+      reqString(
+        String(added?.bookingAddService?.bookingService?.id ?? ''),
+        'boulevard',
+        'bookingService.id',
+      );
 
       // Step 3 — commit. Only here does a real Appointment exist.
       const completed = await gql(http, c, BOOKING_COMPLETE, {
@@ -348,43 +425,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     async updateBooking(id, input) {
       const c = await http.resolve();
 
-      if (input.range) {
-        assertValidRange(input.range, 'boulevard');
-        // Reschedule is two-step: a bookableTimeId can only come from
-        // appointmentRescheduleAvailableTimes — it is opaque and not constructible.
-        const times = await gql(http, c, RESCHEDULE_AVAILABLE_TIMES, {
-          input: {
-            appointmentId: id,
-            date: toDate(input.range.start),
-            ...(input.range.timezone ? { tz: input.range.timezone } : {}),
-          },
-        });
-        const available = asArray(
-          times?.appointmentRescheduleAvailableTimes?.availableTimes ?? [],
-          'boulevard',
-          'availableTimes',
-        );
-        const wanted = Date.parse(input.range.start);
-        const match = available.find((t: any) => Date.parse(String(t?.startTime)) === wanted);
-        if (!match) {
-          throw new UnibookingError({
-            provider: 'boulevard',
-            code: 'CONFLICT',
-            message: `no bookable reschedule slot at ${input.range.start}`,
-          });
-        }
-        const data = await gql(http, c, APPOINTMENT_RESCHEDULE, {
-          input: {
-            appointmentId: id,
-            bookableTimeId: String((match as any).bookableTimeId),
-            // Non-null in the schema, so it must always be sent.
-            sendNotification: input.notify ?? false,
-            ...input.providerOptions,
-          },
-        });
-        return toBooking(data?.appointmentReschedule?.appointment);
-      }
-
+      // Reschedule and field edits are separate mutations, so validate the whole
+      // patch up front — rejecting half-way would leave the appointment moved but
+      // otherwise unchanged.
       if (input.status === 'cancelled') {
         return unsupported(
           'boulevard',
@@ -408,13 +451,59 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
           message: `state ${state} is not settable; allowed: ${[...SETTABLE_STATES].join(', ')}`,
         });
       }
+      if (input.range) assertValidRange(input.range, 'boulevard');
+
+      let rescheduled: Booking | undefined;
+      if (input.range) {
+        // Reschedule is two-step: a bookableTimeId can only come from
+        // appointmentRescheduleAvailableTimes — it is opaque and not constructible.
+        const times = await gql(http, c, RESCHEDULE_AVAILABLE_TIMES, {
+          input: {
+            appointmentId: id,
+            date: toDate(input.range.start),
+            ...(input.range.timezone ? { tz: input.range.timezone } : {}),
+          },
+        });
+        // The field is a LIST of payloads (one per bookable service); reading
+        // `.availableTimes` off the list itself yields undefined, which made every
+        // reschedule fail with a spurious CONFLICT.
+        const available = asArray(
+          times?.appointmentRescheduleAvailableTimes,
+          'boulevard',
+          'appointmentRescheduleAvailableTimes',
+        ).flatMap((payload: any) => asArray(payload?.availableTimes, 'boulevard', 'availableTimes'));
+        const wanted = Date.parse(input.range.start);
+        const match = available.find((t: any) => Date.parse(String(t?.startTime)) === wanted);
+        if (!match) {
+          throw new UnibookingError({
+            provider: 'boulevard',
+            code: 'CONFLICT',
+            message: `no bookable reschedule slot at ${input.range.start}`,
+          });
+        }
+        const data = await gql(http, c, APPOINTMENT_RESCHEDULE, {
+          input: {
+            appointmentId: id,
+            bookableTimeId: String((match as any).bookableTimeId),
+            // Non-null in the schema, so it must always be sent.
+            sendNotification: input.notify ?? false,
+            ...input.providerOptions,
+          },
+        });
+        rescheduled = toBooking(data?.appointmentReschedule?.appointment);
+        // `title`/`status` don't ride on AppointmentRescheduleInput; fall through
+        // to updateAppointment rather than dropping them.
+        if (input.title === undefined && state === undefined) return rescheduled;
+      }
+
       const data = await gql(http, c, UPDATE_APPOINTMENT, {
         input: {
           id,
           // The field is `notes`, plural.
           ...(input.title !== undefined ? { notes: input.title } : {}),
           ...(state ? { state } : {}),
-          ...input.providerOptions,
+          // providerOptions already went to the reschedule input when there was one.
+          ...(rescheduled ? {} : input.providerOptions),
         },
       });
       return toBooking(data?.updateAppointment?.appointment);
@@ -437,6 +526,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         input: {
           id,
           reason,
+          // The enum is lossy, but `notes` is free text — keep the caller's own
+          // wording rather than discarding it.
+          ...(options?.reason ? { notes: options.reason } : {}),
           ...(options?.notify !== undefined ? { notifyClient: options.notify } : {}),
         },
       });
@@ -447,11 +539,19 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       const c = await http.resolve();
       // Only id/startAt/createdAt/cancelled/staffId are filterable, and there is
       // no endAt — so the range is expressed on startAt alone.
+      // `cancelled` is the only status-ish filter. It has to be sent BOTH ways:
+      // without `cancelled = false` a confirmed-only query still returns
+      // cancellations. no_show is a cancellation reason, so it lives on the
+      // cancelled side too; every other status is post-filtered below.
+      const cancelled =
+        query.status === undefined
+          ? undefined
+          : query.status === 'cancelled' || query.status === 'no_show';
       const clauses = [
         `startAt >= ${q(query.range.start)}`,
         `startAt < ${q(query.range.end)}`,
         ...(query.staffId ? [`staffId = ${q(query.staffId)}`] : []),
-        ...(query.status === 'cancelled' ? ['cancelled = true'] : []),
+        ...(cancelled !== undefined ? [`cancelled = ${cancelled}`] : []),
       ];
       const data = await gql(http, c, LIST_APPOINTMENTS, {
         locationId: c.locationId,
@@ -463,7 +563,11 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       const conn = data?.appointments ?? {};
       // edges and node are both nullable in the schema.
       const nodes = Array.isArray(conn.edges) ? conn.edges.map((e: any) => e?.node).filter(Boolean) : [];
-      const bookings = nodes.map(toBooking);
+      const bookings = nodes
+        .map(toBooking)
+        // `cancelled` can't express confirmed-vs-completed-vs-no_show, so narrow
+        // the rest here rather than returning statuses the caller excluded.
+        .filter((b: Booking) => query.status === undefined || b.status === query.status);
       const endCursor = conn.pageInfo?.endCursor;
       const hasNext = conn.pageInfo?.hasNextPage;
       return {

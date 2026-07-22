@@ -15,6 +15,12 @@ export interface AdapterRegistry {
   ids(): ProviderId[];
 }
 
+/** Export names are camelCase while provider ids are snake_case, so the
+ *  "you forgot to register this" hint can't just interpolate the id. */
+const EXPORT_NAMES: Partial<Record<ProviderId, string>> = {
+  microsoft_bookings: 'microsoftBookings',
+};
+
 export function createRegistry(adapters: ReadonlyArray<AdapterFactory<any>>): AdapterRegistry {
   const map = new Map<ProviderId, AdapterFactory>();
   for (const a of adapters) map.set(a.id, a as AdapterFactory);
@@ -25,7 +31,7 @@ export function createRegistry(adapters: ReadonlyArray<AdapterFactory<any>>): Ad
       if (!a) {
         throw new Error(
           `unibooking: no adapter registered for "${id}". ` +
-            `Import it (e.g. import { ${id} } from 'unibooking/adapters/${id}') ` +
+            `Import it (e.g. import { ${EXPORT_NAMES[id] ?? id} } from 'unibooking/adapters/${id}') ` +
             `and pass it to createRegistry([...]).`,
         );
       }

@@ -186,6 +186,9 @@ export const square = defineAdapter<SquareCredentials>({
           booking: {
             location_id: c.locationId,
             start_at: input.range.start,
+            // Square has no title field; `customer_note` is what `toBooking`
+            // reads back as the title, so write the caller's there too.
+            ...(input.title ? { customer_note: input.title } : {}),
             ...(customerId ? { customer_id: customerId } : {}),
             appointment_segments: [
               {
@@ -209,6 +212,18 @@ export const square = defineAdapter<SquareCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'square');
+      // `status` is read-only on Square's Booking; a PUT carrying it would look
+      // like it worked and change nothing.
+      if (input.status !== undefined) {
+        throw new UnibookingError({
+          provider: 'square',
+          code: 'INVALID_INPUT',
+          message:
+            input.status === 'cancelled'
+              ? 'Square booking status is read-only; use cancelBooking() to cancel'
+              : `Square booking status is read-only (cannot set "${input.status}")`,
+        });
+      }
       const c = await http.resolve();
       // Square PUT requires the current version for optimistic concurrency, and
       // replaces appointment_segments wholesale — so to change staff/service we
@@ -307,6 +322,7 @@ export const square = defineAdapter<SquareCredentials>({
                   ...(query.staffId ? { team_member_id_filter: { any: [query.staffId] } } : {}),
                 },
               ],
+              ...query.providerOptions,
             },
           },
         },

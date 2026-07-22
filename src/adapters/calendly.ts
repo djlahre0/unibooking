@@ -16,9 +16,6 @@ import { assertValidRange, endFromDuration, isInstant } from '../time';
  * Auth: bring your own bearer (Personal Access Token or OAuth). `user` (or
  * `organization`) scopes `listBookings`; when omitted it is discovered via
  * `GET /users/me`.
- *
- * NOTE: the Scheduling API create shape is docs-derived; `CREATE_PATH` and the
- * response mapping are marked `TODO: verify against live API`.
  */
 export type CalendlyCredentials = {
   token: string;
@@ -26,6 +23,9 @@ export type CalendlyCredentials = {
   user?: string;
   /** Calendly organization URI (alternative scope for `listBookings`). */
   organization?: string;
+  /** IANA zone sent as the invitee's `timezone` when a booking's range carries
+   *  none. Calendly requires the field on every create; defaults to `UTC`. */
+  defaultTimezone?: string;
 };
 
 const BASE = 'https://api.calendly.com/';
@@ -53,6 +53,15 @@ function mapStatus(s: unknown): BookingStatus {
     default:
       return 'unknown';
   }
+}
+
+/** Canonical status → Calendly's `status` list filter (`active`/`canceled`).
+ *  Undefined for statuses Calendly has no equivalent of, so the filter is left
+ *  off rather than silently returning the wrong set. */
+function calendlyStatus(s: BookingStatus | undefined): 'active' | 'canceled' | undefined {
+  if (s === 'cancelled') return 'canceled';
+  if (s === 'confirmed') return 'active';
+  return undefined;
 }
 
 function requireService(serviceId: string | undefined): string {
@@ -139,9 +148,11 @@ async function createEventInvitee(
       invitee: {
         email: args.customer.email,
         // `name` and `timezone` are required by the Create Event Invitee API and
-        // live INSIDE the invitee object (not at the top level).
+        // live INSIDE the invitee object (not at the top level). `timezone` is
+        // display-only in the canonical contract and therefore usually absent,
+        // so fall back rather than let every default create 400.
         name: args.customer.name ?? args.customer.email,
-        ...(args.timezone ? { timezone: args.timezone } : {}),
+        timezone: args.timezone ?? c.defaultTimezone ?? 'UTC',
       },
       // Event types with a location require `location: { kind, ... }` on create;
       // pass it (and anything else the API needs) through providerOptions.
@@ -200,18 +211,22 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         );
         const eventType =
           input.serviceId ?? reqString(String(current.event_type ?? ''), 'calendly', 'scheduled_event.event_type');
-        // Carry the original invitee across to the new booking.
+        // Carry the original invitee — including their timezone, which the
+        // create endpoint requires — across to the new booking.
         let customer: Customer | undefined;
+        let inviteeTimezone: string | undefined;
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
         const first = asArray(invitees?.collection, 'calendly', 'invitees')[0];
         if (first?.email) {
           customer = { email: String(first.email), ...(first.name ? { name: String(first.name) } : {}) };
+          if (typeof first.timezone === 'string' && first.timezone) inviteeTimezone = first.timezone;
         }
+        const timezone = input.range.timezone ?? inviteeTimezone;
         const rebooked = await createEventInvitee(http, c, {
           eventType,
           start: input.range.start,
           customer,
-          ...(input.range.timezone ? { timezone: input.range.timezone } : {}),
+          ...(timezone ? { timezone } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
         await http.request(c, {
@@ -267,9 +282,12 @@ export const calendly = defineAdapter<CalendlyCredentials>({
           ...(c.organization ? { organization: c.organization } : {}),
           min_start_time: query.range.start,
           max_start_time: query.range.end,
-          count: query.limit ?? 50,
+          // Documented max is 100; clamp rather than let an upstream 400 through.
+          count: Math.min(query.limit ?? 50, 100),
           page_token: query.pageToken,
-          ...(query.status === 'cancelled' ? { status: 'canceled' } : {}),
+          ...(calendlyStatus(query.status) !== undefined
+            ? { status: calendlyStatus(query.status) }
+            : {}),
         },
       });
       const bookings = asArray(res?.collection, 'calendly', 'scheduled_events').map(toBookingFromEvent);

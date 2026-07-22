@@ -1,7 +1,7 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
 import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
-import { assertValidRange, formatWithOffset } from '../time';
+import { addMinutes, assertValidRange, formatWithOffset } from '../time';
 import { localToInstant, zoneOffsetMinutes } from '../tz';
 
 /**
@@ -113,7 +113,7 @@ function toBooking(raw: unknown, tz: SiteTz): Booking {
       message: 'appointment is missing StartDateTime/EndDateTime',
     });
   }
-  const serviceId = a.SessionTypeId ?? a.AppointmentTypeId;
+  const serviceId = a.SessionTypeId;
   return {
     id: reqString(String(a.Id ?? ''), 'mindbody', 'appointment.Id'),
     provider: 'mindbody',
@@ -145,6 +145,38 @@ function required(value: string | undefined, name: string): string {
     });
   }
   return value;
+}
+
+/** Mindbody types AppointmentId as an int. `Number(id)` on a non-numeric string
+ *  yields NaN, which serializes to `null` and reaches the API as "no id" — so
+ *  reject it here instead, and send the same numeric form on every write. */
+function appointmentId(id: string): number {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new UnibookingError({
+      provider: 'mindbody',
+      code: 'INVALID_INPUT',
+      message: `appointment id must be a positive integer, got "${id}"`,
+    });
+  }
+  return n;
+}
+
+const now = (): number => Date.now();
+
+/** Days either side of `now` covered by the `getBooking` lookup window. */
+const LOOKUP_WINDOW_DAYS = 730;
+
+/** StaffAppointments defaults StartDate to TODAY (and EndDate to StartDate), so
+ *  querying by AppointmentIds alone can only ever find an appointment happening
+ *  today — anything else comes back empty and looks like a 404. Send a wide
+ *  window around the current instant so a lookup by id works in both directions. */
+function lookupWindow(tz: SiteTz): { StartDate: string; EndDate: string } {
+  const span = LOOKUP_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  return {
+    StartDate: toSiteLocal(new Date(now() - span).toISOString(), tz),
+    EndDate: toSiteLocal(new Date(now() + span).toISOString(), tz),
+  };
 }
 
 export const mindbody = defineAdapter<MindbodyCredentials>({
@@ -182,6 +214,10 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           // Without EndDateTime the staff default duration is used, silently
           // ignoring the requested range.
           EndDateTime: toSiteLocal(input.range.end, tz),
+          // Mindbody has no title field; `Notes` is what `toBooking` reads back
+          // as the title, so write the caller's there too.
+          ...(input.title ? { Notes: input.title } : {}),
+          ...(input.notify !== undefined ? { SendEmail: input.notify } : {}),
           ...input.providerOptions,
         },
       });
@@ -193,7 +229,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       const tz = siteTz(c);
       const res = await http.request(c, {
         path: 'appointment/staffappointments',
-        query: { AppointmentIds: id },
+        query: { AppointmentIds: id, ...lookupWindow(tz) },
       });
       const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
       if (appts.length === 0) {
@@ -204,6 +240,20 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'mindbody');
+      // UpdateAppointment only moves a status through its `Execute` actions, and
+      // cancellation is `cancelBooking`'s job — so reject a status the plain
+      // update cannot apply rather than silently dropping it.
+      if (input.status !== undefined) {
+        throw new UnibookingError({
+          provider: 'mindbody',
+          code: 'INVALID_INPUT',
+          message:
+            input.status === 'cancelled'
+              ? 'Mindbody appointment status is not writable here; use cancelBooking() to cancel'
+              : `Mindbody appointment status is not writable (cannot set "${input.status}")`,
+        });
+      }
+      const appointment = appointmentId(id);
       const c = await http.resolve();
       const tz = siteTz(c);
       // Mindbody's UpdateAppointment is a POST (there is no PUT form).
@@ -211,9 +261,18 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
         method: 'POST',
         path: 'appointment/updateappointment',
         body: {
-          AppointmentId: id,
-          ...(input.range ? { StartDateTime: toSiteLocal(input.range.start, tz) } : {}),
+          AppointmentId: appointment,
+          ...(input.range
+            ? {
+                StartDateTime: toSiteLocal(input.range.start, tz),
+                // EndDateTime defaults to the staff member's default duration,
+                // so omitting it turns every reschedule into a resize.
+                EndDateTime: toSiteLocal(input.range.end, tz),
+              }
+            : {}),
           ...(input.staffId ? { StaffId: input.staffId } : {}),
+          ...(input.serviceId ? { SessionTypeId: input.serviceId } : {}),
+          ...(input.title !== undefined ? { Notes: input.title } : {}),
           ...input.providerOptions,
         },
       });
@@ -221,6 +280,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     },
 
     async cancelBooking(id, options) {
+      const appointment = appointmentId(id);
       const c = await http.resolve();
       // There is no dedicated cancel *path*, but cancellation is a documented
       // action on the update endpoint: `Execute` accepts confirm, unconfirm,
@@ -229,7 +289,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
         method: 'POST',
         path: 'appointment/updateappointment',
         body: {
-          AppointmentId: Number(id),
+          AppointmentId: appointment,
           Execute: 'cancel',
           ...(options?.notify !== undefined ? { SendEmail: options.notify } : {}),
         },
@@ -250,6 +310,8 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           StartDate: toSiteLocal(query.range.start, tz),
           EndDate: toSiteLocal(query.range.end, tz),
           StaffIds: query.staffId,
+          ClientId: query.customerId,
+          ...(c.locationId ? { LocationIds: c.locationId } : {}),
           Offset: requestedOffset,
           Limit: limit,
         },
@@ -292,12 +354,30 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           (typeof total === 'number' && offset + batch.length >= total);
         if (done) break;
       }
-      return items.flatMap((a: any) => {
+      // An `Availabilities[]` entry is a staff availability WINDOW, not a slot —
+      // emitting it verbatim turned a 9-to-5 shift into a single 8h "slot". Slice
+      // it into bookable starts using the requested duration, else the session
+      // type's default length. With neither we keep the window: it is coarse but
+      // still truthful, and throwing would hide real availability.
+      return items.flatMap((a: any): AvailabilitySlot[] => {
         const start = toInstant(a.StartDateTime, tz);
         const end = toInstant(a.EndDateTime, tz);
         if (start === undefined || end === undefined) return [];
-        const staffId = a.Staff?.Id;
-        return [{ start, end, ...(staffId !== undefined ? { staffId: String(staffId) } : {}), raw: a }];
+        const staff = a.Staff?.Id !== undefined ? { staffId: String(a.Staff.Id) } : {};
+        const size = query.durationMinutes ?? a.SessionType?.DefaultTimeLength;
+        if (typeof size !== 'number' || size <= 0) return [{ start, end, ...staff, raw: a }];
+        // BookableEndDateTime is "the time of day that the last appointment can
+        // start" — a start cap, not an end cap.
+        const lastStart = toInstant(a.BookableEndDateTime, tz);
+        const latestStart = lastStart !== undefined ? Date.parse(lastStart) : Infinity;
+        const windowEnd = Date.parse(end);
+        const slots: AvailabilitySlot[] = [];
+        for (let s = start; Date.parse(s) <= latestStart; s = addMinutes(s, size)) {
+          const slotEnd = addMinutes(s, size);
+          if (Date.parse(slotEnd) > windowEnd) break;
+          slots.push({ start: s, end: slotEnd, ...staff, raw: a });
+        }
+        return slots;
       });
     },
   }),

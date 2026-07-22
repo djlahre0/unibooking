@@ -103,6 +103,9 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
           '@odata.type': '#microsoft.graph.bookingAppointment',
           start: graphDateTime(input.range.start),
           end: graphDateTime(input.range.end),
+          // serviceName is optional (computed from the service when omitted),
+          // but the caller's title is the closest canonical fit — don't drop it.
+          ...(input.title ? { serviceName: input.title } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
           customers: customerInfo(input),
@@ -123,6 +126,15 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'microsoft_bookings');
+      // bookingAppointment has no writable status; silently PATCHing nothing and
+      // returning a live booking would report a cancel as "done" when it wasn't.
+      if (input.status === 'cancelled') {
+        throw new UnibookingError({
+          provider: 'microsoft_bookings',
+          code: 'INVALID_INPUT',
+          message: 'Bookings has no writable status; use cancelBooking() to cancel',
+        });
+      }
       const c = await http.resolve();
       const path = `${base(c)}/appointments/${encodeURIComponent(id)}`;
       // Graph's appointment PATCH returns 204 No Content, so there is no body to
@@ -132,7 +144,11 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         path,
         headers: PREFER_UTC,
         body: {
+          // Graph's documented appointment PATCH examples all carry the type
+          // annotation (as create does); omitting it is known to fail requests.
+          '@odata.type': '#microsoft.graph.bookingAppointment',
           ...(input.range ? { start: graphDateTime(input.range.start), end: graphDateTime(input.range.end) } : {}),
+          ...(input.title ? { serviceName: input.title } : {}),
           ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
           ...input.providerOptions,
@@ -191,15 +207,24 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
       assertValidRange(query.range, 'microsoft_bookings');
       const c = await http.resolve();
-      const staffIds = query.staffId
-        ? [query.staffId]
-        : asArray(
-            (await http.request(c, { path: `${base(c)}/staffMembers`, query: { $top: 200 } }))?.value,
-            'microsoft_bookings',
-            'staffMembers.value',
-          )
-            .map((s: any) => (typeof s?.id === 'string' ? s.id : undefined))
-            .filter((s): s is string => s !== undefined);
+      let staffIds: string[];
+      if (query.staffId) {
+        staffIds = [query.staffId];
+      } else {
+        // Enumerate all staff, following @odata.nextLink so businesses with more
+        // than one page of staff members aren't silently truncated.
+        staffIds = [];
+        let page = await http.request(c, { path: `${base(c)}/staffMembers`, query: { $top: 200 } });
+        // Bounded like `listAll`, so a misbehaving nextLink can't loop forever.
+        for (let i = 0; i < 50; i++) {
+          for (const s of asArray(page?.value, 'microsoft_bookings', 'staffMembers.value')) {
+            if (typeof s?.id === 'string') staffIds.push(s.id);
+          }
+          const next = nextLinkFrom(page);
+          if (next === undefined) break;
+          page = await http.request(c, { path: next });
+        }
+      }
       if (staffIds.length === 0) return [];
       const res = await http.request(c, {
         method: 'POST',
@@ -211,13 +236,18 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         },
       });
       const out: AvailabilitySlot[] = [];
-      for (const entry of asArray(res?.value, 'microsoft_bookings', 'staffAvailability')) {
+      // The documented response wraps the collection as `staffAvailabilityItem`
+      // (not the usual OData `value`); read both defensively.
+      const entries = (res as any)?.staffAvailabilityItem ?? (res as any)?.value;
+      for (const entry of asArray(entries, 'microsoft_bookings', 'staffAvailability')) {
         const e = asRecord(entry, 'microsoft_bookings', 'staffAvailabilityItem');
         const staffId = typeof e.staffId === 'string' ? e.staffId : undefined;
         for (const item of asArray(e.availabilityItems ?? [], 'microsoft_bookings', 'availabilityItems')) {
           const slot = asRecord(item, 'microsoft_bookings', 'availabilityItem');
-          // Only `available` windows are bookable; busy/out-of-office are not.
-          if (String(slot.status).toLowerCase() !== 'available') continue;
+          // `available` windows are bookable; so are `slotsAvailable` ones (1:n
+          // group services with remaining capacity). busy/out-of-office are not.
+          const status = String(slot.status).toLowerCase();
+          if (status !== 'available' && status !== 'slotsavailable') continue;
           const start = graphToInstant(slot.startDateTime);
           const end = graphToInstant(slot.endDateTime);
           if (start === undefined || end === undefined) continue;

@@ -38,6 +38,7 @@ runConformance({
           range: RANGE,
           serviceId: 'PROD1',
           customer: { name: 'Jane Doe', email: 'jane@example.com' },
+          providerOptions: { participants: { numbers: [{ peopleCategoryId: 'Cadults', number: 1 }] } },
         }),
       check: (b) => {
         expect(b.serviceId).toBe('PROD1');
@@ -158,5 +159,162 @@ describe('bookeo: pagination + numeric error code', () => {
     const err = await client.getBooking('BK').catch((e) => e);
     expect(err.code).toBe('INVALID_INPUT');
     expect(err.providerCode).toBe('507');
+  });
+});
+
+describe('bookeo: request payloads (spec diff, July 2026)', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  const PARTICIPANTS = { numbers: [{ peopleCategoryId: 'Cadults', number: 2 }] };
+  const DAY = { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' };
+
+  it('createBooking refuses to invent a peopleCategoryId', async () => {
+    const client = bookeo({ apiKey: 'k', secretKey: 's' });
+    await expect(
+      client.createBooking({ title: 'Kayak Tour', range: RANGE, serviceId: 'PROD1' }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('participants'),
+    });
+  });
+
+  it('createBooking sends title, the caller participants, customerId and notify', async () => {
+    let body: any;
+    let path = '';
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'POST' })
+      .reply(200, (opts: any) => {
+        body = JSON.parse(String(opts.body));
+        path = String(opts.path);
+        return JSON.stringify(BK);
+      }, { headers: JSON_HEADERS });
+
+    await bookeo({ apiKey: 'k', secretKey: 's' }).createBooking({
+      title: 'Kayak Tour',
+      range: RANGE,
+      serviceId: 'PROD1',
+      customer: { id: 'CUST9', name: 'Jane Doe', email: 'jane@example.com' },
+      notify: true,
+      providerOptions: { participants: PARTICIPANTS },
+    });
+    // `title` is in the Booking schema's required list and is read back as the title.
+    expect(body.title).toBe('Kayak Tour');
+    expect(body.participants).toEqual(PARTICIPANTS);
+    // An existing customer is referenced by id, not re-described inline.
+    expect(body.customerId).toBe('CUST9');
+    expect(body.customer).toBeUndefined();
+    expect(path).toContain('notifyCustomer=true');
+    expect(path).toContain('notifyUsers=true');
+  });
+
+  it('createBooking omits lastName for a single-word customer name', async () => {
+    let body: any;
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'POST' })
+      .reply(200, (opts: any) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify(BK);
+      }, { headers: JSON_HEADERS });
+
+    await bookeo({ apiKey: 'k', secretKey: 's' }).createBooking({
+      title: 'Kayak Tour',
+      range: RANGE,
+      serviceId: 'PROD1',
+      customer: { name: 'Jane' },
+      providerOptions: { participants: PARTICIPANTS },
+    });
+    expect(body.customer.firstName).toBe('Jane');
+    expect('lastName' in body.customer).toBe(false);
+  });
+
+  it('getBooking asks for the customer and maps lastChangeTime', async () => {
+    let path = '';
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => p.startsWith('/v2/bookings/BK123'), method: 'GET' })
+      .reply(200, (opts: any) => {
+        path = String(opts.path);
+        return JSON.stringify({ ...BK, lastChangeTime: '2026-07-10T00:00:00Z' });
+      }, { headers: JSON_HEADERS });
+
+    const b = await bookeo({ apiKey: 'k', secretKey: 's' }).getBooking('BK123');
+    // Bookeo omits `customer` entirely unless expandCustomer is requested.
+    expect(path).toContain('expandCustomer=true');
+    expect(b.customer?.email).toBe('jane@example.com');
+    expect(b.updatedAt).toBe('2026-07-10T00:00:00Z');
+  });
+
+  it('listBookings asks for the customer and includes cancelled only on request', async () => {
+    const paths: string[] = [];
+    const pool = agent.get('https://api.bookeo.com');
+    pool
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
+      .reply(200, (opts: any) => {
+        paths.push(String(opts.path));
+        return JSON.stringify({ data: [BK], info: { totalItems: 1 } });
+      }, { headers: JSON_HEADERS })
+      .times(2);
+
+    const client = bookeo({ apiKey: 'k', secretKey: 's' });
+    const plain = await client.listBookings({ range: DAY });
+    await client.listBookings({ range: DAY, status: 'cancelled' });
+    expect(plain.bookings[0]!.customer?.name).toBe('Jane Doe');
+    expect(paths[0]).toContain('expandCustomer=true');
+    expect(paths[0]).not.toContain('includeCanceled');
+    expect(paths[1]).toContain('includeCanceled=true');
+  });
+
+  it('listBookings rejects a range wider than the documented 31 days', async () => {
+    await expect(
+      bookeo({ apiKey: 'k', secretKey: 's' }).listBookings({
+        range: { start: '2026-01-01T00:00:00Z', end: '2026-03-01T00:00:00Z' },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('31 days') });
+  });
+
+  it('maps noShow and unaccepted bookings to their own statuses', async () => {
+    const pool = agent.get('https://api.bookeo.com');
+    for (const b of [{ ...BK, canceled: true, noShow: true }, { ...BK, accepted: false }]) {
+      pool
+        .intercept({ path: (p) => p.startsWith('/v2/bookings/BK123'), method: 'GET' })
+        .reply(200, JSON.stringify(b), { headers: JSON_HEADERS });
+    }
+    const client = bookeo({ apiKey: 'k', secretKey: 's' });
+    // noShow rides on top of canceled, so the more specific flag wins.
+    expect((await client.getBooking('BK123')).status).toBe('no_show');
+    expect((await client.getBooking('BK123')).status).toBe('pending');
+  });
+
+  it('cancelBooking forwards notify as notifyCustomer/notifyUsers', async () => {
+    let path = '';
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => p.startsWith('/v2/bookings/BK123'), method: 'DELETE' })
+      .reply(204, (opts: any) => {
+        path = String(opts.path);
+        return '';
+      });
+
+    await bookeo({ apiKey: 'k', secretKey: 's' }).cancelBooking('BK123', {
+      reason: 'weather',
+      notify: false,
+    });
+    expect(path).toContain('notifyCustomer=false');
+    expect(path).toContain('notifyUsers=false');
+    expect(path).toContain('reason=weather');
   });
 });

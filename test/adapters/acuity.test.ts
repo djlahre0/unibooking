@@ -108,7 +108,9 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     const pool = agent.get('https://acuityscheduling.com');
     pool
       .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
-      .reply(200, JSON.stringify({ ...APPT, noShow: true, timezone: 'America/Los_Angeles' }), {
+      // Acuity marks a no-show ON a canceled appointment — `noShow` never
+      // arrives without `canceled`, so the mapping must prefer the former.
+      .reply(200, JSON.stringify({ ...APPT, canceled: true, noShow: true, timezone: 'America/Los_Angeles' }), {
         headers: { 'content-type': 'application/json' },
       });
     const client = acuity({ userId: 'u', apiKey: 'k' });

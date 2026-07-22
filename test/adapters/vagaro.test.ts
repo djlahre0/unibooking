@@ -62,7 +62,12 @@ runConformance({
           },
         ],
       },
-      run: (c) => c.searchAvailability({ range: RANGE, serviceId: 'svc1' }),
+      // A whole-day window: slots outside the caller's range are now dropped.
+      run: (c) =>
+        c.searchAvailability({
+          range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+          serviceId: 'svc1',
+        }),
       check: (slots) => {
         expect(slots).toHaveLength(2);
         expect(slots[0].start).toBe('2026-07-20T09:00:00Z');
@@ -219,5 +224,159 @@ describe('vagaro wire format', () => {
     expect(err.message).toContain('validation errors');
     // Previously read `errorCode`/`code`, neither of which Vagaro ever sends.
     expect(err.providerCode).toBe('1051');
+  });
+
+  it('validates the listBookings range like every other method', async () => {
+    const err = await makeClient()
+      .listBookings({ range: { start: '2026-07-20T22:00:00Z', end: 'nonsense' }, customerId: 'cust1' })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+  });
+
+  it('trims the customer history to the requested range', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
+      .reply(200, JSON.stringify({
+        data: [APPT, { ...APPT, appointmentId: 'old==', startTime: '2020-01-01T10:00:00.000Z' }],
+      }), { headers: JSON_HEADERS });
+
+    // POST /appointments takes no date window — it returns the whole history.
+    const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
+
+    expect(page.bookings.map((b) => b.id)).toEqual(['ap==']);
+  });
+
+  it('does not emit an endless nextPageToken when no limit was requested', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
+      .reply(200, JSON.stringify({ data: [APPT] }), { headers: JSON_HEADERS });
+
+    const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
+
+    // `rows.length >= rows.length` is always true — a caller looping to
+    // exhaustion never terminated.
+    expect(page.nextPageToken).toBeUndefined();
+  });
+
+  it('pages only when the caller asked for a page size and the page was full', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
+      .reply(200, JSON.stringify({ data: [APPT] }), { headers: JSON_HEADERS });
+
+    const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1', limit: 1 });
+
+    expect(page.nextPageToken).toBe('2');
+  });
+
+  it('filters availability slots to the requested window', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
+      .reply(200, JSON.stringify({
+        data: [
+          {
+            appointmentDate: '2026-07-20',
+            items: [{ serviceProviderId: 'sp1', duration: 30 }],
+            timeSlot: ['08:00', '10:00', '18:00'],
+          },
+        ],
+      }), { headers: JSON_HEADERS });
+
+    const slots = await makeClient().searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      serviceId: 'svc1',
+    });
+
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T10:00:00Z']);
+  });
+
+  it('queries one day per date in a multi-day availability range', async () => {
+    const dates: string[] = [];
+    for (const [date, time] of [['2026-07-20', '10:00'], ['2026-07-21', '11:00']]) {
+      agent
+        .get(ORIGIN)
+        .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
+        .reply(200, (opts: any) => {
+          dates.push(JSON.parse(String(opts.body)).appointmentDate);
+          return JSON.stringify({
+            data: [{ appointmentDate: date, items: [{ duration: 30 }], timeSlot: [time] }],
+          });
+        }, { headers: JSON_HEADERS });
+    }
+
+    const slots = await makeClient().searchAvailability({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-22T00:00:00Z' },
+      serviceId: 'svc1',
+    });
+
+    expect(dates).toEqual(['2026-07-20', '2026-07-21']);
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T10:00:00Z', '2026-07-21T11:00:00Z']);
+  });
+
+  it('rejects an availability range wider than the day cap', async () => {
+    const err = await makeClient()
+      .searchAvailability({
+        range: { start: '2026-01-01T00:00:00Z', end: '2026-04-01T00:00:00Z' },
+        serviceId: 'svc1',
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('31');
+  });
+
+  it('fails fast when no serviceProviderId can be resolved for an update', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p === '/usa03/api/v2/appointments', method: 'POST' })
+      .reply(200, JSON.stringify({ data: [{ ...APPT, serviceProviderId: null }] }), {
+        headers: JSON_HEADERS,
+      });
+
+    const err = await makeClient()
+      .updateBooking('ap==', { range: { start: '2026-07-21T09:00:00Z', end: '2026-07-21T09:45:00Z' } })
+      .then(() => null)
+      .catch((e: any) => e);
+
+    // JSON.stringify would have dropped the undefined field and silently omitted
+    // a value the PUT requires.
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('staffId');
+  });
+
+  it('writes a title as appointmentNote on update, like create does', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p === '/usa03/api/v2/appointments', method: 'POST' })
+      .reply(200, JSON.stringify({ data: [APPT] }), { headers: JSON_HEADERS })
+      .times(2);
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/ap'), method: 'PUT' })
+      .reply(200, (opts: any) => {
+        seen = JSON.parse(String(opts.body));
+        return JSON.stringify({ data: '' });
+      }, { headers: JSON_HEADERS });
+
+    await makeClient().updateBooking('ap==', { title: 'VIP client' });
+
+    expect(seen.appointmentNote).toBe('VIP client');
+  });
+
+  it('rejects a status change it cannot write', async () => {
+    const client = makeClient();
+    for (const [status, hint] of [['cancelled', 'cancelBooking'], ['confirmed', 'confirmed']] as const) {
+      const err = await client
+        .updateBooking('ap==', { status })
+        .then(() => null)
+        .catch((e: any) => e);
+      expect(err?.code).toBe('INVALID_INPUT');
+      expect(err?.message).toContain(hint);
+    }
   });
 });
