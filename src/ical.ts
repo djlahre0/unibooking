@@ -19,6 +19,12 @@ export interface VEvent {
    *  instances of one series share a DAV resource (and so a booking id) — this
    *  is what tells them apart. */
   recurrenceId?: string;
+  /** Raw RRULE value (e.g. `FREQ=WEEKLY;BYDAY=MO,WE`) of a recurring master.
+   *  Consumed by `expandRecurrence` for the client-side expansion fallback. */
+  rrule?: string;
+  /** Raw value of each EXDATE property (one entry per line; a single line can
+   *  itself be a comma-separated list). Excluded dates for a recurring master. */
+  exdate?: string[];
   raw: string;
 }
 
@@ -178,6 +184,8 @@ export function parseICS(text: string): VEvent[] {
           ...(cur.end !== undefined ? { end: cur.end } : {}),
           ...(cur.attendee !== undefined ? { attendee: cur.attendee } : {}),
           ...(cur.recurrenceId !== undefined ? { recurrenceId: cur.recurrenceId } : {}),
+          ...(cur.rrule !== undefined ? { rrule: cur.rrule } : {}),
+          ...(cur.exdate !== undefined ? { exdate: cur.exdate } : {}),
         });
       }
       cur = null;
@@ -234,6 +242,12 @@ export function parseICS(text: string): VEvent[] {
       case 'RECURRENCE-ID':
         cur.recurrenceId = value;
         break;
+      case 'RRULE':
+        cur.rrule = value;
+        break;
+      case 'EXDATE':
+        (cur.exdate ??= []).push(value);
+        break;
       case 'ATTENDEE': {
         // Keep the FIRST attendee (the canonical `customer` is a single person);
         // later ATTENDEE lines are preserved in `raw` and left untouched.
@@ -268,6 +282,231 @@ function applyDuration(start: string, dur: string): string | undefined {
     sign;
   const epoch = Date.parse(start) + mins * 60_000;
   return formatWithOffset(epoch, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Client-side recurrence expansion (RFC 5545 §3.8.5.3 RRULE / §3.8.5.1 EXDATE)
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86_400_000;
+
+/** Guards a runaway RRULE (e.g. unbounded DAILY over a decade-wide window) from
+ *  hanging: never generate more than this many candidate occurrences. Hitting it
+ *  stops generation — a partial result is acceptable for this fallback. */
+const RECURRENCE_HARD_CAP = 1000;
+
+/** iCalendar two-letter weekday → JS UTC day-of-week (Sun=0 … Sat=6). */
+const WEEKDAY_TO_DOW: Record<string, number> = {
+  SU: 0,
+  MO: 1,
+  TU: 2,
+  WE: 3,
+  TH: 4,
+  FR: 5,
+  SA: 6,
+};
+
+/** RRULE parts this fallback models. Any other part (BYSETPOS, BYMONTHDAY,
+ *  BYMONTH, BYWEEKNO, BYYEARDAY, BYHOUR, …) forces the safe fallback. */
+const SUPPORTED_RRULE_PARTS = new Set(['FREQ', 'INTERVAL', 'COUNT', 'UNTIL', 'BYDAY', 'WKST']);
+
+function daysInMonthUTC(year: number, month: number): number {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+/** Add `months` calendar months to a UTC instant, keeping the day-of-month and
+ *  time-of-day. Returns undefined when the target month has no such day (e.g.
+ *  the 31st of a 30-day month, or Feb 29 in a common year) — RFC 5545 says such
+ *  invalid recurrence instances are ignored rather than rolled over. */
+function addMonthsUTC(baseMs: number, months: number): number | undefined {
+  const d = new Date(baseMs);
+  const total = d.getUTCMonth() + months;
+  const year = d.getUTCFullYear() + Math.floor(total / 12);
+  const month = ((total % 12) + 12) % 12;
+  const day = d.getUTCDate();
+  if (day > daysInMonthUTC(year, month)) return undefined;
+  return Date.UTC(
+    year,
+    month,
+    day,
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds(),
+  );
+}
+
+/** All EXDATE instants (in epoch-ms) an occurrence start may match. TZID-anchored
+ *  EXDATEs are read as UTC/floating here — the same DST/local limitation the rest
+ *  of the fallback carries; UTC-anchored series (the common no-expand case) match
+ *  exactly. */
+function exdateInstants(exdate: string[] | undefined): Set<number> {
+  const out = new Set<number>();
+  if (!exdate) return out;
+  for (const line of exdate) {
+    for (const token of line.split(',')) {
+      const inst = icalDateToInstant(token.trim(), {});
+      if (inst === undefined) continue;
+      const ms = Date.parse(inst);
+      if (!Number.isNaN(ms)) out.add(ms);
+    }
+  }
+  return out;
+}
+
+/** Shallow-clone the master as a concrete occurrence: DTSTART/DTEND set to this
+ *  instant (duration preserved), RRULE dropped, and a synthetic RECURRENCE-ID at
+ *  the occurrence start so expanded siblings sharing a booking id can be told
+ *  apart. `raw` stays the master's raw — there is no per-occurrence server raw. */
+function toOccurrence(master: VEvent, startMs: number, durationMs: number): VEvent {
+  const start = formatWithOffset(startMs, 0);
+  const occ: VEvent = { ...master, start, end: formatWithOffset(startMs + durationMs, 0), recurrenceId: start };
+  delete occ.rrule;
+  return occ;
+}
+
+/**
+ * Expand a recurring VEVENT into its concrete in-window occurrences — a bounded,
+ * correct SUBSET of RFC 5545 recurrence, used ONLY as a client-side fallback when
+ * a CalDAV server ignores `<C:expand>` and returns the unexpanded master (its
+ * original DTSTART plus an RRULE). iCloud expands server-side; Fastmail and
+ * Nextcloud/Baïkal may not.
+ *
+ * GOVERNING PRINCIPLE — never make output worse. When the RRULE uses any feature
+ * this does not model, the event is returned UNCHANGED (`[event]`, today's
+ * behavior) rather than emitting occurrences at the wrong times.
+ *
+ * SUPPORTED: FREQ ∈ DAILY|WEEKLY|MONTHLY|YEARLY; INTERVAL (default 1); COUNT;
+ * UNTIL; WKST; and BYDAY as a plain weekday list (MO,TU,…,SU) for WEEKLY only.
+ * FALLS BACK on any other part — BYSETPOS, BYMONTHDAY, BYMONTH, BYWEEKNO,
+ * BYYEARDAY, BYHOUR/BYMINUTE/BYSECOND, numeric-prefixed BYDAY (e.g. 2MO), BYDAY
+ * on a non-WEEKLY frequency, an unrecognized/invalid part, or an unusable value.
+ *
+ * Weekday and interval math run against the UTC day-of-week; local-weekday and
+ * DST subtleties are NOT modeled (acceptable — the server-side expand is primary).
+ */
+export function expandRecurrence(event: VEvent, windowStart: string, windowEnd: string): VEvent[] {
+  // Not a series master we can expand: no RRULE, an already-concrete override, or
+  // missing endpoints. Pass through unchanged (today's behavior).
+  if (
+    event.rrule === undefined ||
+    event.recurrenceId !== undefined ||
+    event.start === undefined ||
+    event.end === undefined
+  ) {
+    return [event];
+  }
+
+  const startMs = Date.parse(event.start);
+  const endMs = Date.parse(event.end);
+  const winStartMs = Date.parse(windowStart);
+  const winEndMs = Date.parse(windowEnd);
+  if ([startMs, endMs, winStartMs, winEndMs].some((n) => Number.isNaN(n))) return [event];
+  const durationMs = endMs - startMs;
+
+  // Parse the RRULE into parts; bail on any part outside the supported subset.
+  const parts: Record<string, string> = {};
+  for (const seg of event.rrule.split(';')) {
+    const eq = seg.indexOf('=');
+    if (eq === -1) continue;
+    parts[seg.slice(0, eq).trim().toUpperCase()] = seg.slice(eq + 1).trim();
+  }
+  for (const key of Object.keys(parts)) {
+    if (!SUPPORTED_RRULE_PARTS.has(key)) return [event];
+  }
+
+  const freq = parts.FREQ;
+  if (freq !== 'DAILY' && freq !== 'WEEKLY' && freq !== 'MONTHLY' && freq !== 'YEARLY') {
+    return [event];
+  }
+
+  const interval = parts.INTERVAL === undefined ? 1 : Number(parts.INTERVAL);
+  if (!Number.isInteger(interval) || interval < 1) return [event];
+
+  let count: number | undefined;
+  if (parts.COUNT !== undefined) {
+    count = Number(parts.COUNT);
+    if (!Number.isInteger(count) || count < 1) return [event];
+  }
+
+  let untilMs: number | undefined;
+  if (parts.UNTIL !== undefined) {
+    const untilInstant = icalDateToInstant(parts.UNTIL, {});
+    const ms = untilInstant === undefined ? NaN : Date.parse(untilInstant);
+    if (Number.isNaN(ms)) return [event];
+    untilMs = ms;
+  }
+
+  // WKST is only meaningful for WEEKLY+BYDAY with INTERVAL>1, but validate it
+  // whenever present so a bad value falls back rather than silently misbehaving.
+  const wkstDow = parts.WKST === undefined ? 1 : WEEKDAY_TO_DOW[parts.WKST.toUpperCase()];
+  if (wkstDow === undefined) return [event];
+
+  // BYDAY: supported only as a plain weekday list on a WEEKLY rule.
+  let byday: number[] | undefined;
+  if (parts.BYDAY !== undefined) {
+    if (freq !== 'WEEKLY') return [event];
+    const dows: number[] = [];
+    for (const tok of parts.BYDAY.split(',')) {
+      const dow = WEEKDAY_TO_DOW[tok.trim().toUpperCase()];
+      if (dow === undefined) return [event]; // numeric-prefixed (2MO) or garbage
+      dows.push(dow);
+    }
+    byday = dows;
+  }
+
+  // Candidate starts are generated in non-decreasing order and bounded by COUNT,
+  // UNTIL, the window's far edge, and the hard cap — so the loops always halt.
+  const candidates: number[] = [];
+  let occCount = 0;
+
+  if (byday !== undefined) {
+    // WEEKLY + BYDAY: walk active weeks (every `interval`-th week from the week
+    // containing DTSTART, per WKST), emitting the requested weekdays in order.
+    const weekPos = (dow: number): number => (dow - wkstDow + 7) % 7;
+    const sortedDays = [...new Set(byday)].sort((a, b) => weekPos(a) - weekPos(b));
+    const startDayIndex = Math.floor(startMs / DAY_MS);
+    const timeOfDayMs = startMs - startDayIndex * DAY_MS;
+    const startDow = new Date(startDayIndex * DAY_MS).getUTCDay();
+    const weekStartDayIndex = startDayIndex - weekPos(startDow);
+
+    outer: for (let week = 0; week <= RECURRENCE_HARD_CAP; week++) {
+      const weekBase = weekStartDayIndex + week * interval * 7;
+      for (const dow of sortedDays) {
+        const s = (weekBase + weekPos(dow)) * DAY_MS + timeOfDayMs;
+        if (s < startMs) continue; // first week: days before DTSTART don't count
+        if (untilMs !== undefined && s > untilMs) break outer;
+        if (s >= winEndMs) break outer; // monotonic: nothing later can overlap
+        candidates.push(s);
+        occCount++;
+        if (count !== undefined && occCount >= count) break outer;
+        if (candidates.length >= RECURRENCE_HARD_CAP) break outer;
+      }
+    }
+  } else {
+    // One occurrence per step: DAILY / WEEKLY (DTSTART's weekday) / MONTHLY /
+    // YEARLY. MONTHLY/YEARLY skip invalid calendar dates (e.g. Feb 31 / Feb 29).
+    for (let n = 0; candidates.length < RECURRENCE_HARD_CAP && n <= RECURRENCE_HARD_CAP * 2; n++) {
+      let s: number | undefined;
+      if (freq === 'DAILY') s = startMs + n * interval * DAY_MS;
+      else if (freq === 'WEEKLY') s = startMs + n * interval * 7 * DAY_MS;
+      else if (freq === 'MONTHLY') s = addMonthsUTC(startMs, n * interval);
+      else s = addMonthsUTC(startMs, n * interval * 12); // YEARLY
+      if (s === undefined) continue; // invalid calendar date — ignored per RFC
+      if (untilMs !== undefined && s > untilMs) break;
+      if (s >= winEndMs) break; // monotonic: nothing later can overlap
+      candidates.push(s);
+      occCount++;
+      if (count !== undefined && occCount >= count) break;
+    }
+  }
+
+  // Apply EXDATE, then keep only occurrences overlapping [windowStart, windowEnd).
+  const excluded = exdateInstants(event.exdate);
+  const occs = candidates.filter(
+    (s) => !excluded.has(s) && s + durationMs > winStartMs && s < winEndMs,
+  );
+  return occs.map((s) => toOccurrence(event, s, durationMs));
 }
 
 /** Canonical instant → iCal UTC basic form (`20260720T220000Z`). */

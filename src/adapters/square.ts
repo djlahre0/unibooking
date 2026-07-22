@@ -273,16 +273,21 @@ export const square = defineAdapter<SquareCredentials>({
       return toBooking(res.booking);
     },
 
-    async cancelBooking(id, _options) {
+    async cancelBooking(id, options) {
       const c = await http.resolve();
-      // Square's CancelBooking body is only { idempotency_key, booking_version };
-      // there is no field to carry a cancellation reason (seller_note is not a
-      // CancelBooking field — to set one you'd UpdateBooking first). `notify` is
-      // also not controllable here.
+      // Square's CancelBooking body is { idempotency_key, booking_version }. There
+      // is no field for a cancellation reason (seller_note is not a CancelBooking
+      // field — to set one you'd UpdateBooking first) and `notify` isn't
+      // controllable here. `booking_version` gives optimistic concurrency (cancel
+      // only if the version you saw is still current); pass it via
+      // `providerOptions: { booking_version }`.
       await http.request(c, {
         method: 'POST',
         path: `bookings/${enc(id)}/cancel`,
-        body: { idempotency_key: globalThis.crypto.randomUUID() },
+        body: {
+          idempotency_key: globalThis.crypto.randomUUID(),
+          ...options?.providerOptions,
+        },
         parse: 'none',
       });
     },

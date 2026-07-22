@@ -121,6 +121,10 @@ export interface CancelOptions {
   reason?: string;
   /** Whether the provider should notify the customer. Provider default when omitted. */
   notify?: boolean;
+  /** Escape hatch for provider-specific cancel fields (e.g. Square's
+   *  `booking_version` for optimistic concurrency). Shallow-merged into the
+   *  outgoing request body, same role as `CreateBookingInput.providerOptions`. */
+  providerOptions?: Record<string, unknown>;
 }
 
 export interface ListBookingsQuery {

@@ -30,6 +30,28 @@ tenant.
 - **Square `createBooking` now attaches a name-only customer** (previously it
   resolved a customer only when an email or phone was present, silently dropping
   a name-only one).
+- **Square `cancelBooking` supports optimistic concurrency.** `CancelOptions`
+  gains a `providerOptions` escape hatch (matching the other input types);
+  Square forwards `booking_version` through it so a cancel can require the
+  version you last saw.
+- **Apple/CalDAV `listBookings` expands recurring events client-side** when a
+  server ignores the CalDAV `<C:expand>` request (some Fastmail / Nextcloud /
+  Baïkal setups) and returns the unexpanded master. Previously that surfaced a
+  single booking at the wrong time; it now expands a bounded RFC 5545 subset
+  (`FREQ`/`INTERVAL`/`COUNT`/`UNTIL`/`WKST`, plus weekly `BYDAY`), honoring
+  `EXDATE`. Any RRULE feature outside that subset falls back to the old
+  pass-through rather than emitting wrong occurrences. iCloud is unaffected — it
+  expands server-side.
+
+### Changed
+
+- **Wix `listBookings({ staffId })` now filters by staff again.** 0.2.0 made it
+  throw `UNSUPPORTED` because the audit could not find a documented filter field;
+  Wix's published "Supported Filters and Sorting" reference has since confirmed
+  `bookedEntity.item.slot.resource.id`, so the filter is sent rather than
+  rejected. (Zenoti slot-time timezone, Setmore's label-update body, and
+  Vagaro's write endpoints remain unverifiable against first-party docs and are
+  left as documented TODOs rather than guessed.)
 
 ## [0.2.0] - 2026-07-22
 

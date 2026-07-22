@@ -192,6 +192,62 @@ describe('apple: update does GET then PUT', () => {
     ]);
   });
 
+  it('expands an unexpanded weekly RRULE master client-side when the server ignores <C:expand>', async () => {
+    // The server ignored <C:expand> and returned the UNEXPANDED master: its
+    // original DTSTART (at the window start) plus an RRULE, as one VEVENT under
+    // one resource href. listBookings must expand it locally to the per-week
+    // occurrences rather than report a single booking at the master's time.
+    const MASTER = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:series-weekly',
+      'SUMMARY:Weekly sync',
+      'DTSTART:20260706T090000Z', // Monday, at the window start
+      'DTEND:20260706T093000Z',
+      'RRULE:FREQ=WEEKLY',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const MS =
+      `<?xml version="1.0" encoding="utf-8"?>` +
+      `<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
+      `<D:response><D:href>/123/calendars/home/series-weekly.ics</D:href>` +
+      `<D:propstat><D:prop><C:calendar-data>${MASTER}</C:calendar-data></D:prop>` +
+      `<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`;
+
+    const pool = agent.get(ORIGIN);
+    let reportBody = '';
+    pool
+      .intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' })
+      .reply(207, (opts) => {
+        reportBody = String(opts.body);
+        return MS;
+      }, { headers: { 'content-type': 'application/xml' } });
+
+    const client = apple({ username: 'u', appPassword: 'p', calendarUrl: CAL });
+    const { bookings } = await client.listBookings({
+      range: { start: '2026-07-06T00:00:00Z', end: '2026-07-27T00:00:00Z' },
+    });
+
+    // The request still asks the server to expand; the fallback only kicks in
+    // because the server returned the master instead.
+    expect(reportBody).toContain('<C:expand');
+    // One booking per in-window week at the correct per-week times.
+    expect(bookings.map((b) => b.range.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-13T09:00:00Z',
+      '2026-07-20T09:00:00Z',
+    ]);
+    // All occurrences of one resource share its re-fetchable id (the href name);
+    // they are told apart by their distinct per-week start.
+    expect(bookings.every((b) => b.id === 'series-weekly')).toBe(true);
+    expect(new Set(bookings.map((b) => b.range.start)).size).toBe(bookings.length);
+    // raw stays the honest master (still carries the RRULE) — there is no
+    // per-occurrence server payload to attribute to each instance.
+    expect(bookings.every((b) => String(b.raw).includes('RRULE:FREQ=WEEKLY'))).toBe(true);
+  });
+
   it('sends If-Match with the current ETag on update, If-None-Match:* on create', async () => {
     const pool = agent.get(ORIGIN);
     pool

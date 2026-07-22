@@ -851,10 +851,7 @@ unibooking currently supports the following providers.
 > adapter can:
 >
 > - Calendly has no reschedule endpoint; rescheduling is cancel + recreate.
-> - Wix updates support reschedule or cancel, not arbitrary field edits. Its
->   extended-bookings query also exposes no staff/resource filter, so
->   `listBookings({ staffId })` throws `UNSUPPORTED` rather than silently
->   returning unfiltered results — filter client-side instead.
+> - Wix updates support reschedule or cancel, not arbitrary field edits.
 > - Boulevard availability requires the separate Client cart API, and its
 >   `UpdateAppointmentInput` accepts only notes, state and custom fields — staff
 >   and service changes are not expressible. Rescheduling is supported natively.

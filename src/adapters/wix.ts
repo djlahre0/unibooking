@@ -14,10 +14,11 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * token). It is sent verbatim in the `Authorization` header — no `Bearer`
  * prefix, which is how Wix expects app tokens.
  *
- * NOTE: the paths and payload shapes here match the published reference. The one
- * thing still unverified is which fields Query Extended Bookings accepts in its
- * `filter` — Wix publishes no exhaustive list — so `listBookings`' date-window
- * filter carries a TODO.
+ * NOTE: the paths and payload shapes here match the published reference. The
+ * fields `listBookings` filters on — the `startDate` date window, `status`,
+ * `contactDetails.contactId`, and the staff/resource path
+ * `bookedEntity.item.slot.resource.id` — are exactly the ones Wix documents as
+ * filterable in "Extended Bookings: Supported Filters and Sorting".
  */
 export type WixCredentials = {
   accessToken: string;
@@ -419,24 +420,13 @@ export const wix = defineAdapter<WixCredentials>({
 
     async listBookings(query) {
       assertValidRange(query.range, 'wix');
-      if (query.staffId) {
-        // The documented filterable set is id / status / paymentStatus /
-        // contactDetails.* / the date fields / the slot fields under
-        // `bookedEntity.item.slot.*` — none of which is a staff or resource. A
-        // guessed field name would either 400 or be silently ignored (returning
-        // every staff member's bookings as if they matched), so refuse instead.
-        // TODO: revisit if Wix ever documents a staff/resource filter here.
-        return unsupported(
-          'wix',
-          "filtering bookings by staffId — Query Extended Bookings exposes no staff/resource filter, so list the window and filter on the result's staffId client-side",
-        );
-      }
       const c = await http.resolve();
       const status = wixStatusFilter(query.status);
-      // Reader V2's only list method is Query Extended Bookings.
-      // TODO: verify against live API — Wix publishes no exhaustive list of
-      // filterable fields, so the date-window field name (`startDate` here) is
-      // still unconfirmed; check it on a live tenant.
+      // Reader V2's only list method is Query Extended Bookings. Every field used
+      // here is documented as filterable in "Extended Bookings: Supported Filters
+      // and Sorting": the `startDate` date window (with $gte/$lte), `status`,
+      // `contactDetails.contactId`, and the staff/resource path
+      // `bookedEntity.item.slot.resource.id` (a bare value is an $eq filter).
       const { raw, next } = await queryExtendedBookings(
         http,
         c,
@@ -444,6 +434,7 @@ export const wix = defineAdapter<WixCredentials>({
           startDate: { $gte: query.range.start, $lte: query.range.end },
           ...(status !== undefined ? { status } : {}),
           ...(query.customerId ? { 'contactDetails.contactId': query.customerId } : {}),
+          ...(query.staffId ? { 'bookedEntity.item.slot.resource.id': query.staffId } : {}),
         },
         {
           // Documented max is 100; clamp rather than let an upstream 400 through.

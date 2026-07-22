@@ -4,6 +4,7 @@ import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import {
   buildICS,
+  expandRecurrence,
   instantToICalUTC,
   parseCalendarEntries,
   parseICS,
@@ -123,6 +124,10 @@ function calendarQuery(startBasic: string, endBasic: string): string {
   // unexpanded master — so a repeating series reports the right in-window times
   // (RFC 4791 §9.6.5), matching how Google/Outlook expand recurrences. Its
   // start/end must be UTC "date with time" values, same as the time-range.
+  // iCloud honors this; servers that ignore it (some Fastmail/Nextcloud/Baïkal
+  // setups) return the unexpanded master, which `listBookings` then expands
+  // client-side via `expandRecurrence` (a bounded RRULE/EXDATE subset) so those
+  // series still report the right in-window occurrences.
   return (
     `<?xml version="1.0" encoding="utf-8" ?>` +
     `<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">` +
@@ -280,12 +285,19 @@ export const apple = defineAdapter<AppleCredentials>({
       // resource (a server may store an event under a name that isn't its UID).
       let bookings = parseCalendarEntries(xml).flatMap((entry) => {
         const name = entry.href ? resourceNameFromHref(entry.href) : undefined;
-        return parseICS(entry.ics)
-          .filter((ev) => ev.start !== undefined && ev.end !== undefined)
-          .map((ev) => {
-            const b = toBooking(ev);
-            return name ? { ...b, id: name } : b;
-          });
+        return (
+          parseICS(entry.ics)
+            // Client-side RRULE fallback: a server-expanded instance has no RRULE
+            // and passes through untouched, but a server that ignored `<C:expand>`
+            // returns the master (RRULE intact) — expand it locally to the right
+            // in-window occurrences. All occurrences of one resource keep its id.
+            .flatMap((ev) => expandRecurrence(ev, query.range.start, query.range.end))
+            .filter((ev) => ev.start !== undefined && ev.end !== undefined)
+            .map((ev) => {
+              const b = toBooking(ev);
+              return name ? { ...b, id: name } : b;
+            })
+        );
       });
       // CalDAV's calendar-query filters by time range only, so `status` and
       // `limit` are applied here rather than silently ignored. There is no

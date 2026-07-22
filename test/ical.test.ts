@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildICS, parseCalendarEntries, parseICS, patchICS } from '../src/ical';
+import { buildICS, expandRecurrence, parseCalendarEntries, parseICS, patchICS } from '../src/ical';
 
 function vcal(...lines: string[]): string {
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', ...lines, 'END:VEVENT', 'END:VCALENDAR'].join(
@@ -370,5 +370,127 @@ describe('patchICS TZID preservation', () => {
     });
     expect(out).toContain('DTSTART:20260727T220000Z');
     expect(out).not.toContain('TZID');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client-side recurrence expansion (RRULE / EXDATE) — the CalDAV fallback for
+// servers that ignore <C:expand>. Governing rule: an unsupported RRULE part
+// must return the event UNCHANGED rather than emit wrong occurrences.
+// ---------------------------------------------------------------------------
+describe('ical: recurrence expansion', () => {
+  const series = (...rrule: string[]): ReturnType<typeof parseICS>[number] =>
+    parseICS(
+      vcal('UID:rec', 'DTSTART:20260706T090000Z', 'DTEND:20260706T093000Z', ...rrule),
+    )[0]!;
+
+  it('parses RRULE and every EXDATE line onto the VEvent', () => {
+    const ev = series(
+      'RRULE:FREQ=WEEKLY;BYDAY=MO,WE',
+      'EXDATE:20260708T090000Z',
+      'EXDATE:20260713T090000Z,20260715T090000Z',
+    );
+    expect(ev.rrule).toBe('FREQ=WEEKLY;BYDAY=MO,WE');
+    // Each EXDATE line's raw value is kept, comma-lists intact.
+    expect(ev.exdate).toEqual(['20260708T090000Z', '20260713T090000Z,20260715T090000Z']);
+  });
+
+  it('expands a DAILY rule to one occurrence per day within the window', () => {
+    const occ = expandRecurrence(series('RRULE:FREQ=DAILY'), '2026-07-06T00:00:00Z', '2026-07-09T00:00:00Z');
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-07T09:00:00Z',
+      '2026-07-08T09:00:00Z',
+    ]);
+    // Duration is preserved, RRULE dropped, and a synthetic RECURRENCE-ID set to
+    // the occurrence start so siblings sharing a booking id can be told apart.
+    expect(occ[0]!.end).toBe('2026-07-06T09:30:00Z');
+    expect(occ[0]!.rrule).toBeUndefined();
+    expect(occ[0]!.recurrenceId).toBe('2026-07-06T09:00:00Z');
+    // raw stays the master's raw (there is no per-occurrence server payload).
+    expect(occ[0]!.raw).toContain('RRULE:FREQ=DAILY');
+  });
+
+  it('skips alternate weeks for WEEKLY;INTERVAL=2', () => {
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=WEEKLY;INTERVAL=2'),
+      '2026-07-06T00:00:00Z',
+      '2026-08-04T00:00:00Z',
+    );
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-20T09:00:00Z',
+      '2026-08-03T09:00:00Z',
+    ]);
+  });
+
+  it('limits the series to COUNT occurrences', () => {
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=DAILY;COUNT=3'),
+      '2026-07-01T00:00:00Z',
+      '2026-08-01T00:00:00Z',
+    );
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-07T09:00:00Z',
+      '2026-07-08T09:00:00Z',
+    ]);
+  });
+
+  it('stops the series at UNTIL (inclusive)', () => {
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=DAILY;UNTIL=20260708T090000Z'),
+      '2026-07-01T00:00:00Z',
+      '2026-08-01T00:00:00Z',
+    );
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-07T09:00:00Z',
+      '2026-07-08T09:00:00Z',
+    ]);
+  });
+
+  it('removes an EXDATE-listed occurrence (COUNT counts before the exclusion)', () => {
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=DAILY;COUNT=4', 'EXDATE:20260707T090000Z'),
+      '2026-07-01T00:00:00Z',
+      '2026-08-01T00:00:00Z',
+    );
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z',
+      '2026-07-08T09:00:00Z',
+      '2026-07-09T09:00:00Z',
+    ]);
+  });
+
+  it('yields only the listed weekdays for WEEKLY;BYDAY=MO,WE,FR', () => {
+    // 2026-07-06 is a Monday.
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR'),
+      '2026-07-06T00:00:00Z',
+      '2026-07-13T00:00:00Z',
+    );
+    expect(occ.map((e) => e.start)).toEqual([
+      '2026-07-06T09:00:00Z', // Mon
+      '2026-07-08T09:00:00Z', // Wed
+      '2026-07-10T09:00:00Z', // Fri
+    ]);
+  });
+
+  it('returns the event UNCHANGED for an unsupported RRULE part (BYSETPOS)', () => {
+    const ev = series('RRULE:FREQ=MONTHLY;BYSETPOS=1;BYDAY=MO');
+    const occ = expandRecurrence(ev, '2026-07-01T00:00:00Z', '2026-12-01T00:00:00Z');
+    expect(occ).toHaveLength(1);
+    expect(occ[0]).toBe(ev); // same reference: no expansion attempted
+    expect(occ[0]!.rrule).toBe('FREQ=MONTHLY;BYSETPOS=1;BYDAY=MO');
+  });
+
+  it('caps an unbounded DAILY rule at 1000 candidates over a huge window', () => {
+    const ev = parseICS(
+      vcal('UID:cap', 'DTSTART:20260101T090000Z', 'DTEND:20260101T093000Z', 'RRULE:FREQ=DAILY'),
+    )[0]!;
+    // ~30 years unbounded → thousands of occurrences without the hard cap.
+    const occ = expandRecurrence(ev, '2026-01-01T00:00:00Z', '2056-01-01T00:00:00Z');
+    expect(occ).toHaveLength(1000);
   });
 });

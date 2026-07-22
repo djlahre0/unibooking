@@ -228,6 +228,24 @@ describe('square: customer resolution + version fetch', () => {
     agent.assertNoPendingInterceptors();
   });
 
+  it('cancelBooking forwards booking_version for optimistic concurrency', async () => {
+    const pool = agent.get(ORIGIN);
+    let cancelBody: any;
+    pool.intercept({ path: '/v2/bookings/B1/cancel', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        cancelBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking({ status: 'CANCELLED_BY_SELLER' }) });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.cancelBooking('B1', { providerOptions: { booking_version: 5 } });
+    expect(cancelBody.booking_version).toBe(5);
+    expect(typeof cancelBody.idempotency_key).toBe('string');
+    agent.assertNoPendingInterceptors();
+  });
+
   it('searchAvailability requires a serviceId and rejects an inverted range', async () => {
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     await expect(

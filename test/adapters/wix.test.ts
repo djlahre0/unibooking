@@ -368,11 +368,31 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     agent.assertNoPendingInterceptors();
   });
 
-  it('listBookings with a staffId throws UNSUPPORTED (Wix has no staff/resource filter)', async () => {
+  it('listBookings forwards a staffId as the documented bookedEntity.item.slot.resource.id filter', async () => {
+    const pool = agent.get(ORIGIN);
+    let body: any;
+    pool
+      .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
+      .reply(
+        200,
+        (opts) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({ extendedBookings: [{ booking: wixBooking() }] });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+
     const client = wix({ accessToken: 't' });
-    await expect(
-      client.listBookings({ range: { start: START, end: '2026-07-21T00:00:00Z' }, staffId: 'staff1' }),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    const r = await client.listBookings({
+      range: { start: START, end: '2026-07-21T00:00:00Z' },
+      staffId: 'staff1',
+    });
+
+    // Wix's "Supported Filters and Sorting" reference lists this exact path as a
+    // filterable staff/resource field ($eq/$ne/$in); a bare value is an $eq.
+    expect(body.query.filter['bookedEntity.item.slot.resource.id']).toBe('staff1');
+    expect(r.bookings).toHaveLength(1);
+    agent.assertNoPendingInterceptors();
   });
 
   it('listBookings forwards status + customerId and clamps the page limit to 100', async () => {
