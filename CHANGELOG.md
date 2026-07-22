@@ -4,12 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-22
 
-A second audit pass, again diffing each adapter against its provider's current
-published documentation, plus RFC 4791/5545 for the CalDAV stack.
+The last published release is 0.1.5. This version carries **two** audit passes:
+the provider API audit of 2026-07-20 (which was version-bumped but never
+published) and the follow-up pass below. Upgrading from 0.1.5 means taking both
+— read both Breaking sections.
 
-### Breaking
+### Second audit pass (2026-07-22)
+
+Again diffing each adapter against its provider's current published
+documentation, plus RFC 4791/5545 for the CalDAV stack. Nine adapters had
+defects that produced silently wrong results rather than errors.
+
+#### Breaking
 
 - **`SETMORE_MAX_PAGE_SIZE` is removed** from `unibooking/adapters/setmore`. It
   documented a 150-appointment cap that `listBookings` never actually applied
@@ -39,7 +47,7 @@ published documentation, plus RFC 4791/5545 for the CalDAV stack.
 - **Vagaro and Setmore availability ranges are capped** (31 and 62 days) with a
   clear error, replacing a silent truncation to a partial slot list.
 
-### Fixed
+#### Fixed
 
 - **Microsoft Bookings `searchAvailability` returned nothing.** It read the
   OData `value` wrapper, but `getStaffAvailability` returns its collection under
@@ -203,7 +211,7 @@ published documentation, plus RFC 4791/5545 for the CalDAV stack.
   `UNSUPPORTED` instead of sending a filter that 400s or is ignored. `status` and
   `customerId` are now forwarded, and the page limit is clamped to 100.
 
-### Added
+#### Added
 
 - `verifyCalendlySignature` accepts `toleranceMs` (and an injectable `now`) to
   reject replayed deliveries, as Calendly's docs recommend — the same opt-in
@@ -224,7 +232,7 @@ published documentation, plus RFC 4791/5545 for the CalDAV stack.
   return type of the already-exported `AuthFn`.
 - 60+ additional Windows/Exchange timezone ids, all validated against `Intl`.
 
-### Changed
+#### Changed
 
 - **The README's verification claims were overstated and are now accurate.** It
   said the conformance suite asserts "URL, headers and request body"; it matches
@@ -233,7 +241,7 @@ published documentation, plus RFC 4791/5545 for the CalDAV stack.
   is verified against a live tenant; correctness rests on spec diffs like this
   one.
 
-### Removed
+#### Removed
 
 - `BuildVEventInput.status` and the `STATUS` branch in `buildICS` — no caller.
 - Mindbody's `AppointmentTypeId` fallback (not a field in v6) and Wix's
@@ -245,20 +253,20 @@ published documentation, plus RFC 4791/5545 for the CalDAV stack.
   now 20, a "live integration tests" note for tests that do not exist, a
   resolved Calendly `TODO`).
 
-## [0.2.0] - 2026-07-20
+### First audit pass (2026-07-20)
 
 Every adapter was diffed against its provider's current published API
 documentation. Three were non-functional and eleven had wire-format defects. All
 findings below are grounded in a first-party specification — an OpenAPI/Swagger
 document, a GraphQL introspection schema, or an official reference page.
 
-> **Verification status.** These fixes match the published specifications and are
-> asserted at the wire level (URL, headers, request body) in tests. They are
-> **not** confirmed against live tenants — Vagaro, Setmore and Boulevard all
-> require gated credentials. The exception is the Bookeo webhook verifier, which
-> reproduces the vendor's own published test vector.
+> **Verification status.** These fixes match the published specifications. They
+> are **not** confirmed against live tenants — no adapter in this package is.
+> The exception is the Bookeo webhook verifier, which reproduces the vendor's
+> own published test vector. (An earlier wording claimed the tests assert
+> headers and request bodies across the board; they do not — see Changed above.)
 
-### Breaking
+#### Breaking
 
 - **`VagaroCredentials` requires `businessId`.** Every appointment call needs it;
   it is discoverable via `POST /{region}/api/v2/locations`.
@@ -295,7 +303,7 @@ document, a GraphQL introspection schema, or an official reference page.
 - **Outlook and Microsoft Bookings reject a non-URL `pageToken`.** It was
   previously forwarded as `$skiptoken`; see Fixed below.
 
-### Fixed
+#### Fixed
 
 Adapters that could not work at all:
 
@@ -365,7 +373,7 @@ Breaking defects in otherwise-working adapters:
   `VTIMEZONE`. All three are covered by tests that fail against the previous
   implementation.
 
-### Added
+#### Added
 
 - **Bookeo webhook verification** (`unibooking/webhooks/bookeo`). Bookeo signs
   deliveries with HMAC-SHA256 (hex) over
@@ -383,7 +391,7 @@ Breaking defects in otherwise-working adapters:
 - A test asserting the README's provider table against the adapters' real
   `capabilities` objects — it had silently drifted twice.
 
-### Changed
+#### Changed
 
 - **Square API version pinned to `2026-07-15`** (was `2025-10-16`, four releases
   behind). Square's changelog records no Bookings changes across that span.
