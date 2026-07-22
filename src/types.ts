@@ -61,13 +61,7 @@ export interface Customer {
 }
 
 export type BookingStatus =
-  | 'confirmed'
-  | 'pending'
-  | 'cancelled'
-  | 'declined'
-  | 'no_show'
-  | 'completed'
-  | 'unknown';
+  'confirmed' | 'pending' | 'cancelled' | 'declined' | 'no_show' | 'completed' | 'unknown';
 
 export interface Booking {
   id: string;

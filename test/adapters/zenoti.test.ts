@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  getGlobalDispatcher,
-  MockAgent,
-  setGlobalDispatcher,
-  type Dispatcher,
-} from 'undici';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { zenoti } from '../../src/adapters/zenoti';
 import { runConformance } from '../conformance';
 
@@ -34,7 +29,11 @@ runConformance({
   provider: 'zenoti',
   origin: 'https://api.zenoti.com',
   makeClient,
-  errorProbe: { method: 'GET', path: '/v1/appointments/missing', run: (c) => c.getBooking('missing') },
+  errorProbe: {
+    method: 'GET',
+    path: '/v1/appointments/missing',
+    run: (c) => c.getBooking('missing'),
+  },
   cases: [
     {
       name: 'getBooking maps _utc times and integer status',
@@ -56,7 +55,8 @@ runConformance({
       method: 'GET',
       path: '/v1/appointments',
       reply: { appointments: [APPT] },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => expect(r.bookings).toHaveLength(1),
     },
   ],
@@ -100,11 +100,15 @@ describe('zenoti flows', () => {
     agent
       .get('https://api.zenoti.com')
       .intercept({ path: (p: string) => p.split('?')[0] === path, method })
-      .reply(200, (opts: any) => {
-        seen.query = new URLSearchParams(String(opts.path).split('?')[1] ?? '');
-        seen.body = opts.body ? JSON.parse(String(opts.body)) : undefined;
-        return typeof body === 'string' ? body : JSON.stringify(body);
-      }, { headers: { 'content-type': 'application/json' } });
+      .reply(
+        200,
+        (opts: any) => {
+          seen.query = new URLSearchParams(String(opts.path).split('?')[1] ?? '');
+          seen.body = opts.body ? JSON.parse(String(opts.body)) : undefined;
+          return typeof body === 'string' ? body : JSON.stringify(body);
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     return seen;
   };
 
@@ -112,9 +116,16 @@ describe('zenoti flows', () => {
     intercept('POST', '/v1/bookings', { id: 'bk1' });
     intercept('GET', '/v1/bookings/bk1/slots', { slots: [{ Time: '2026-07-20T22:00:00Z' }] });
     intercept('POST', '/v1/bookings/bk1/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk1/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('POST', '/v1/bookings/bk1/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'appt1' }] },
+    });
     intercept('GET', '/v1/appointments/appt1', APPT);
-    const b = await makeClient().createBooking({ title: 'x', range: RANGE, serviceId: 'svc1', customer: { id: 'g1' } });
+    const b = await makeClient().createBooking({
+      title: 'x',
+      range: RANGE,
+      serviceId: 'svc1',
+      customer: { id: 'g1' },
+    });
     expect(b.id).toBe('appt1');
   });
 
@@ -151,13 +162,19 @@ describe('zenoti flows', () => {
     agent
       .get('https://api.zenoti.com')
       .intercept({ path: (p: string) => p.split('?')[0] === '/v1/bookings', method: 'POST' })
-      .reply(200, (opts) => {
-        bookingBody = JSON.parse(String(opts.body));
-        return JSON.stringify({ id: 'bkX' });
-      }, { headers: { 'content-type': 'application/json' } });
+      .reply(
+        200,
+        (opts) => {
+          bookingBody = JSON.parse(String(opts.body));
+          return JSON.stringify({ id: 'bkX' });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     intercept('GET', '/v1/bookings/bkX/slots', { slots: [{ Time: '2026-07-20T22:00:00-05:00' }] });
     intercept('POST', '/v1/bookings/bkX/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bkX/slots/confirm', { invoice: { items: [{ appointment_id: 'apptX' }] } });
+    intercept('POST', '/v1/bookings/bkX/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'apptX' }] },
+    });
     intercept('GET', '/v1/appointments/apptX', { ...APPT, appointment_id: 'apptX' });
     await makeClient().createBooking({
       title: 'x',
@@ -176,11 +193,19 @@ describe('zenoti flows', () => {
     agent
       .get('https://api.zenoti.com')
       .intercept({ path: (p: string) => p.split('?')[0] === '/v1/bookings', method: 'POST' })
-      .reply(200, (opts: any) => { bookingBody = JSON.parse(String(opts.body)); return JSON.stringify({ id: 'bk2' }); },
-        { headers: { 'content-type': 'application/json' } });
+      .reply(
+        200,
+        (opts: any) => {
+          bookingBody = JSON.parse(String(opts.body));
+          return JSON.stringify({ id: 'bk2' });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     intercept('GET', '/v1/bookings/bk2/slots', { slots: [{ Time: '2026-07-21T22:00:00Z' }] });
     intercept('POST', '/v1/bookings/bk2/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk2/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('POST', '/v1/bookings/bk2/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'appt1' }] },
+    });
     intercept('GET', '/v1/appointments/appt1', APPT);
 
     const b = await makeClient().updateBooking('appt1', { range: RANGE2 });
@@ -203,7 +228,9 @@ describe('zenoti flows', () => {
     intercept('POST', '/v1/bookings', { id: 'bk3' });
     intercept('GET', '/v1/bookings/bk3/slots', { slots: [{ Time: '2026-07-20T14:00:00' }] });
     intercept('POST', '/v1/bookings/bk3/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk3/slots/confirm', { invoice: { items: [{ appointment_id: 'appt3' }] } });
+    intercept('POST', '/v1/bookings/bk3/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'appt3' }] },
+    });
     intercept('GET', '/v1/appointments/appt3', { ...APPT, appointment_id: 'appt3' });
     const b = await makeClient().createBooking({
       title: 'x',
@@ -339,7 +366,9 @@ describe('zenoti flows', () => {
     const seen = capture('POST', '/v1/bookings', { id: 'bk6' });
     intercept('GET', '/v1/bookings/bk6/slots', { slots: [{ Time: '2026-07-20T22:00:00Z' }] });
     intercept('POST', '/v1/bookings/bk6/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk6/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('POST', '/v1/bookings/bk6/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'appt1' }] },
+    });
     intercept('GET', '/v1/appointments/appt1', APPT);
     await makeClient().createBooking({
       title: 'x',
@@ -358,7 +387,9 @@ describe('zenoti flows', () => {
     intercept('POST', '/v1/bookings', { id: 'bk7' });
     intercept('GET', '/v1/bookings/bk7/slots', { slots: [{ Time: '2026-07-20T22:00:00Z' }] });
     intercept('POST', '/v1/bookings/bk7/slots/reserve', { status: 'Reserved' });
-    intercept('POST', '/v1/bookings/bk7/slots/confirm', { invoice: { items: [{ appointment_id: 'appt1' }] } });
+    intercept('POST', '/v1/bookings/bk7/slots/confirm', {
+      invoice: { items: [{ appointment_id: 'appt1' }] },
+    });
     intercept('GET', '/v1/appointments/appt1', APPT);
     await makeClient().createBooking({
       title: 'x',
@@ -367,7 +398,10 @@ describe('zenoti flows', () => {
       customer: { name: 'Jane Doe', email: 'jane@example.com', phone: '9885517727' },
       providerOptions: { countryCode: 91 },
     });
-    expect(guest.body.personal_info.mobile_phone).toEqual({ number: '9885517727', country_code: 91 });
+    expect(guest.body.personal_info.mobile_phone).toEqual({
+      number: '9885517727',
+      country_code: 91,
+    });
   });
 
   it('reads the guest phone from display_number when number is null', async () => {

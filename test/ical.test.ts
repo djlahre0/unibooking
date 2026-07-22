@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { buildICS, expandRecurrence, parseCalendarEntries, parseICS, patchICS } from '../src/ical';
 
 function vcal(...lines: string[]): string {
-  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', ...lines, 'END:VEVENT', 'END:VCALENDAR'].join(
-    '\r\n',
-  );
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'BEGIN:VEVENT',
+    ...lines,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
 }
 
 describe('ical: TZID resolution', () => {
@@ -204,42 +209,42 @@ describe('ical: ATTENDEE CN escaping', () => {
 // ---------------------------------------------------------------------------
 // RFC 5545 section 3.3.11 TEXT escaping - regressions from the July 2026 audit
 // ---------------------------------------------------------------------------
-describe("ical TEXT escaping round-trip", () => {
+describe('ical TEXT escaping round-trip', () => {
   const BACKSLASH = String.fromCharCode(92);
   const LF = String.fromCharCode(10);
   const CR = String.fromCharCode(13);
 
   function build(summary: string): string {
     return buildICS({
-      uid: "u1",
-      stamp: "2026-07-19T00:00:00Z",
-      start: "2026-07-20T09:00:00Z",
-      end: "2026-07-20T09:30:00Z",
+      uid: 'u1',
+      stamp: '2026-07-19T00:00:00Z',
+      start: '2026-07-20T09:00:00Z',
+      end: '2026-07-20T09:30:00Z',
       summary,
     });
   }
 
-  it("round-trips a literal backslash followed by n", () => {
+  it('round-trips a literal backslash followed by n', () => {
     // Unescaping the escaped-newline sequence before the escaped-backslash
     // sequence turned a literal backslash+n into a real line feed.
-    const summary = "C:" + BACKSLASH + "new";
+    const summary = 'C:' + BACKSLASH + 'new';
     const ev = parseICS(build(summary))[0]!;
     expect(ev.summary).toBe(summary);
     expect(ev.summary).not.toContain(LF);
   });
 
-  it("round-trips every escape character RFC 5545 defines", () => {
-    const summary = ["a", BACKSLASH, "b;c,d", LF, "e"].join("");
+  it('round-trips every escape character RFC 5545 defines', () => {
+    const summary = ['a', BACKSLASH, 'b;c,d', LF, 'e'].join('');
     expect(parseICS(build(summary))[0]!.summary).toBe(summary);
   });
 
-  it("normalizes CRLF instead of emitting a bare CR", () => {
-    const summary = "line1" + CR + LF + "line2";
+  it('normalizes CRLF instead of emitting a bare CR', () => {
+    const summary = 'line1' + CR + LF + 'line2';
     const ics = build(summary);
     // A raw CR in the value would re-split the content line and corrupt it.
-    const line = ics.split(CR + LF).find((l) => l.startsWith("SUMMARY:"))!;
-    expect(line).toBe("SUMMARY:line1" + BACKSLASH + "nline2");
-    expect(parseICS(ics)[0]!.summary).toBe("line1" + LF + "line2");
+    const line = ics.split(CR + LF).find((l) => l.startsWith('SUMMARY:'))!;
+    expect(line).toBe('SUMMARY:line1' + BACKSLASH + 'nline2');
+    expect(parseICS(ics)[0]!.summary).toBe('line1' + LF + 'line2');
   });
 });
 
@@ -380,9 +385,7 @@ describe('patchICS TZID preservation', () => {
 // ---------------------------------------------------------------------------
 describe('ical: recurrence expansion', () => {
   const series = (...rrule: string[]): ReturnType<typeof parseICS>[number] =>
-    parseICS(
-      vcal('UID:rec', 'DTSTART:20260706T090000Z', 'DTEND:20260706T093000Z', ...rrule),
-    )[0]!;
+    parseICS(vcal('UID:rec', 'DTSTART:20260706T090000Z', 'DTEND:20260706T093000Z', ...rrule))[0]!;
 
   it('parses RRULE and every EXDATE line onto the VEvent', () => {
     const ev = series(
@@ -396,7 +399,11 @@ describe('ical: recurrence expansion', () => {
   });
 
   it('expands a DAILY rule to one occurrence per day within the window', () => {
-    const occ = expandRecurrence(series('RRULE:FREQ=DAILY'), '2026-07-06T00:00:00Z', '2026-07-09T00:00:00Z');
+    const occ = expandRecurrence(
+      series('RRULE:FREQ=DAILY'),
+      '2026-07-06T00:00:00Z',
+      '2026-07-09T00:00:00Z',
+    );
     expect(occ.map((e) => e.start)).toEqual([
       '2026-07-06T09:00:00Z',
       '2026-07-07T09:00:00Z',

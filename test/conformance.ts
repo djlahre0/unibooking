@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  getGlobalDispatcher,
-  MockAgent,
-  setGlobalDispatcher,
-  type Dispatcher,
-} from 'undici';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import type { Booking, BookingClient, ProviderId } from '../src/types';
 import { isInstant } from '../src/time';
 
@@ -56,10 +51,13 @@ export function assertCanonicalBooking(b: Booking, provider: ProviderId): void {
   expect(typeof b.title).toBe('string');
   // Canonical instants must carry an explicit offset (Z or ±HH:MM), not merely
   // be parseable — an offset-less string is an ambiguous instant.
-  expect(isInstant(b.range.start), `range.start is an offset-bearing instant: ${b.range.start}`).toBe(
+  expect(
+    isInstant(b.range.start),
+    `range.start is an offset-bearing instant: ${b.range.start}`,
+  ).toBe(true);
+  expect(isInstant(b.range.end), `range.end is an offset-bearing instant: ${b.range.end}`).toBe(
     true,
   );
-  expect(isInstant(b.range.end), `range.end is an offset-bearing instant: ${b.range.end}`).toBe(true);
   // Strict: the contract is end > start (no zero-length bookings).
   expect(
     Date.parse(b.range.end) > Date.parse(b.range.start),
@@ -74,10 +72,13 @@ function assertCanonical(provider: ProviderId, result: any): void {
   if (Array.isArray(result)) {
     for (const slot of result) {
       if (slot && typeof slot === 'object' && 'start' in slot && 'end' in slot) {
-        expect(isInstant(slot.start), `slot.start is an offset-bearing instant: ${slot.start}`).toBe(
+        expect(
+          isInstant(slot.start),
+          `slot.start is an offset-bearing instant: ${slot.start}`,
+        ).toBe(true);
+        expect(isInstant(slot.end), `slot.end is an offset-bearing instant: ${slot.end}`).toBe(
           true,
         );
-        expect(isInstant(slot.end), `slot.end is an offset-bearing instant: ${slot.end}`).toBe(true);
         expect(Date.parse(slot.end) > Date.parse(slot.start), `slot end > start`).toBe(true);
       }
     }
@@ -146,7 +147,10 @@ export function runConformance(config: ConformanceConfig): void {
             })
             .reply(
               status,
-              JSON.stringify({ error: { message: 'boom' }, errors: [{ code: 'X', detail: 'boom' }] }),
+              JSON.stringify({
+                error: { message: 'boom' },
+                errors: [{ code: 'X', detail: 'boom' }],
+              }),
               { headers: status === 429 ? { ...JSON_HEADERS, 'retry-after': '2' } : JSON_HEADERS },
             );
 
@@ -165,7 +169,9 @@ export function runConformance(config: ConformanceConfig): void {
       const client = config.makeClient();
       if (client.capabilities.availability) return;
       const err = await client
-        .searchAvailability({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } })
+        .searchAvailability({
+          range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+        })
         .then(() => null)
         .catch((e) => e);
       expect(err?.code).toBe('UNSUPPORTED');

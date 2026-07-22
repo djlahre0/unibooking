@@ -143,8 +143,8 @@ export function parseICS(text: string): VEvent[] {
   const lines = unfolded.split(/\r\n|\n|\r/);
   const events: VEvent[] = [];
   let cur:
-    | (Partial<VEvent> & { _duration?: string; _allDayStart?: boolean; _rawLines: string[] })
-    | null = null;
+    (Partial<VEvent> & { _duration?: string; _allDayStart?: boolean; _rawLines: string[] }) | null =
+    null;
 
   // Depth of components nested inside the current VEVENT (VALARM, and anything
   // else a server may embed). Their properties describe the sub-component, not
@@ -360,7 +360,12 @@ function exdateInstants(exdate: string[] | undefined): Set<number> {
  *  apart. `raw` stays the master's raw — there is no per-occurrence server raw. */
 function toOccurrence(master: VEvent, startMs: number, durationMs: number): VEvent {
   const start = formatWithOffset(startMs, 0);
-  const occ: VEvent = { ...master, start, end: formatWithOffset(startMs + durationMs, 0), recurrenceId: start };
+  const occ: VEvent = {
+    ...master,
+    start,
+    end: formatWithOffset(startMs + durationMs, 0),
+    recurrenceId: start,
+  };
   delete occ.rrule;
   return occ;
 }
@@ -604,7 +609,11 @@ function masterEventOrdinal(lines: string[]): number {
       stack.pop();
       continue;
     }
-    if (ordinal >= 0 && stack[stack.length - 1] === 'VEVENT' && propertyName(line) === 'RECURRENCE-ID') {
+    if (
+      ordinal >= 0 &&
+      stack[stack.length - 1] === 'VEVENT' &&
+      propertyName(line) === 'RECURRENCE-ID'
+    ) {
       overridden[ordinal] = true;
     }
   }
@@ -625,7 +634,9 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
   const lines = unfolded.split(/\r\n|\n|\r/);
   const replacements: Record<string, string | undefined> = {
     DTSTAMP: `DTSTAMP:${instantToICalUTC(changes.stamp)}`,
-    ...(changes.start !== undefined ? { DTSTART: `DTSTART:${instantToICalUTC(changes.start)}` } : {}),
+    ...(changes.start !== undefined
+      ? { DTSTART: `DTSTART:${instantToICalUTC(changes.start)}` }
+      : {}),
     ...(changes.end !== undefined ? { DTEND: `DTEND:${instantToICalUTC(changes.end)}` } : {}),
     ...(changes.summary !== undefined ? { SUMMARY: `SUMMARY:${escapeText(changes.summary)}` } : {}),
     ...(changes.status !== undefined ? { STATUS: `STATUS:${changes.status}` } : {}),

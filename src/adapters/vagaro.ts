@@ -115,7 +115,10 @@ function mapStatus(s: unknown): BookingStatus {
   }
 }
 
-function parseVagaroError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseVagaroError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
   const message = typeof b.message === 'string' ? b.message : undefined;
@@ -150,7 +153,11 @@ function toBooking(raw: unknown): Booking {
 
 function requireField(value: string | undefined, hint: string): string {
   if (!value) {
-    throw new UnibookingError({ provider: 'vagaro', code: 'INVALID_INPUT', message: `Vagaro requires ${hint}` });
+    throw new UnibookingError({
+      provider: 'vagaro',
+      code: 'INVALID_INPUT',
+      message: `Vagaro requires ${hint}`,
+    });
   }
   return value;
 }
@@ -199,7 +206,10 @@ export const vagaro = defineAdapter<VagaroCredentials>({
       assertValidRange(input.range, 'vagaro');
       const c = await http.resolve();
       const serviceId = requireField(input.serviceId, 'a serviceId to book');
-      const serviceProviderId = requireField(input.staffId, 'a staffId (serviceProviderId) to book');
+      const serviceProviderId = requireField(
+        input.staffId,
+        'a staffId (serviceProviderId) to book',
+      );
       const customerId = requireField(input.customer?.id, 'a customer id to book');
       // The create endpoint takes a top-level array — it is a batch endpoint.
       const res = await http.request(c, {
@@ -219,8 +229,16 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         ],
       });
       // Only the new id comes back; re-fetch for the canonical object.
-      const created = asArray(asRecord(res, 'vagaro', 'response')?.data?.appointments, 'vagaro', 'appointments')[0];
-      const id = reqString(String(created?.appointmentId ?? ''), 'vagaro', 'appointment.appointmentId');
+      const created = asArray(
+        asRecord(res, 'vagaro', 'response')?.data?.appointments,
+        'vagaro',
+        'appointments',
+      )[0];
+      const id = reqString(
+        String(created?.appointmentId ?? ''),
+        'vagaro',
+        'appointment.appointmentId',
+      );
       return fetchAppointment(http, c, id);
     },
 
@@ -264,9 +282,10 @@ export const vagaro = defineAdapter<VagaroCredentials>({
             input.staffId ?? current.staffId,
             'a staffId (serviceProviderId) to update — the current appointment carries none to fall back on',
           ),
-          appointmentType: typeof raw.eventType === 'string' && raw.eventType.toLowerCase() === 'class'
-            ? 'class'
-            : 'appointment',
+          appointmentType:
+            typeof raw.eventType === 'string' && raw.eventType.toLowerCase() === 'class'
+              ? 'class'
+              : 'appointment',
           startTime: toVagaroLocal(startIso),
           // createBooking maps title to appointmentNote; update must not drop it.
           // (`notify` has no equivalent field and is ignored, as the canonical

@@ -59,7 +59,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseBookeoError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseBookeoError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
   // The documented error body is {httpStatus, message, errorId}.
@@ -192,7 +195,11 @@ export const bookeo = defineAdapter<BookeoCredentials>({
               : `Bookeo booking status is not writable (cannot set "${input.status}")`,
         });
       }
-      if (input.title !== undefined || input.staffId !== undefined || input.serviceId !== undefined) {
+      if (
+        input.title !== undefined ||
+        input.staffId !== undefined ||
+        input.serviceId !== undefined
+      ) {
         throw new UnibookingError({
           provider: 'bookeo',
           code: 'UNSUPPORTED',

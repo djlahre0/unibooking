@@ -74,7 +74,10 @@ describe('end-to-end (mocked)', () => {
       });
     const client = square({ accessToken: 't', locationId: 'L' });
     const err = await client
-      .createBooking({ title: 'x', range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' } })
+      .createBooking({
+        title: 'x',
+        range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' },
+      })
       .catch((e) => e);
     expect(isUnibookingError(err) && err.code).toBe('CONFLICT');
   });

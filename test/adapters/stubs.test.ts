@@ -21,7 +21,9 @@ for (const [name, factory] of [['mangomint', mangomint]] as const) {
         () => client.searchAvailability({ range: RANGE }),
       ];
       for (const call of calls) {
-        const err = await call().then(() => null).catch((e: any) => e);
+        const err = await call()
+          .then(() => null)
+          .catch((e: any) => e);
         expect(err?.code).toBe('UNSUPPORTED');
       }
     });

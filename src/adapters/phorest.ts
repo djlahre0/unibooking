@@ -114,7 +114,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parsePhorestError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parsePhorestError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
   return {
@@ -167,7 +170,11 @@ function embedded(res: any): any[] {
  *  the created appointment's id lives on the nested service schedule. */
 function createdAppointmentId(res: unknown): string {
   const b = asRecord(res, 'phorest', 'booking');
-  for (const cs of asArray(b.clientAppointmentSchedules, 'phorest', 'booking.clientAppointmentSchedules')) {
+  for (const cs of asArray(
+    b.clientAppointmentSchedules,
+    'phorest',
+    'booking.clientAppointmentSchedules',
+  )) {
     for (const ss of asArray(cs?.serviceSchedules, 'phorest', 'booking.serviceSchedules')) {
       if (ss?.appointmentId) return String(ss.appointmentId);
     }
@@ -175,7 +182,8 @@ function createdAppointmentId(res: unknown): string {
   throw new UnibookingError({
     provider: 'phorest',
     code: 'UPSTREAM',
-    message: 'booking response has no clientAppointmentSchedules[].serviceSchedules[].appointmentId',
+    message:
+      'booking response has no clientAppointmentSchedules[].serviceSchedules[].appointmentId',
   });
 }
 
@@ -443,8 +451,16 @@ export const phorest = defineAdapter<PhorestCredentials>({
       for (const entry of asArray(body.data, 'phorest', 'availability.data')) {
         const start = entry?.startTime;
         if (typeof start !== 'string' || !start) continue;
-        for (const cs of asArray(entry.clientSchedules, 'phorest', 'availability.clientSchedules')) {
-          for (const ss of asArray(cs?.serviceSchedules, 'phorest', 'availability.serviceSchedules')) {
+        for (const cs of asArray(
+          entry.clientSchedules,
+          'phorest',
+          'availability.clientSchedules',
+        )) {
+          for (const ss of asArray(
+            cs?.serviceSchedules,
+            'phorest',
+            'availability.serviceSchedules',
+          )) {
             // No endTime means no derivable end — skip rather than invent one.
             if (typeof ss?.endTime !== 'string' || !ss.endTime) continue;
             out.push({

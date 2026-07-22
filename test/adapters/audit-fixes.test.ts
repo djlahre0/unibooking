@@ -149,7 +149,10 @@ describe('AUDIT apple: update no longer destroys event data', () => {
       });
 
     const client = apple({ username: 'u', appPassword: 'p', calendarUrl: CAL });
-    await client.updateBooking('evt-1', { title: 'Renamed', range: { start: '2026-07-27T22:00:00Z', end: '2026-07-27T22:45:00Z' } });
+    await client.updateBooking('evt-1', {
+      title: 'Renamed',
+      range: { start: '2026-07-27T22:00:00Z', end: '2026-07-27T22:45:00Z' },
+    });
 
     expect(putBody).toContain('LOCATION:Room 5');
     expect(putBody).toContain('DESCRIPTION:Bring the report');
@@ -200,11 +203,18 @@ describe('AUDIT apple: update no longer destroys event data', () => {
     // …and that id addresses the real resource on a follow-up get.
     let hit = false;
     pool
-      .intercept({ path: (p) => p.startsWith('/123/calendars/home/server-name-abc.ics'), method: 'GET' })
-      .reply(200, () => {
-        hit = true;
-        return ICS;
-      }, { headers: { 'content-type': 'text/calendar' } });
+      .intercept({
+        path: (p) => p.startsWith('/123/calendars/home/server-name-abc.ics'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        () => {
+          hit = true;
+          return ICS;
+        },
+        { headers: { 'content-type': 'text/calendar' } },
+      );
     await client.getBooking(bookings[0]!.id);
     expect(hit).toBe(true);
   });
@@ -218,10 +228,16 @@ describe('AUDIT acuity: rejects zero-length ranges/slots', () => {
     agent
       .get('https://acuityscheduling.com')
       .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
-      .reply(200, JSON.stringify({ id: 7, datetime: '2026-07-20T15:00:00-0700', type: 'Consult' }), {
-        headers: JSON_HEADERS,
-      });
-    const err = await acuity({ userId: 'u', apiKey: 'k' }).getBooking('7').catch((e) => e);
+      .reply(
+        200,
+        JSON.stringify({ id: 7, datetime: '2026-07-20T15:00:00-0700', type: 'Consult' }),
+        {
+          headers: JSON_HEADERS,
+        },
+      );
+    const err = await acuity({ userId: 'u', apiKey: 'k' })
+      .getBooking('7')
+      .catch((e) => e);
     expect(err.code).toBe('UPSTREAM');
   });
 
@@ -243,15 +259,28 @@ describe('AUDIT vagaro: skips unsizable slots', () => {
   it('drops a slot whose items[] carries no duration instead of emitting end===start', async () => {
     agent
       .get('https://api.vagaro.com')
-      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
+      .intercept({
+        path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'),
+        method: 'POST',
+      })
       .reply(
         200,
         JSON.stringify({
-          data: [{ appointmentDate: '2026-07-20', items: [{ serviceProviderId: 'sp1' }], timeSlot: ['09:00'] }],
+          data: [
+            {
+              appointmentDate: '2026-07-20',
+              items: [{ serviceProviderId: 'sp1' }],
+              timeSlot: ['09:00'],
+            },
+          ],
         }),
         { headers: JSON_HEADERS },
       );
-    const slots = await vagaro({ region: 'usa03', businessId: 'biz1', accessToken: 't' }).searchAvailability({
+    const slots = await vagaro({
+      region: 'usa03',
+      businessId: 'biz1',
+      accessToken: 't',
+    }).searchAvailability({
       range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T23:00:00Z' },
       serviceId: 'svc1',
     });
@@ -305,10 +334,14 @@ describe('AUDIT square: listBookings forwards customerId', () => {
     agent
       .get('https://connect.squareup.com')
       .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
-      .reply(200, (opts) => {
-        customerId = new URL('http://x' + opts.path).searchParams.get('customer_id');
-        return JSON.stringify({ bookings: [] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts) => {
+          customerId = new URL('http://x' + opts.path).searchParams.get('customer_id');
+          return JSON.stringify({ bookings: [] });
+        },
+        { headers: JSON_HEADERS },
+      );
     await square({ accessToken: 't', locationId: 'L' }).listBookings({
       range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
       customerId: 'CUST1',
@@ -368,17 +401,24 @@ describe('AUDIT google: updateBooking maps canonical status onto event status', 
     let body: any;
     agent
       .get('https://www.googleapis.com')
-      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'), method: 'PATCH' })
-      .reply(200, (opts) => {
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify({
-          id: 'ev1',
-          summary: 'x',
-          start: { dateTime: '2026-07-20T15:00:00-07:00' },
-          end: { dateTime: '2026-07-20T15:45:00-07:00' },
-          status: 'confirmed',
-        });
-      }, { headers: JSON_HEADERS });
+      .intercept({
+        path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'),
+        method: 'PATCH',
+      })
+      .reply(
+        200,
+        (opts) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({
+            id: 'ev1',
+            summary: 'x',
+            start: { dateTime: '2026-07-20T15:00:00-07:00' },
+            end: { dateTime: '2026-07-20T15:45:00-07:00' },
+            status: 'confirmed',
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
     await google({ accessToken: 't', calendarId: 'primary' }).updateBooking('ev1', { status });
     return body;
   }
@@ -397,17 +437,24 @@ describe('AUDIT google: notify maps to the sendUpdates query on create', () => {
     const paths: string[] = [];
     agent
       .get('https://www.googleapis.com')
-      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'), method: 'POST' })
-      .reply(200, (opts) => {
-        paths.push(opts.path);
-        return JSON.stringify({
-          id: 'ev1',
-          summary: 'x',
-          start: { dateTime: '2026-07-20T15:00:00-07:00' },
-          end: { dateTime: '2026-07-20T15:45:00-07:00' },
-          status: 'confirmed',
-        });
-      }, { headers: JSON_HEADERS })
+      .intercept({
+        path: (p) => p.startsWith('/calendar/v3/calendars/primary/events'),
+        method: 'POST',
+      })
+      .reply(
+        200,
+        (opts) => {
+          paths.push(opts.path);
+          return JSON.stringify({
+            id: 'ev1',
+            summary: 'x',
+            start: { dateTime: '2026-07-20T15:00:00-07:00' },
+            end: { dateTime: '2026-07-20T15:45:00-07:00' },
+            status: 'confirmed',
+          });
+        },
+        { headers: JSON_HEADERS },
+      )
       .times(2);
     const client = google({ accessToken: 't', calendarId: 'primary' });
     const range = { start: '2026-07-20T15:00:00-07:00', end: '2026-07-20T15:45:00-07:00' };
@@ -425,13 +472,30 @@ describe('AUDIT mindbody: IANA timezone applies DST', () => {
   it('interprets a July site-local time as PDT (-07:00) when given the IANA zone', async () => {
     agent
       .get('https://api.mindbodyonline.com')
-      .intercept({ path: (p) => p.startsWith('/public/v6/appointment/staffappointments'), method: 'GET' })
-      .reply(200, JSON.stringify({
-        Appointments: [{
-          Id: 1, StartDateTime: '2026-07-20T15:00:00', EndDateTime: '2026-07-20T15:45:00', Status: 'Booked',
-        }],
-      }), { headers: JSON_HEADERS });
-    const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 't', timezone: 'America/Los_Angeles' });
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/staffappointments'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          Appointments: [
+            {
+              Id: 1,
+              StartDateTime: '2026-07-20T15:00:00',
+              EndDateTime: '2026-07-20T15:45:00',
+              Status: 'Booked',
+            },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+    const client = mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 't',
+      timezone: 'America/Los_Angeles',
+    });
     const b = await client.getBooking('1');
     // 15:00 PDT (July, -07:00) === 22:00Z. A fixed -08:00 offset would wrongly give 23:00Z.
     expect(Date.parse(b.range.start)).toBe(Date.parse('2026-07-20T22:00:00Z'));
@@ -441,58 +505,85 @@ describe('AUDIT mindbody: IANA timezone applies DST', () => {
 // ---------------------------------------------------------------------------
 // Docs-verification round (July 2026): bugs found by diffing against live specs
 // ---------------------------------------------------------------------------
-describe("AUDIT mindbody: cancel is supported via updateappointment", () => {
-  it("POSTs Execute: cancel instead of throwing UNSUPPORTED", async () => {
+describe('AUDIT mindbody: cancel is supported via updateappointment', () => {
+  it('POSTs Execute: cancel instead of throwing UNSUPPORTED', async () => {
     let body: any;
     agent
-      .get("https://api.mindbodyonline.com")
-      .intercept({ path: (p) => p.includes("/appointment/updateappointment"), method: "POST" })
-      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify({}); },
-        { headers: JSON_HEADERS });
-    await mindbody({ apiKey: "k", siteId: "1", accessToken: "t" })
-      .cancelBooking("12345", { notify: true });
+      .get('https://api.mindbodyonline.com')
+      .intercept({ path: (p) => p.includes('/appointment/updateappointment'), method: 'POST' })
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({});
+        },
+        { headers: JSON_HEADERS },
+      );
+    await mindbody({ apiKey: 'k', siteId: '1', accessToken: 't' }).cancelBooking('12345', {
+      notify: true,
+    });
     expect(body.AppointmentId).toBe(12345);
-    expect(body.Execute).toBe("cancel");
+    expect(body.Execute).toBe('cancel');
     expect(body.SendEmail).toBe(true);
   });
 });
 
-describe("AUDIT mindbody: create sends EndDateTime", () => {
-  it("does not let the staff default duration silently override the range", async () => {
+describe('AUDIT mindbody: create sends EndDateTime', () => {
+  it('does not let the staff default duration silently override the range', async () => {
     let body: any;
     agent
-      .get("https://api.mindbodyonline.com")
-      .intercept({ path: (p) => p.includes("/appointment/addappointment"), method: "POST" })
-      .reply(200, (opts: any) => {
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify({ Appointment: { Id: 1, StartDateTime: "2026-07-20T09:00:00",
-          EndDateTime: "2026-07-20T10:30:00", Status: "Booked" } });
-      }, { headers: JSON_HEADERS });
-    await mindbody({ apiKey: "k", siteId: "1", accessToken: "t", locationId: "1" }).createBooking({
-      title: "x",
-      range: { start: "2026-07-20T09:00:00Z", end: "2026-07-20T10:30:00Z" },
-      customer: { id: "c1" }, staffId: "s1", serviceId: "svc1",
+      .get('https://api.mindbodyonline.com')
+      .intercept({ path: (p) => p.includes('/appointment/addappointment'), method: 'POST' })
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({
+            Appointment: {
+              Id: 1,
+              StartDateTime: '2026-07-20T09:00:00',
+              EndDateTime: '2026-07-20T10:30:00',
+              Status: 'Booked',
+            },
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
+    await mindbody({ apiKey: 'k', siteId: '1', accessToken: 't', locationId: '1' }).createBooking({
+      title: 'x',
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:30:00Z' },
+      customer: { id: 'c1' },
+      staffId: 's1',
+      serviceId: 'svc1',
     });
-    expect(body.StartDateTime).toBe("2026-07-20T09:00:00");
-    expect(body.EndDateTime).toBe("2026-07-20T10:30:00");
+    expect(body.StartDateTime).toBe('2026-07-20T09:00:00');
+    expect(body.EndDateTime).toBe('2026-07-20T10:30:00');
   });
 });
 
-describe("AUDIT zenoti: service is nested under item.id", () => {
-  it("sends item: { id, item_type }, not a flat service_id", async () => {
+describe('AUDIT zenoti: service is nested under item.id', () => {
+  it('sends item: { id, item_type }, not a flat service_id', async () => {
     let body: any;
     agent
-      .get("https://api.zenoti.com")
-      .intercept({ path: (p) => p.startsWith("/v1/bookings"), method: "POST" })
-      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify({ id: "bk1" }); },
-        { headers: JSON_HEADERS });
-    await zenoti({ apiKey: "k", centerId: "ctr1" }).searchAvailability({
-      range: { start: "2026-07-20T09:00:00Z", end: "2026-07-20T17:00:00Z" },
-      serviceId: "svc1",
-      providerOptions: { guestId: "g1" },
-      durationMinutes: 30,
-    }).catch(() => undefined);
-    expect(body.guests[0].items[0].item).toEqual({ id: "svc1", item_type: 0 });
+      .get('https://api.zenoti.com')
+      .intercept({ path: (p) => p.startsWith('/v1/bookings'), method: 'POST' })
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({ id: 'bk1' });
+        },
+        { headers: JSON_HEADERS },
+      );
+    await zenoti({ apiKey: 'k', centerId: 'ctr1' })
+      .searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T17:00:00Z' },
+        serviceId: 'svc1',
+        providerOptions: { guestId: 'g1' },
+        durationMinutes: 30,
+      })
+      .catch(() => undefined);
+    expect(body.guests[0].items[0].item).toEqual({ id: 'svc1', item_type: 0 });
     expect(body.guests[0].items[0].service_id).toBeUndefined();
   });
 });

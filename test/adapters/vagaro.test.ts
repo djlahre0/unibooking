@@ -103,10 +103,14 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ data: [APPT] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ data: [APPT] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().getBooking('ap==');
 
@@ -121,10 +125,14 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ data: [APPT] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ data: [APPT] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().getBooking('ap==');
 
@@ -138,10 +146,14 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/create'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ data: { appointments: [{ appointmentId: 'ap==' }] } });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ data: { appointments: [{ appointmentId: 'ap==' }] } });
+        },
+        { headers: JSON_HEADERS },
+      );
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p === '/usa03/api/v2/appointments', method: 'POST' })
@@ -168,11 +180,18 @@ describe('vagaro wire format', () => {
     let seen: any;
     agent
       .get(ORIGIN)
-      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/delete/'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ data: {} });
-      }, { headers: JSON_HEADERS });
+      .intercept({
+        path: (p) => p.startsWith('/usa03/api/v2/appointments/delete/'),
+        method: 'POST',
+      })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ data: {} });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().cancelBooking('ap==');
 
@@ -194,10 +213,14 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ data: [APPT] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ data: [APPT] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
 
@@ -219,7 +242,9 @@ describe('vagaro wire format', () => {
         { headers: JSON_HEADERS },
       );
 
-    const err = await makeClient().getBooking('x').catch((e) => e);
+    const err = await makeClient()
+      .getBooking('x')
+      .catch((e) => e);
     expect(err.code).toBe('INVALID_INPUT');
     expect(err.message).toContain('validation errors');
     // Previously read `errorCode`/`code`, neither of which Vagaro ever sends.
@@ -228,7 +253,10 @@ describe('vagaro wire format', () => {
 
   it('validates the listBookings range like every other method', async () => {
     const err = await makeClient()
-      .listBookings({ range: { start: '2026-07-20T22:00:00Z', end: 'nonsense' }, customerId: 'cust1' })
+      .listBookings({
+        range: { start: '2026-07-20T22:00:00Z', end: 'nonsense' },
+        customerId: 'cust1',
+      })
       .then(() => null)
       .catch((e: any) => e);
     expect(err?.code).toBe('INVALID_INPUT');
@@ -238,9 +266,13 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments'), method: 'POST' })
-      .reply(200, JSON.stringify({
-        data: [APPT, { ...APPT, appointmentId: 'old==', startTime: '2020-01-01T10:00:00.000Z' }],
-      }), { headers: JSON_HEADERS });
+      .reply(
+        200,
+        JSON.stringify({
+          data: [APPT, { ...APPT, appointmentId: 'old==', startTime: '2020-01-01T10:00:00.000Z' }],
+        }),
+        { headers: JSON_HEADERS },
+      );
 
     // POST /appointments takes no date window — it returns the whole history.
     const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
@@ -275,16 +307,23 @@ describe('vagaro wire format', () => {
   it('filters availability slots to the requested window', async () => {
     agent
       .get(ORIGIN)
-      .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
-      .reply(200, JSON.stringify({
-        data: [
-          {
-            appointmentDate: '2026-07-20',
-            items: [{ serviceProviderId: 'sp1', duration: 30 }],
-            timeSlot: ['08:00', '10:00', '18:00'],
-          },
-        ],
-      }), { headers: JSON_HEADERS });
+      .intercept({
+        path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'),
+        method: 'POST',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          data: [
+            {
+              appointmentDate: '2026-07-20',
+              items: [{ serviceProviderId: 'sp1', duration: 30 }],
+              timeSlot: ['08:00', '10:00', '18:00'],
+            },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
 
     const slots = await makeClient().searchAvailability({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
@@ -296,16 +335,26 @@ describe('vagaro wire format', () => {
 
   it('queries one day per date in a multi-day availability range', async () => {
     const dates: string[] = [];
-    for (const [date, time] of [['2026-07-20', '10:00'], ['2026-07-21', '11:00']]) {
+    for (const [date, time] of [
+      ['2026-07-20', '10:00'],
+      ['2026-07-21', '11:00'],
+    ]) {
       agent
         .get(ORIGIN)
-        .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'), method: 'POST' })
-        .reply(200, (opts: any) => {
-          dates.push(JSON.parse(String(opts.body)).appointmentDate);
-          return JSON.stringify({
-            data: [{ appointmentDate: date, items: [{ duration: 30 }], timeSlot: [time] }],
-          });
-        }, { headers: JSON_HEADERS });
+        .intercept({
+          path: (p) => p.startsWith('/usa03/api/v2/appointments/availability'),
+          method: 'POST',
+        })
+        .reply(
+          200,
+          (opts: any) => {
+            dates.push(JSON.parse(String(opts.body)).appointmentDate);
+            return JSON.stringify({
+              data: [{ appointmentDate: date, items: [{ duration: 30 }], timeSlot: [time] }],
+            });
+          },
+          { headers: JSON_HEADERS },
+        );
     }
 
     const slots = await makeClient().searchAvailability({
@@ -338,7 +387,9 @@ describe('vagaro wire format', () => {
       });
 
     const err = await makeClient()
-      .updateBooking('ap==', { range: { start: '2026-07-21T09:00:00Z', end: '2026-07-21T09:45:00Z' } })
+      .updateBooking('ap==', {
+        range: { start: '2026-07-21T09:00:00Z', end: '2026-07-21T09:45:00Z' },
+      })
       .then(() => null)
       .catch((e: any) => e);
 
@@ -358,10 +409,14 @@ describe('vagaro wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/usa03/api/v2/appointments/ap'), method: 'PUT' })
-      .reply(200, (opts: any) => {
-        seen = JSON.parse(String(opts.body));
-        return JSON.stringify({ data: '' });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = JSON.parse(String(opts.body));
+          return JSON.stringify({ data: '' });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().updateBooking('ap==', { title: 'VIP client' });
 
@@ -370,7 +425,10 @@ describe('vagaro wire format', () => {
 
   it('rejects a status change it cannot write', async () => {
     const client = makeClient();
-    for (const [status, hint] of [['cancelled', 'cancelBooking'], ['confirmed', 'confirmed']] as const) {
+    for (const [status, hint] of [
+      ['cancelled', 'cancelBooking'],
+      ['confirmed', 'confirmed'],
+    ] as const) {
       const err = await client
         .updateBooking('ap==', { status })
         .then(() => null)

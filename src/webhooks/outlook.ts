@@ -37,6 +37,7 @@ export function verifyGraphClientState(payload: unknown, expectedClientState: st
   const notifications = (payload as any)?.value;
   if (!Array.isArray(notifications) || notifications.length === 0) return false;
   return notifications.every(
-    (n) => typeof n?.clientState === 'string' && timingSafeEqual(n.clientState, expectedClientState),
+    (n) =>
+      typeof n?.clientState === 'string' && timingSafeEqual(n.clientState, expectedClientState),
   );
 }

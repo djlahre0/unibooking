@@ -33,7 +33,11 @@ runConformance({
       path: '/calendar/v3/calendars/primary/events',
       reply: EVENT,
       run: (c) =>
-        c.createBooking({ title: 'Haircut — Jane', range: RANGE, customer: { email: 'jane@example.com' } }),
+        c.createBooking({
+          title: 'Haircut — Jane',
+          range: RANGE,
+          customer: { email: 'jane@example.com' },
+        }),
       check: (b) => {
         expect(b.id).toBe('ev1');
         expect(b.customer?.email).toBe('jane@example.com');
@@ -53,7 +57,8 @@ runConformance({
       method: 'PATCH',
       path: '/calendar/v3/calendars/primary/events',
       reply: { ...EVENT, end: { dateTime: '2026-07-20T16:00:00-07:00' } },
-      run: (c) => c.updateBooking('ev1', { range: { start: RANGE.start, end: '2026-07-20T16:00:00-07:00' } }),
+      run: (c) =>
+        c.updateBooking('ev1', { range: { start: RANGE.start, end: '2026-07-20T16:00:00-07:00' } }),
     },
     {
       name: 'cancelBooking deletes',
@@ -67,7 +72,8 @@ runConformance({
       method: 'GET',
       path: '/calendar/v3/calendars/primary/events',
       reply: { items: [EVENT], nextPageToken: 'next' },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => {
         expect(r.bookings).toHaveLength(1);
         expect(r.nextPageToken).toBe('next');
@@ -154,7 +160,9 @@ describe('google: freeBusy-derived availability', () => {
       .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
       .reply(
         200,
-        JSON.stringify({ calendars: { primary: { busy: [], errors: [{ reason: 'notACalendarUser' }] } } }),
+        JSON.stringify({
+          calendars: { primary: { busy: [], errors: [{ reason: 'notACalendarUser' }] } },
+        }),
         { headers: { 'content-type': 'application/json' } },
       );
 

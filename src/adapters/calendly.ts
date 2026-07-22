@@ -100,7 +100,10 @@ function toBookingFromEvent(raw: unknown): Booking {
   };
 }
 
-function parseCalendlyError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseCalendlyError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   const message = b?.message ?? b?.title;
   return {
@@ -210,7 +213,8 @@ export const calendly = defineAdapter<CalendlyCredentials>({
           'scheduled_event',
         );
         const eventType =
-          input.serviceId ?? reqString(String(current.event_type ?? ''), 'calendly', 'scheduled_event.event_type');
+          input.serviceId ??
+          reqString(String(current.event_type ?? ''), 'calendly', 'scheduled_event.event_type');
         // Carry the original invitee — including their timezone, which the
         // create endpoint requires — across to the new booking.
         let customer: Customer | undefined;
@@ -218,8 +222,12 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
         const first = asArray(invitees?.collection, 'calendly', 'invitees')[0];
         if (first?.email) {
-          customer = { email: String(first.email), ...(first.name ? { name: String(first.name) } : {}) };
-          if (typeof first.timezone === 'string' && first.timezone) inviteeTimezone = first.timezone;
+          customer = {
+            email: String(first.email),
+            ...(first.name ? { name: String(first.name) } : {}),
+          };
+          if (typeof first.timezone === 'string' && first.timezone)
+            inviteeTimezone = first.timezone;
         }
         const timezone = input.range.timezone ?? inviteeTimezone;
         const rebooked = await createEventInvitee(http, c, {
@@ -307,7 +315,9 @@ export const calendly = defineAdapter<CalendlyCredentials>({
             : {}),
         },
       });
-      const bookings = asArray(res?.collection, 'calendly', 'scheduled_events').map(toBookingFromEvent);
+      const bookings = asArray(res?.collection, 'calendly', 'scheduled_events').map(
+        toBookingFromEvent,
+      );
       const next = res?.pagination?.next_page_token;
       return { bookings, ...(typeof next === 'string' && next ? { nextPageToken: next } : {}) };
     },
@@ -320,7 +330,8 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         throw new UnibookingError({
           provider: 'calendly',
           code: 'INVALID_INPUT',
-          message: 'Calendly available times are start-only; pass a positive durationMinutes to size each slot',
+          message:
+            'Calendly available times are start-only; pass a positive durationMinutes to size each slot',
         });
       }
       const durationMinutes = query.durationMinutes;

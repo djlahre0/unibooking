@@ -184,7 +184,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseZenotiError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseZenotiError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const err = (body as any)?.error;
   if (!err || typeof err !== 'object') return {};
   return {
@@ -327,7 +330,9 @@ async function bookAndConfirm(
   const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
   const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
   const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
-  const match = slots.find((s: any) => s.Available !== false && matchesRequestedTime(s.Time, start));
+  const match = slots.find(
+    (s: any) => s.Available !== false && matchesRequestedTime(s.Time, start),
+  );
   if (!match) {
     throw new UnibookingError({
       provider: 'zenoti',
@@ -411,7 +416,8 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       const current = await http.request(c, { path: `appointments/${enc(id)}` });
       const a = asRecord(current, 'zenoti', 'appointment');
       const serviceId =
-        input.serviceId ?? reqString(String(a.service?.id ?? ''), 'zenoti', 'appointment.service.id');
+        input.serviceId ??
+        reqString(String(a.service?.id ?? ''), 'zenoti', 'appointment.service.id');
       const guestId = reqString(String(a.guest?.id ?? ''), 'zenoti', 'appointment.guest.id');
       const invoiceId = reqString(String(a.invoice_id ?? ''), 'zenoti', 'appointment.invoice_id');
       const invoiceItemId = reqString(
@@ -547,7 +553,12 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           guests: [
             {
               id: guestId,
-              items: [{ item: { id: serviceId, item_type: 0 }, ...(query.staffId ? { therapist: { id: query.staffId } } : {}) }],
+              items: [
+                {
+                  item: { id: serviceId, item_type: 0 },
+                  ...(query.staffId ? { therapist: { id: query.staffId } } : {}),
+                },
+              ],
             },
           ],
           // Same escape hatch createBooking honors — availability must be

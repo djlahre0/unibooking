@@ -64,7 +64,9 @@ const NO = '—';
 
 function tableCells(label: string): string[] {
   const escaped = label.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const row = new RegExp(`^\\|\\s*\\[${escaped}\\]\\([^)]+\\)\\s*\\|(.+)\\|\\s*$`, 'm').exec(README);
+  const row = new RegExp(`^\\|\\s*\\[${escaped}\\]\\([^)]+\\)\\s*\\|(.+)\\|\\s*$`, 'm').exec(
+    README,
+  );
   if (!row) throw new Error(`no linked table row for "${label}"`);
   return row[1]!.split('|').map((c) => c.trim());
 }
@@ -78,9 +80,10 @@ describe('README provider table matches the adapters', () => {
       expect([YES, PARTIAL, NO], `${label}.${key}: unexpected marker ${cell}`).toContain(cell);
       // ⚠️ means supported with caveats — still a supported capability.
       const claimed = cell === YES || cell === PARTIAL;
-      expect(claimed, `${label}.${key}: table says ${cell}, adapter says ${adapter.capabilities[key]}`).toBe(
-        adapter.capabilities[key],
-      );
+      expect(
+        claimed,
+        `${label}.${key}: table says ${cell}, adapter says ${adapter.capabilities[key]}`,
+      ).toBe(adapter.capabilities[key]);
     }
   });
 

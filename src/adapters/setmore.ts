@@ -102,15 +102,20 @@ function toSetmoreInstant(iso: string): string {
 /** Each calendar day the range touches, each endpoint read in its OWN offset —
  *  RFC3339 lets `end` carry a different one (e.g. across a DST change), and
  *  reusing the start's offset shifts the last day. */
-function datesInRange(startIso: string, endIso: string): Array<{ y: number; m: number; d: number }> {
+function datesInRange(
+  startIso: string,
+  endIso: string,
+): Array<{ y: number; m: number; d: number }> {
   const startMs = Date.parse(startIso) + (parseOffsetMinutes(startIso) ?? 0) * 60_000;
   const endMs = Date.parse(endIso) + (parseOffsetMinutes(endIso) ?? 0) * 60_000;
   const out: Array<{ y: number; m: number; d: number }> = [];
-  const cursor = new Date(Date.UTC(
-    new Date(startMs).getUTCFullYear(),
-    new Date(startMs).getUTCMonth(),
-    new Date(startMs).getUTCDate(),
-  ));
+  const cursor = new Date(
+    Date.UTC(
+      new Date(startMs).getUTCFullYear(),
+      new Date(startMs).getUTCMonth(),
+      new Date(startMs).getUTCDate(),
+    ),
+  );
   while (cursor.getTime() <= endMs) {
     // An over-wide range is a caller error, not something to quietly truncate.
     if (out.length >= MAX_AVAILABILITY_DAYS) {
@@ -176,7 +181,8 @@ function toBooking(raw: unknown): Booking {
   return {
     id: reqString(String(a.key ?? ''), 'setmore', 'appointment.key'),
     provider: 'setmore',
-    title: typeof a.label === 'string' && a.label && a.label !== 'No Label' ? a.label : 'Appointment',
+    title:
+      typeof a.label === 'string' && a.label && a.label !== 'No Label' ? a.label : 'Appointment',
     range: { start, end },
     ...(a.staff_key ? { staffId: String(a.staff_key) } : {}),
     ...(a.service_key ? { serviceId: String(a.service_key) } : {}),
@@ -199,7 +205,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseSetmoreError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseSetmoreError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
   const message = b.msg ?? b.message;
@@ -211,7 +220,11 @@ function parseSetmoreError(_status: number, body: unknown): { providerCode?: str
 
 function requireField(value: string | undefined, hint: string): string {
   if (!value) {
-    throw new UnibookingError({ provider: 'setmore', code: 'INVALID_INPUT', message: `Setmore requires ${hint}` });
+    throw new UnibookingError({
+      provider: 'setmore',
+      code: 'INVALID_INPUT',
+      message: `Setmore requires ${hint}`,
+    });
   }
   return value;
 }
@@ -354,13 +367,17 @@ export const setmore = defineAdapter<SetmoreCredentials>({
 
     async searchAvailability(query): Promise<AvailabilitySlot[]> {
       assertValidRange(query.range, 'setmore');
-      const serviceKey = requireField(query.serviceId, 'a serviceId (service_key) for availability');
+      const serviceKey = requireField(
+        query.serviceId,
+        'a serviceId (service_key) for availability',
+      );
       const staffKey = requireField(query.staffId, 'a staffId (staff_key) for availability');
       if (typeof query.durationMinutes !== 'number' || query.durationMinutes <= 0) {
         throw new UnibookingError({
           provider: 'setmore',
           code: 'INVALID_INPUT',
-          message: 'Setmore slots are start-only; pass a positive durationMinutes to size each slot',
+          message:
+            'Setmore slots are start-only; pass a positive durationMinutes to size each slot',
         });
       }
       // Slots come back as bare wall-clock times with no date and no offset, so
@@ -393,10 +410,8 @@ export const setmore = defineAdapter<SetmoreCredentials>({
         for (const raw of slotValues(rawDataOf(res))) {
           const clock = parseSlotClock(raw);
           if (!clock) continue;
-          const start = localToInstant(
-            `${localDate}T${clock.hh}:${clock.mm}:00`,
-            timezone,
-            (ms) => new Date(ms).toISOString(),
+          const start = localToInstant(`${localDate}T${clock.hh}:${clock.mm}:00`, timezone, (ms) =>
+            new Date(ms).toISOString(),
           );
           if (!start) continue;
           out.push({

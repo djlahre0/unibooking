@@ -1,0 +1,17 @@
+# Build output and generated/internal dirs.
+dist/
+coverage/
+tmp/
+.superpowers/
+*.tsbuildinfo
+
+# The demo is a separate package with its own tooling — it formats itself.
+demo/
+
+# Lockfiles are machine-managed; never reformat them.
+package-lock.json
+
+# Hand-authored docs with intentional tables/layout (README's provider table is
+# parsed by a test); Prettier's markdown reflow fights that for no real gain.
+*.md
+LICENSE

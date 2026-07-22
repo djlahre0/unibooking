@@ -38,7 +38,9 @@ runConformance({
           range: RANGE,
           serviceId: 'PROD1',
           customer: { name: 'Jane Doe', email: 'jane@example.com' },
-          providerOptions: { participants: { numbers: [{ peopleCategoryId: 'Cadults', number: 1 }] } },
+          providerOptions: {
+            participants: { numbers: [{ peopleCategoryId: 'Cadults', number: 1 }] },
+          },
         }),
       check: (b) => {
         expect(b.serviceId).toBe('PROD1');
@@ -72,7 +74,8 @@ runConformance({
       method: 'GET',
       path: '/v2/bookings',
       reply: { data: [BK], info: { totalItems: 1 } },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => expect(r.bookings).toHaveLength(1),
     },
     {
@@ -116,7 +119,10 @@ describe('bookeo: pagination + numeric error code', () => {
   it('pages through bookings via the pageNavigationToken', async () => {
     const pool = agent.get('https://api.bookeo.com');
     pool
-      .intercept({ path: (p) => p.startsWith('/v2/bookings') && !p.includes('pageNavigationToken'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/v2/bookings') && !p.includes('pageNavigationToken'),
+        method: 'GET',
+      })
       .reply(
         200,
         JSON.stringify({
@@ -125,19 +131,19 @@ describe('bookeo: pagination + numeric error code', () => {
         }),
         { headers: { 'content-type': 'application/json' } },
       );
-    pool
-      .intercept({ path: (p) => p.includes('pageNavigationToken'), method: 'GET' })
-      .reply(
-        200,
-        JSON.stringify({
-          data: [{ ...BK, bookingNumber: 'BK2' }],
-          info: { totalItems: 2, pageNavigationToken: 'NAV', currentPage: 2, totalPages: 2 },
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      );
+    pool.intercept({ path: (p) => p.includes('pageNavigationToken'), method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        data: [{ ...BK, bookingNumber: 'BK2' }],
+        info: { totalItems: 2, pageNavigationToken: 'NAV', currentPage: 2, totalPages: 2 },
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = bookeo({ apiKey: 'k', secretKey: 's' });
-    const p1 = await client.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } });
+    const p1 = await client.listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+    });
     expect(p1.bookings[0]!.id).toBe('BK1');
     expect(p1.nextPageToken).toBeTruthy();
     const p2 = await client.listBookings({
@@ -196,11 +202,15 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.bookeo.com')
       .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        body = JSON.parse(String(opts.body));
-        path = String(opts.path);
-        return JSON.stringify(BK);
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          path = String(opts.path);
+          return JSON.stringify(BK);
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await bookeo({ apiKey: 'k', secretKey: 's' }).createBooking({
       title: 'Kayak Tour',
@@ -225,10 +235,14 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.bookeo.com')
       .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify(BK);
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify(BK);
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await bookeo({ apiKey: 'k', secretKey: 's' }).createBooking({
       title: 'Kayak Tour',
@@ -246,10 +260,14 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.bookeo.com')
       .intercept({ path: (p) => p.startsWith('/v2/bookings/BK123'), method: 'GET' })
-      .reply(200, (opts: any) => {
-        path = String(opts.path);
-        return JSON.stringify({ ...BK, lastChangeTime: '2026-07-10T00:00:00Z' });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          path = String(opts.path);
+          return JSON.stringify({ ...BK, lastChangeTime: '2026-07-10T00:00:00Z' });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const b = await bookeo({ apiKey: 'k', secretKey: 's' }).getBooking('BK123');
     // Bookeo omits `customer` entirely unless expandCustomer is requested.
@@ -263,10 +281,14 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
     const pool = agent.get('https://api.bookeo.com');
     pool
       .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
-      .reply(200, (opts: any) => {
-        paths.push(String(opts.path));
-        return JSON.stringify({ data: [BK], info: { totalItems: 1 } });
-      }, { headers: JSON_HEADERS })
+      .reply(
+        200,
+        (opts: any) => {
+          paths.push(String(opts.path));
+          return JSON.stringify({ data: [BK], info: { totalItems: 1 } });
+        },
+        { headers: JSON_HEADERS },
+      )
       .times(2);
 
     const client = bookeo({ apiKey: 'k', secretKey: 's' });
@@ -288,7 +310,10 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
 
   it('maps noShow and unaccepted bookings to their own statuses', async () => {
     const pool = agent.get('https://api.bookeo.com');
-    for (const b of [{ ...BK, canceled: true, noShow: true }, { ...BK, accepted: false }]) {
+    for (const b of [
+      { ...BK, canceled: true, noShow: true },
+      { ...BK, accepted: false },
+    ]) {
       pool
         .intercept({ path: (p) => p.startsWith('/v2/bookings/BK123'), method: 'GET' })
         .reply(200, JSON.stringify(b), { headers: JSON_HEADERS });

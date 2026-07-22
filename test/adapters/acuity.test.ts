@@ -72,7 +72,8 @@ runConformance({
       method: 'GET',
       path: '/api/v1/appointments',
       reply: [APPT],
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => expect(r.bookings).toHaveLength(1),
     },
     {
@@ -110,9 +111,13 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
       .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
       // Acuity marks a no-show ON a canceled appointment — `noShow` never
       // arrives without `canceled`, so the mapping must prefer the former.
-      .reply(200, JSON.stringify({ ...APPT, canceled: true, noShow: true, timezone: 'America/Los_Angeles' }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      .reply(
+        200,
+        JSON.stringify({ ...APPT, canceled: true, noShow: true, timezone: 'America/Los_Angeles' }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     const client = acuity({ userId: 'u', apiKey: 'k' });
     const b = await client.getBooking('55');
     expect(b.status).toBe('no_show');
@@ -123,10 +128,23 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     const pool = agent.get('https://acuityscheduling.com');
     const H = { 'content-type': 'application/json' };
     pool
-      .intercept({ path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-20'), method: 'GET' })
-      .reply(200, JSON.stringify([{ time: '2026-07-20T09:00:00-0700' }, { time: '2026-07-20T15:00:00-0700' }]), { headers: H });
+      .intercept({
+        path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-20'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify([
+          { time: '2026-07-20T09:00:00-0700' },
+          { time: '2026-07-20T15:00:00-0700' },
+        ]),
+        { headers: H },
+      );
     pool
-      .intercept({ path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-21'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/api/v1/availability/times') && p.includes('2026-07-21'),
+        method: 'GET',
+      })
       .reply(200, JSON.stringify([{ time: '2026-07-21T10:00:00-0700' }]), { headers: H });
 
     const client = acuity({ userId: 'u', apiKey: 'k' });
@@ -158,12 +176,19 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     let body: any;
     let path = '';
     pool
-      .intercept({ path: (p) => p === '/api/v1/appointments/55' || p.startsWith('/api/v1/appointments/55?'), method: 'PUT' })
-      .reply(200, (opts) => {
-        path = opts.path;
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify({ ...APPT });
-      }, { headers: { 'content-type': 'application/json' } });
+      .intercept({
+        path: (p) => p === '/api/v1/appointments/55' || p.startsWith('/api/v1/appointments/55?'),
+        method: 'PUT',
+      })
+      .reply(
+        200,
+        (opts) => {
+          path = opts.path;
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({ ...APPT });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     const client = acuity({ userId: 'u', apiKey: 'k' });
     await client.updateBooking('55', { title: 'Please call first' });
     expect(body.notes).toBe('Please call first');
@@ -176,16 +201,31 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     const paths: string[] = [];
     pool
       .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'POST' })
-      .reply(200, (opts) => {
-        paths.push(opts.path);
-        return JSON.stringify({ ...APPT });
-      }, { headers: { 'content-type': 'application/json' } })
+      .reply(
+        200,
+        (opts) => {
+          paths.push(opts.path);
+          return JSON.stringify({ ...APPT });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      )
       .times(2);
     const client = acuity({ userId: 'u', apiKey: 'k' });
     // With staffId → admin bypass (needs the calendarID admin mode requires).
-    await client.createBooking({ title: 'x', range: RANGE, serviceId: '12', staffId: '3', customer: { name: 'A B', email: 'a@b.com' } });
+    await client.createBooking({
+      title: 'x',
+      range: RANGE,
+      serviceId: '12',
+      staffId: '3',
+      customer: { name: 'A B', email: 'a@b.com' },
+    });
     // Without staffId → no admin (admin mode would fail without a calendarID).
-    await client.createBooking({ title: 'x', range: RANGE, serviceId: '12', customer: { name: 'A B', email: 'a@b.com' } });
+    await client.createBooking({
+      title: 'x',
+      range: RANGE,
+      serviceId: '12',
+      customer: { name: 'A B', email: 'a@b.com' },
+    });
     expect(paths[0]).toContain('admin=true');
     expect(paths[1]).not.toContain('admin=true');
   });
@@ -208,13 +248,15 @@ describe('acuity: auth', () => {
   function captureAuth(): { get: () => string | undefined } {
     const pool = agent.get('https://acuityscheduling.com');
     let auth: string | undefined;
-    pool
-      .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' }).reply(
+      200,
+      (opts) => {
         const h = opts.headers as Record<string, string>;
         auth = h.authorization ?? h.Authorization;
         return JSON.stringify({ ...APPT });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
     return { get: () => auth };
   }
 

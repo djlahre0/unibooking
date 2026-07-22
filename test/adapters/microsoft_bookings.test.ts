@@ -65,7 +65,8 @@ runConformance({
       method: 'GET',
       path: VIEW,
       reply: { value: [APPT] },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => expect(r.bookings).toHaveLength(1),
     },
   ],
@@ -125,18 +126,16 @@ describe('microsoft_bookings: customers.findOrCreate', () => {
 
   it('returns an existing customer id when the email matches (case-insensitive)', async () => {
     const pool = agent.get('https://graph.microsoft.com');
-    pool
-      .intercept({ path: (p) => p.startsWith(CUSTOMERS), method: 'GET' })
-      .reply(
-        200,
-        JSON.stringify({
-          value: [
-            { id: 'c-other', displayName: 'Other', emailAddress: 'other@example.com' },
-            { id: 'c-jane', displayName: 'Jane', emailAddress: 'Jane@Example.com' },
-          ],
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      );
+    pool.intercept({ path: (p) => p.startsWith(CUSTOMERS), method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        value: [
+          { id: 'c-other', displayName: 'Other', emailAddress: 'other@example.com' },
+          { id: 'c-jane', displayName: 'Jane', emailAddress: 'Jane@Example.com' },
+        ],
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
     const client = microsoftBookings({ accessToken: 't', businessId: BIZ });
     const id = await client.customers!.findOrCreate({ email: 'jane@example.com' });
     expect(id).toBe('c-jane');
@@ -147,13 +146,19 @@ describe('microsoft_bookings: customers.findOrCreate', () => {
     const pool = agent.get('https://graph.microsoft.com');
     pool
       .intercept({ path: (p) => p.startsWith(CUSTOMERS), method: 'GET' })
-      .reply(200, JSON.stringify({ value: [] }), { headers: { 'content-type': 'application/json' } });
+      .reply(200, JSON.stringify({ value: [] }), {
+        headers: { 'content-type': 'application/json' },
+      });
     let createBody: any;
     pool.intercept({ path: (p) => p.startsWith(CUSTOMERS), method: 'POST' }).reply(
       201,
       (opts) => {
         createBody = JSON.parse(String(opts.body));
-        return JSON.stringify({ id: 'c-new', displayName: 'Jane', emailAddress: 'jane@example.com' });
+        return JSON.stringify({
+          id: 'c-new',
+          displayName: 'Jane',
+          emailAddress: 'jane@example.com',
+        });
       },
       { headers: { 'content-type': 'application/json' } },
     );
@@ -168,7 +173,10 @@ describe('microsoft_bookings: customers.findOrCreate', () => {
 
   it('returns customer.id verbatim without any HTTP call', async () => {
     const client = microsoftBookings({ accessToken: 't', businessId: BIZ });
-    const id = await client.customers!.findOrCreate({ id: 'existing-id', email: 'jane@example.com' });
+    const id = await client.customers!.findOrCreate({
+      id: 'existing-id',
+      email: 'jane@example.com',
+    });
     expect(id).toBe('existing-id');
   });
 });

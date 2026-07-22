@@ -28,7 +28,8 @@ runConformance({
       method: 'POST',
       path: '/v1.0/me/events',
       reply: EVENT,
-      run: (c) => c.createBooking({ title: 'Sync', range: RANGE, customer: { email: 'jane@example.com' } }),
+      run: (c) =>
+        c.createBooking({ title: 'Sync', range: RANGE, customer: { email: 'jane@example.com' } }),
       check: (b) => {
         expect(b.range.start).toBe('2026-07-20T22:00:00Z');
         expect(b.range.end).toBe('2026-07-20T22:30:00Z');
@@ -62,10 +63,10 @@ runConformance({
       path: '/v1.0/me/calendarView',
       reply: {
         value: [EVENT],
-        '@odata.nextLink':
-          'https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=OPAQUE123',
+        '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=OPAQUE123',
       },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => {
         expect(r.bookings).toHaveLength(1);
         // The page token is the full @odata.nextLink so any Graph paging param works.
@@ -225,9 +226,13 @@ describe('outlook: status, cancel, and $skip pagination', () => {
     const pool = agent.get('https://graph.microsoft.com');
     pool
       .intercept({ path: (p) => p.startsWith('/v1.0/me/events'), method: 'GET' })
-      .reply(200, JSON.stringify({ ...EVENT, isCancelled: false, responseStatus: { response: 'declined' } }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      .reply(
+        200,
+        JSON.stringify({ ...EVENT, isCancelled: false, responseStatus: { response: 'declined' } }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     pool
       .intercept({ path: (p) => p.startsWith('/v1.0/me/events'), method: 'GET' })
       .reply(200, JSON.stringify({ ...EVENT, showAs: 'tentative' }), {
@@ -267,7 +272,10 @@ describe('outlook: status, cancel, and $skip pagination', () => {
     // undici percent-encodes `$` in the path, so match on the encoding-agnostic
     // substring 'skip'.
     pool
-      .intercept({ path: (p) => p.startsWith('/v1.0/me/calendarView') && !p.includes('skip'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/v1.0/me/calendarView') && !p.includes('skip'),
+        method: 'GET',
+      })
       .reply(
         200,
         JSON.stringify({

@@ -63,7 +63,10 @@ describe('README quick-start walkthrough (mocked Square)', () => {
 
     // searchAvailability.
     pool
-      .intercept({ path: (p) => pathname(p) === '/v2/bookings/availability/search', method: 'POST' })
+      .intercept({
+        path: (p) => pathname(p) === '/v2/bookings/availability/search',
+        method: 'POST',
+      })
       .reply(
         200,
         reply({
@@ -96,12 +99,16 @@ describe('README quick-start walkthrough (mocked Square)', () => {
     // listBookings / listAll / collectAll — two pages driven by the cursor.
     pool
       .intercept({ path: (p) => pathname(p) === '/v2/bookings', method: 'GET' })
-      .reply(200, (opts) => {
-        const cursor = new URL('http://x' + opts.path).searchParams.get('cursor');
-        return cursor === 'c2'
-          ? reply({ bookings: [BOOKING_PAGE2] })
-          : reply({ bookings: [BOOKING], cursor: 'c2' });
-      }, { headers: JSON_HEADERS })
+      .reply(
+        200,
+        (opts) => {
+          const cursor = new URL('http://x' + opts.path).searchParams.get('cursor');
+          return cursor === 'c2'
+            ? reply({ bookings: [BOOKING_PAGE2] })
+            : reply({ bookings: [BOOKING], cursor: 'c2' });
+        },
+        { headers: JSON_HEADERS },
+      )
       .persist();
 
     // cancelBooking.
@@ -112,7 +119,9 @@ describe('README quick-start walkthrough (mocked Square)', () => {
     // The error-handling branch: a 404 → NOT_FOUND.
     pool
       .intercept({ path: (p) => pathname(p) === '/v2/bookings/does-not-exist', method: 'GET' })
-      .reply(404, reply({ errors: [{ code: 'NOT_FOUND', detail: 'nope' }] }), { headers: JSON_HEADERS });
+      .reply(404, reply({ errors: [{ code: 'NOT_FOUND', detail: 'nope' }] }), {
+        headers: JSON_HEADERS,
+      });
   });
 
   afterEach(async () => {
@@ -121,10 +130,9 @@ describe('README quick-start walkthrough (mocked Square)', () => {
   });
 
   it('runs the full lifecycle end to end', async () => {
-    const client = square(
-      () => ({ accessToken: 'sq_token', locationId: 'L1' }),
-      { timeoutMs: 10_000 },
-    );
+    const client = square(() => ({ accessToken: 'sq_token', locationId: 'L1' }), {
+      timeoutMs: 10_000,
+    });
 
     // capabilities — every one true for Square.
     expect(client.capabilities).toEqual({

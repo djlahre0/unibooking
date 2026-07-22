@@ -127,7 +127,10 @@ function toBooking(raw: unknown, tz: SiteTz): Booking {
   };
 }
 
-function parseMindbodyError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseMindbodyError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const err = (body as any)?.Error ?? body;
   if (!err || typeof err !== 'object') return {};
   return {
@@ -233,7 +236,11 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       });
       const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
       if (appts.length === 0) {
-        throw new UnibookingError({ provider: 'mindbody', code: 'NOT_FOUND', message: `appointment ${id} not found` });
+        throw new UnibookingError({
+          provider: 'mindbody',
+          code: 'NOT_FOUND',
+          message: `appointment ${id} not found`,
+        });
       }
       return toBooking(appts[0], tz);
     },

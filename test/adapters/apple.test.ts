@@ -77,7 +77,8 @@ runConformance({
       method: 'REPORT',
       path: COLLECTION,
       reply: MULTISTATUS,
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => {
         expect(r.bookings).toHaveLength(1);
         expect(r.bookings[0].id).toBe('evt-1');
@@ -172,12 +173,14 @@ describe('apple: update does GET then PUT', () => {
 
     const pool = agent.get(ORIGIN);
     let reportBody = '';
-    pool
-      .intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' })
-      .reply(207, (opts) => {
+    pool.intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' }).reply(
+      207,
+      (opts) => {
         reportBody = String(opts.body);
         return MS;
-      }, { headers: { 'content-type': 'application/xml' } });
+      },
+      { headers: { 'content-type': 'application/xml' } },
+    );
 
     const client = apple({ username: 'u', appPassword: 'p', calendarUrl: CAL });
     const { bookings } = await client.listBookings({
@@ -218,12 +221,14 @@ describe('apple: update does GET then PUT', () => {
 
     const pool = agent.get(ORIGIN);
     let reportBody = '';
-    pool
-      .intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' })
-      .reply(207, (opts) => {
+    pool.intercept({ path: (p) => p.startsWith('/123/calendars/home'), method: 'REPORT' }).reply(
+      207,
+      (opts) => {
         reportBody = String(opts.body);
         return MS;
-      }, { headers: { 'content-type': 'application/xml' } });
+      },
+      { headers: { 'content-type': 'application/xml' } },
+    );
 
     const client = apple({ username: 'u', appPassword: 'p', calendarUrl: CAL });
     const { bookings } = await client.listBookings({

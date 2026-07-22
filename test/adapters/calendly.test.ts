@@ -118,7 +118,9 @@ describe('calendly: cancel+rebook and input requirements', () => {
     // 1) read current event (for its event_type)
     pool
       .intercept({ path: '/scheduled_events/EVT1', method: 'GET' })
-      .reply(200, JSON.stringify({ resource: event() }), { headers: { 'content-type': 'application/json' } });
+      .reply(200, JSON.stringify({ resource: event() }), {
+        headers: { 'content-type': 'application/json' },
+      });
     // 2) read invitee to carry over
     pool
       .intercept({ path: '/scheduled_events/EVT1/invitees', method: 'GET' })
@@ -132,7 +134,11 @@ describe('calendly: cancel+rebook and input requirements', () => {
       (opts) => {
         createBody = JSON.parse(String(opts.body));
         return JSON.stringify({
-          resource: event({ uri: 'https://api.calendly.com/scheduled_events/EVT2', start_time: NEW, end_time: '2026-07-21T18:30:00Z' }),
+          resource: event({
+            uri: 'https://api.calendly.com/scheduled_events/EVT2',
+            start_time: NEW,
+            end_time: '2026-07-21T18:30:00Z',
+          }),
         });
       },
       { headers: { 'content-type': 'application/json' } },
@@ -149,7 +155,9 @@ describe('calendly: cancel+rebook and input requirements', () => {
     );
 
     const client = calendly({ token: 't', user: USER });
-    const b = await client.updateBooking('EVT1', { range: { start: NEW, end: '2026-07-21T18:30:00Z' } });
+    const b = await client.updateBooking('EVT1', {
+      range: { start: NEW, end: '2026-07-21T18:30:00Z' },
+    });
 
     expect(b.id).toBe('EVT2');
     expect(b.range.start).toBe(NEW);
@@ -193,7 +201,11 @@ describe('calendly: cancel+rebook and input requirements', () => {
   it('createBooking without an invitee email is rejected', async () => {
     const client = calendly({ token: 't' });
     await expect(
-      client.createBooking({ title: 'x', range: RANGE, serviceId: 'https://api.calendly.com/event_types/SVC1' }),
+      client.createBooking({
+        title: 'x',
+        range: RANGE,
+        serviceId: 'https://api.calendly.com/event_types/SVC1',
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
@@ -222,23 +234,32 @@ describe('calendly: cancellation response is not a Booking', () => {
     await agent.close();
   });
 
-  it("re-reads the event instead of mapping the Cancellation resource", async () => {
+  it('re-reads the event instead of mapping the Cancellation resource', async () => {
     const pool = agent.get(ORIGIN);
     // POST /cancellation returns a Cancellation ({canceled_by, reason,
     // canceler_type, created_at}) — no uri, no start_time, no end_time. Mapping
     // it directly always threw UPSTREAM.
-    pool
-      .intercept({ path: '/scheduled_events/EVT1/cancellation', method: 'POST' })
-      .reply(201, JSON.stringify({
-        resource: { canceled_by: 'Jane', reason: null, canceler_type: 'host', created_at: '2026-07-02T00:00:00Z' },
-      }), { headers: { 'content-type': 'application/json' } });
+    pool.intercept({ path: '/scheduled_events/EVT1/cancellation', method: 'POST' }).reply(
+      201,
+      JSON.stringify({
+        resource: {
+          canceled_by: 'Jane',
+          reason: null,
+          canceler_type: 'host',
+          created_at: '2026-07-02T00:00:00Z',
+        },
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
     pool
       .intercept({ path: (p) => p.startsWith('/scheduled_events/EVT1'), method: 'GET' })
       .reply(200, JSON.stringify({ resource: event({ status: 'canceled' }) }), {
         headers: { 'content-type': 'application/json' },
       });
 
-    const b = await calendly({ token: 'token', user: USER }).updateBooking('EVT1', { status: 'cancelled' });
+    const b = await calendly({ token: 'token', user: USER }).updateBooking('EVT1', {
+      status: 'cancelled',
+    });
     expect(b.status).toBe('cancelled');
     expect(b.range.start).toBe(START);
   });
@@ -274,7 +295,11 @@ describe('calendly: no-show', () => {
       (opts) => {
         noShowBody = JSON.parse(String(opts.body));
         return JSON.stringify({
-          resource: { uri: 'https://api.calendly.com/invitee_no_shows/NS1', invitee: INVITEE, created_at: '2026-07-02T00:00:00Z' },
+          resource: {
+            uri: 'https://api.calendly.com/invitee_no_shows/NS1',
+            invitee: INVITEE,
+            created_at: '2026-07-02T00:00:00Z',
+          },
         });
       },
       { headers: { 'content-type': 'application/json' } },
@@ -282,9 +307,13 @@ describe('calendly: no-show', () => {
     // 3) re-read the event
     pool
       .intercept({ path: '/scheduled_events/EVT1', method: 'GET' })
-      .reply(200, JSON.stringify({ resource: event() }), { headers: { 'content-type': 'application/json' } });
+      .reply(200, JSON.stringify({ resource: event() }), {
+        headers: { 'content-type': 'application/json' },
+      });
 
-    const b = await calendly({ token: 't', user: USER }).updateBooking('EVT1', { status: 'no_show' });
+    const b = await calendly({ token: 't', user: USER }).updateBooking('EVT1', {
+      status: 'no_show',
+    });
     expect(noShowBody.invitee).toBe(INVITEE);
     expect(b.id).toBe('EVT1');
     agent.assertNoPendingInterceptors();

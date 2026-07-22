@@ -111,7 +111,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseGoogleError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseGoogleError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const err = (body as any)?.error;
   if (!err) return {};
   const providerCode = err.status ?? err.errors?.[0]?.reason;

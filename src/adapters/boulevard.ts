@@ -242,9 +242,11 @@ function gqlErrorCode(err: any): ErrorCode {
     }
   }
   const message = String(err?.message ?? '').toLowerCase();
-  if (/not found|does not exist|no such|couldn't find|could not find/.test(message)) return 'NOT_FOUND';
+  if (/not found|does not exist|no such|couldn't find|could not find/.test(message))
+    return 'NOT_FOUND';
   if (/unauthenticated|invalid credentials|not signed in/.test(message)) return 'AUTH';
-  if (/forbidden|not authorized|unauthorized|not allowed|permission/.test(message)) return 'FORBIDDEN';
+  if (/forbidden|not authorized|unauthorized|not allowed|permission/.test(message))
+    return 'FORBIDDEN';
   // Document-level GraphQL failures (unknown field, wrong type, missing
   // variable) will never succeed on a retry either.
   if (
@@ -295,7 +297,11 @@ function assertNoBookingErrors(errors: unknown, ctx: string): void {
 
 function requireField(value: string | undefined, hint: string): string {
   if (!value) {
-    throw new UnibookingError({ provider: 'boulevard', code: 'INVALID_INPUT', message: `Boulevard requires ${hint}` });
+    throw new UnibookingError({
+      provider: 'boulevard',
+      code: 'INVALID_INPUT',
+      message: `Boulevard requires ${hint}`,
+    });
   }
   return value;
 }
@@ -369,9 +375,16 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       const serviceId = requireField(input.serviceId, 'a serviceId to book');
       // `bookingComplete.bookWithStaffId` is non-null, so a staff-less booking
       // is not expressible through this flow.
-      const staffId = requireField(input.staffId, 'a staffId — bookingComplete requires bookWithStaffId');
+      const staffId = requireField(
+        input.staffId,
+        'a staffId — bookingComplete requires bookWithStaffId',
+      );
       let clientId = input.customer?.id;
-      if (clientId === undefined && input.customer && (input.customer.email || input.customer.phone)) {
+      if (
+        clientId === undefined &&
+        input.customer &&
+        (input.customer.email || input.customer.phone)
+      ) {
         clientId = await findOrCreateClient(http, c, input.customer);
       }
       requireField(clientId, 'a customer — bookingAddService needs a bookingClientId');
@@ -471,7 +484,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
           times?.appointmentRescheduleAvailableTimes,
           'boulevard',
           'appointmentRescheduleAvailableTimes',
-        ).flatMap((payload: any) => asArray(payload?.availableTimes, 'boulevard', 'availableTimes'));
+        ).flatMap((payload: any) =>
+          asArray(payload?.availableTimes, 'boulevard', 'availableTimes'),
+        );
         const wanted = Date.parse(input.range.start);
         const match = available.find((t: any) => Date.parse(String(t?.startTime)) === wanted);
         if (!match) {
@@ -512,7 +527,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     async cancelBooking(id, options) {
       const c = await http.resolve();
       // `reason` is a non-null enum — a free-text reason cannot be forwarded.
-      const reason = options?.reason ? String(options.reason).toUpperCase().replace(/\s+/g, '_') : 'CLIENT_CANCEL';
+      const reason = options?.reason
+        ? String(options.reason).toUpperCase().replace(/\s+/g, '_')
+        : 'CLIENT_CANCEL';
       if (!CANCELLATION_REASONS.has(reason)) {
         throw new UnibookingError({
           provider: 'boulevard',
@@ -562,7 +579,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       });
       const conn = data?.appointments ?? {};
       // edges and node are both nullable in the schema.
-      const nodes = Array.isArray(conn.edges) ? conn.edges.map((e: any) => e?.node).filter(Boolean) : [];
+      const nodes = Array.isArray(conn.edges)
+        ? conn.edges.map((e: any) => e?.node).filter(Boolean)
+        : [];
       const bookings = nodes
         .map(toBooking)
         // `cancelled` can't express confirmed-vs-completed-vs-no_show, so narrow

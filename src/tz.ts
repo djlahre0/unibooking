@@ -193,9 +193,11 @@ export function zoneOffsetMinutes(tz: string, date: Date): number | null {
 /** A local wall-clock `2026-07-20T15:00:00` (no offset) in zone `tz` → canonical
  *  UTC instant, or `undefined` if the local string is malformed. Falls back to
  *  treating the value as UTC when the zone can't be resolved. */
-export function localToInstant(isoLocal: string, tz: string, formatUTC: (epochMs: number) => string):
-  | string
-  | undefined {
+export function localToInstant(
+  isoLocal: string,
+  tz: string,
+  formatUTC: (epochMs: number) => string,
+): string | undefined {
   const guess = Date.parse(isoLocal + 'Z');
   if (Number.isNaN(guess)) return undefined;
   // Two-step correction handles the offset changing across the guessed instant.

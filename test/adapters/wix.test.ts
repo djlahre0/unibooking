@@ -18,7 +18,12 @@ function wixBooking(overrides: Record<string, unknown> = {}) {
         resource: { id: 'staff1', name: 'Alex' },
       },
     },
-    contactDetails: { contactId: 'CT1', firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com' },
+    contactDetails: {
+      contactId: 'CT1',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+    },
     status: 'CONFIRMED',
     createdDate: '2026-07-01T00:00:00Z',
     updatedDate: '2026-07-02T00:00:00Z',
@@ -147,7 +152,11 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     );
 
     const client = wix({ accessToken: 't' });
-    await client.createBooking({ title: 'Cut', range: RANGE, customer: { email: 'jane@example.com' } });
+    await client.createBooking({
+      title: 'Cut',
+      range: RANGE,
+      customer: { email: 'jane@example.com' },
+    });
 
     expect(bodies[0].booking.contactDetails.contactId).toBe('CT_FOUND');
     agent.assertNoPendingInterceptors();
@@ -159,16 +168,23 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     // No existing contact → falls through to create.
     pool
       .intercept({ path: '/contacts/v4/contacts/query', method: 'POST' })
-      .reply(200, JSON.stringify({ contacts: [] }), { headers: { 'content-type': 'application/json' } });
-    pool
-      .intercept({ path: '/contacts/v4/contacts', method: 'POST' })
-      .reply(200, (opts) => {
+      .reply(200, JSON.stringify({ contacts: [] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    pool.intercept({ path: '/contacts/v4/contacts', method: 'POST' }).reply(
+      200,
+      (opts) => {
         createBody = JSON.parse(String(opts.body));
         return JSON.stringify({ contact: { id: 'CT_NEW' } });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = wix({ accessToken: 't' });
-    const id = await client.customers!.findOrCreate({ name: 'Jane Doe', email: 'jane@example.com' });
+    const id = await client.customers!.findOrCreate({
+      name: 'Jane Doe',
+      email: 'jane@example.com',
+    });
 
     expect(id).toBe('CT_NEW');
     expect(createBody.info.name).toEqual({ first: 'Jane', last: 'Doe' });
@@ -181,9 +197,13 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     // 1) revision lookup via the extended-bookings query
     pool
       .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
-      .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '7' }) }] }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      .reply(
+        200,
+        JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '7' }) }] }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     // 2) reschedule carries that revision
     let body: any;
     pool.intercept({ path: '/bookings/v2/bookings/B1/reschedule', method: 'POST' }).reply(
@@ -206,9 +226,13 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     const pool = agent.get(ORIGIN);
     pool
       .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
-      .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '9' }) }] }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      .reply(
+        200,
+        JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '9' }) }] }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     let cancelBody: any;
     pool.intercept({ path: '/bookings/v2/bookings/B1/cancel', method: 'POST' }).reply(
       200,
@@ -228,7 +252,10 @@ describe('wix: contact resolution + non-reschedule updates', () => {
   it('searchAvailability without a range.timezone is rejected (Time Slots V2 is local-time)', async () => {
     const client = wix({ accessToken: 't' });
     await expect(
-      client.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z' }, serviceId: 'svc1' }),
+      client.searchAvailability({
+        range: { start: START, end: '2026-07-21T00:00:00Z' },
+        serviceId: 'svc1',
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
@@ -334,14 +361,20 @@ describe('wix: contact resolution + non-reschedule updates', () => {
     const pool = agent.get(ORIGIN);
     pool
       .intercept({ path: '/bookings/bookings-reader/v2/extended-bookings/query', method: 'POST' })
-      .reply(200, JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '3' }) }] }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      .reply(
+        200,
+        JSON.stringify({ extendedBookings: [{ booking: wixBooking({ revision: '3' }) }] }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     let body: any;
-    pool.intercept({ path: '/bookings/v2/bookings/B1/cancel', method: 'POST' }).reply(200, (opts) => {
-      body = JSON.parse(String(opts.body));
-      return '';
-    });
+    pool
+      .intercept({ path: '/bookings/v2/bookings/B1/cancel', method: 'POST' })
+      .reply(200, (opts) => {
+        body = JSON.parse(String(opts.body));
+        return '';
+      });
 
     const client = wix({ accessToken: 't' });
     await client.cancelBooking('B1', { reason: 'customer asked', notify: true });
@@ -438,7 +471,10 @@ describe('wix: contact resolution + non-reschedule updates', () => {
       );
 
     const client = wix({ accessToken: 't' });
-    await client.listBookings({ range: { start: START, end: '2026-07-21T00:00:00Z' }, status: 'no_show' });
+    await client.listBookings({
+      range: { start: START, end: '2026-07-21T00:00:00Z' },
+      status: 'no_show',
+    });
 
     expect(body.query.filter.status).toBeUndefined();
     agent.assertNoPendingInterceptors();
@@ -447,7 +483,9 @@ describe('wix: contact resolution + non-reschedule updates', () => {
   it('searchAvailability without a serviceId is rejected', async () => {
     const client = wix({ accessToken: 't' });
     await expect(
-      client.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z', timezone: 'UTC' } }),
+      client.searchAvailability({
+        range: { start: START, end: '2026-07-21T00:00:00Z', timezone: 'UTC' },
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 

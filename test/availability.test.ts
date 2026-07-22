@@ -27,12 +27,20 @@ describe('freeSlots', () => {
   });
 
   it('returns nothing when a busy interval covers the whole range', () => {
-    const slots = freeSlots(RANGE, [{ start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' }], 60);
+    const slots = freeSlots(
+      RANGE,
+      [{ start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' }],
+      60,
+    );
     expect(slots).toEqual([]);
   });
 
   it('emits slots before and after a busy block in the middle', () => {
-    const slots = freeSlots(RANGE, [{ start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z' }], 60);
+    const slots = freeSlots(
+      RANGE,
+      [{ start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z' }],
+      60,
+    );
     expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z']);
     // No slot overlaps the busy hour.
     expect(slots.some((s) => s.start === '2026-07-20T10:00:00Z')).toBe(false);
@@ -90,7 +98,11 @@ describe('freeSlots', () => {
 
   it('accepts busy intervals in any offset and still emits UTC instants', () => {
     // Busy block given in a -07:00 offset (17:00–18:00Z) inside a UTC range.
-    const slots = freeSlots(RANGE, [{ start: '2026-07-20T03:00:00-07:00', end: '2026-07-20T04:00:00-07:00' }], 60);
+    const slots = freeSlots(
+      RANGE,
+      [{ start: '2026-07-20T03:00:00-07:00', end: '2026-07-20T04:00:00-07:00' }],
+      60,
+    );
     // 03:00-07:00 == 10:00Z .. 11:00Z busy → 09–10 and 11–12 free.
     expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z']);
     for (const s of slots) expect(isInstant(s.start)).toBe(true);

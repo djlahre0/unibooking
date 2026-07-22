@@ -91,12 +91,16 @@ function gqlRouter(
   agent
     .get(ORIGIN)
     .intercept({ path: ADMIN, method: 'POST' })
-    .reply(200, (opts: any) => {
-      const { query, variables } = JSON.parse(String(opts.body));
-      const op = Object.keys(handlers).find((name) => query.includes(`${name}(`));
-      capture?.(op ?? 'unknown', variables);
-      return JSON.stringify({ data: op ? (handlers as any)[op] : {} });
-    }, { headers: JSON_HEADERS })
+    .reply(
+      200,
+      (opts: any) => {
+        const { query, variables } = JSON.parse(String(opts.body));
+        const op = Object.keys(handlers).find((name) => query.includes(`${name}(`));
+        capture?.(op ?? 'unknown', variables);
+        return JSON.stringify({ data: op ? (handlers as any)[op] : {} });
+      },
+      { headers: JSON_HEADERS },
+    )
     .persist();
 }
 
@@ -144,7 +148,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('finds clients via emails: [String!], not a scalar email', async () => {
     let vars: any;
-    gqlRouter(agent, { clients: { clients: { edges: [{ node: { id: 'c9' } }] } } }, (_op, v) => (vars = v));
+    gqlRouter(
+      agent,
+      { clients: { clients: { edges: [{ node: { id: 'c9' } }] } } },
+      (_op, v) => (vars = v),
+    );
 
     const id = await makeClient().customers!.findOrCreate({ email: 'jane@example.com' });
 
@@ -165,7 +173,10 @@ describe('boulevard GraphQL shapes', () => {
           },
         },
         bookingAddService: {
-          bookingAddService: { bookingService: { id: 'bs1', serviceId: 'svc1', staffId: 'st1' }, bookingWarnings: [] },
+          bookingAddService: {
+            bookingService: { id: 'bs1', serviceId: 'svc1', staffId: 'st1' },
+            bookingWarnings: [],
+          },
         },
         bookingComplete: {
           bookingComplete: { bookingAppointments: [{ appointment: APPT }], bookingWarnings: [] },
@@ -182,7 +193,11 @@ describe('boulevard GraphQL shapes', () => {
       customer: { id: 'c1' },
     });
 
-    expect(seen.map((s) => s.op)).toEqual(['bookingCreate', 'bookingAddService', 'bookingComplete']);
+    expect(seen.map((s) => s.op)).toEqual([
+      'bookingCreate',
+      'bookingAddService',
+      'bookingComplete',
+    ]);
     // NaiveDateTime: local wall clock, no offset. Sending the UTC instant here
     // would shift the booking by the location's offset.
     expect(seen[0]!.vars.input.startTime).toBe('2026-07-20T09:00:00');
@@ -230,7 +245,10 @@ describe('boulevard GraphQL shapes', () => {
       range: { start: '2026-07-20T10:00:00-07:00', end: '2026-07-20T10:30:00-07:00' },
     });
 
-    expect(seen.map((s) => s.op)).toEqual(['appointmentRescheduleAvailableTimes', 'appointmentReschedule']);
+    expect(seen.map((s) => s.op)).toEqual([
+      'appointmentRescheduleAvailableTimes',
+      'appointmentReschedule',
+    ]);
     // 10:00-07:00 === 17:00Z — must pick the matching opaque slot id.
     expect(seen[1]!.vars.input.bookableTimeId).toBe('bt-match');
     // sendNotification is non-null in the schema, so it is always present.
@@ -257,7 +275,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('cancels with a documented reason enum and rejects free text', async () => {
     let vars: any;
-    gqlRouter(agent, { cancelAppointment: { cancelAppointment: { appointment: APPT } } }, (_op, v) => (vars = v));
+    gqlRouter(
+      agent,
+      { cancelAppointment: { cancelAppointment: { appointment: APPT } } },
+      (_op, v) => (vars = v),
+    );
 
     await makeClient().cancelBooking('urn:blvd:Appointment:1', { reason: 'client cancel' });
     expect(vars.input.reason).toBe('CLIENT_CANCEL');
@@ -271,7 +293,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('defaults to CLIENT_CANCEL when no reason is given', async () => {
     let vars: any;
-    gqlRouter(agent, { cancelAppointment: { cancelAppointment: { appointment: APPT } } }, (_op, v) => (vars = v));
+    gqlRouter(
+      agent,
+      { cancelAppointment: { cancelAppointment: { appointment: APPT } } },
+      (_op, v) => (vars = v),
+    );
     await makeClient().cancelBooking('urn:blvd:Appointment:1');
     expect(vars.input.reason).toBe('CLIENT_CANCEL');
   });
@@ -284,7 +310,12 @@ describe('boulevard GraphQL shapes', () => {
   it('maps a NO_SHOW cancellation to no_show, not cancelled', async () => {
     gqlRouter(agent, {
       appointment: {
-        appointment: { ...APPT, state: 'CANCELLED', cancelled: true, cancellation: { reason: 'NO_SHOW' } },
+        appointment: {
+          ...APPT,
+          state: 'CANCELLED',
+          cancelled: true,
+          cancellation: { reason: 'NO_SHOW' },
+        },
       },
     });
     expect((await makeClient().getBooking('x')).status).toBe('no_show');
@@ -292,7 +323,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('rejects updates the Admin API cannot express', async () => {
     const client = makeClient();
-    for (const patch of [{ staffId: 'st2' }, { serviceId: 'svc2' }, { status: 'cancelled' as const }]) {
+    for (const patch of [
+      { staffId: 'st2' },
+      { serviceId: 'svc2' },
+      { status: 'cancelled' as const },
+    ]) {
       const err = await client
         .updateBooking('urn:blvd:Appointment:1', patch)
         .then(() => null)
@@ -303,7 +338,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('writes notes, not note, on a title change', async () => {
     let vars: any;
-    gqlRouter(agent, { updateAppointment: { updateAppointment: { appointment: APPT } } }, (_op, v) => (vars = v));
+    gqlRouter(
+      agent,
+      { updateAppointment: { updateAppointment: { appointment: APPT } } },
+      (_op, v) => (vars = v),
+    );
     await makeClient().updateBooking('urn:blvd:Appointment:1', { title: 'VIP' });
     expect(vars.input.notes).toBe('VIP');
     expect(vars.input.note).toBeUndefined();
@@ -315,7 +354,10 @@ describe('boulevard GraphQL shapes', () => {
     const table: Array<[any, string]> = [
       [{ message: 'Appointment not found', extensions: { code: 'NOT_FOUND' } }, 'NOT_FOUND'],
       [{ message: 'You are not authorized to access this location' }, 'FORBIDDEN'],
-      [{ message: 'startTime is invalid', extensions: { code: 'BAD_USER_INPUT' } }, 'INVALID_INPUT'],
+      [
+        { message: 'startTime is invalid', extensions: { code: 'BAD_USER_INPUT' } },
+        'INVALID_INPUT',
+      ],
       [{ message: 'Variable $input of type X was provided invalid value' }, 'INVALID_INPUT'],
       [{ message: 'Something went wrong' }, 'UPSTREAM'],
     ];
@@ -383,7 +425,10 @@ describe('boulevard GraphQL shapes', () => {
       {
         appointments: {
           appointments: {
-            edges: [{ node: APPT }, { node: { ...APPT, id: 'urn:blvd:Appointment:2', state: 'FINAL' } }],
+            edges: [
+              { node: APPT },
+              { node: { ...APPT, id: 'urn:blvd:Appointment:2', state: 'FINAL' } },
+            ],
             pageInfo: { hasNextPage: false },
           },
         },
@@ -414,7 +459,11 @@ describe('boulevard GraphQL shapes', () => {
 
   it('keeps the free-text cancellation reason as notes', async () => {
     let vars: any;
-    gqlRouter(agent, { cancelAppointment: { cancelAppointment: { appointment: APPT } } }, (_op, v) => (vars = v));
+    gqlRouter(
+      agent,
+      { cancelAppointment: { cancelAppointment: { appointment: APPT } } },
+      (_op, v) => (vars = v),
+    );
     await makeClient().cancelBooking('urn:blvd:Appointment:1', { reason: 'client cancel' });
     // The enum is lossy; `notes` is where the original wording survives.
     expect(vars.input.reason).toBe('CLIENT_CANCEL');

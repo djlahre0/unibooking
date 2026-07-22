@@ -46,14 +46,20 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
       try {
         return await fn();
       } catch (err) {
-        if (!retryThis || !isUnibookingError(err) || attempt >= retries || !shouldRetry(err, attempt)) {
+        if (
+          !retryThis ||
+          !isUnibookingError(err) ||
+          attempt >= retries ||
+          !shouldRetry(err, attempt)
+        ) {
           throw err;
         }
         const backoff = Math.min(maxDelayMs, baseDelayMs * factor ** attempt);
         const jittered = jitter ? backoff * (0.5 + Math.random() * 0.5) : backoff;
         // A server-supplied Retry-After is honored, but still capped by
         // maxDelayMs so a hostile/mis-set header can't stall the caller for hours.
-        const delay = err.retryAfterMs !== undefined ? Math.min(maxDelayMs, err.retryAfterMs) : jittered;
+        const delay =
+          err.retryAfterMs !== undefined ? Math.min(maxDelayMs, err.retryAfterMs) : jittered;
         await sleep(delay);
         attempt++;
       }

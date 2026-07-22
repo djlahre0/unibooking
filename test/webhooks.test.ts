@@ -26,13 +26,20 @@ describe('square webhook', () => {
 
   it('accepts a valid signature', async () => {
     const signature = nodeHmacBase64(key, url + body);
-    expect(await verifySquareSignature({ signatureKey: key, notificationUrl: url, body, signature })).toBe(true);
+    expect(
+      await verifySquareSignature({ signatureKey: key, notificationUrl: url, body, signature }),
+    ).toBe(true);
   });
 
   it('rejects a tampered body', async () => {
     const signature = nodeHmacBase64(key, url + body);
     expect(
-      await verifySquareSignature({ signatureKey: key, notificationUrl: url, body: body + 'x', signature }),
+      await verifySquareSignature({
+        signatureKey: key,
+        notificationUrl: url,
+        body: body + 'x',
+        signature,
+      }),
     ).toBe(false);
   });
 });
@@ -73,7 +80,9 @@ describe('graph (outlook) webhook', () => {
     expect(verifyGraphClientState(payload, 'secret')).toBe(true);
     expect(verifyGraphClientState(payload, 'other')).toBe(false);
     expect(verifyGraphClientState({ value: [] }, 'secret')).toBe(false);
-    expect(verifyGraphClientState({ value: [{ clientState: 'secret' }, {}] }, 'secret')).toBe(false);
+    expect(verifyGraphClientState({ value: [{ clientState: 'secret' }, {}] }, 'secret')).toBe(
+      false,
+    );
   });
 });
 
@@ -101,7 +110,9 @@ describe('calendly webhook', () => {
   it('accepts a valid t=,v1= signature', async () => {
     const v1 = nodeHmacHex(key, `${t}.${body}`);
     const header = `t=${t},v1=${v1}`;
-    expect(await verifyCalendlySignature({ signingKey: key, body, signatureHeader: header })).toBe(true);
+    expect(await verifyCalendlySignature({ signingKey: key, body, signatureHeader: header })).toBe(
+      true,
+    );
   });
 
   it('rejects a tampered body', async () => {
@@ -113,7 +124,9 @@ describe('calendly webhook', () => {
   });
 
   it('rejects a malformed header', async () => {
-    expect(await verifyCalendlySignature({ signingKey: key, body, signatureHeader: 'garbage' })).toBe(false);
+    expect(
+      await verifyCalendlySignature({ signingKey: key, body, signatureHeader: 'garbage' }),
+    ).toBe(false);
   });
 });
 
@@ -124,12 +137,16 @@ describe('mindbody webhook', () => {
   it('accepts a valid signature (with and without the sha256= prefix)', async () => {
     const sig = nodeHmacBase64(key, body);
     expect(await verifyMindbodySignature({ signatureKey: key, body, signature: sig })).toBe(true);
-    expect(await verifyMindbodySignature({ signatureKey: key, body, signature: `sha256=${sig}` })).toBe(true);
+    expect(
+      await verifyMindbodySignature({ signatureKey: key, body, signature: `sha256=${sig}` }),
+    ).toBe(true);
   });
 
   it('rejects a tampered body', async () => {
     const sig = nodeHmacBase64(key, body);
-    expect(await verifyMindbodySignature({ signatureKey: key, body: body + 'x', signature: sig })).toBe(false);
+    expect(
+      await verifyMindbodySignature({ signatureKey: key, body: body + 'x', signature: sig }),
+    ).toBe(false);
   });
 });
 
@@ -265,19 +282,30 @@ describe('bookeo webhook (HMAC-SHA256 hex)', () => {
   it('rejects when the URL query string is stripped', async () => {
     // The query string is part of the signed message — no normalization.
     expect(
-      await verifyBookeoSignature({ ...input, webhookUrl: 'https://www.mywebsite.com/webhooktest' }),
+      await verifyBookeoSignature({
+        ...input,
+        webhookUrl: 'https://www.mywebsite.com/webhooktest',
+      }),
     ).toBe(false);
   });
 
   it('rejects a stale timestamp when a tolerance is supplied', async () => {
     expect(
-      await verifyBookeoSignature({ ...input, toleranceMs: 120_000, now: () => Number(timestamp) + 300_000 }),
+      await verifyBookeoSignature({
+        ...input,
+        toleranceMs: 120_000,
+        now: () => Number(timestamp) + 300_000,
+      }),
     ).toBe(false);
   });
 
   it('accepts a fresh timestamp within tolerance', async () => {
     expect(
-      await verifyBookeoSignature({ ...input, toleranceMs: 120_000, now: () => Number(timestamp) + 5_000 }),
+      await verifyBookeoSignature({
+        ...input,
+        toleranceMs: 120_000,
+        now: () => Number(timestamp) + 5_000,
+      }),
     ).toBe(true);
   });
 });

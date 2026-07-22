@@ -68,13 +68,17 @@ describe('setmore: operations the API genuinely lacks', () => {
     ['getBooking', (c: any) => c.getBooking('A1')],
     ['cancelBooking', (c: any) => c.cancelBooking('A1')],
   ])('%s throws UNSUPPORTED', async (_name, call) => {
-    const err = await call(makeClient()).then(() => null).catch((e: any) => e);
+    const err = await call(makeClient())
+      .then(() => null)
+      .catch((e: any) => e);
     expect(err?.code).toBe('UNSUPPORTED');
   });
 
   it('updateBooking rejects time/staff/service changes — only a label can change', async () => {
     const err = await makeClient()
-      .updateBooking('A1', { range: { start: '2026-07-20T10:00:00Z', end: '2026-07-20T10:30:00Z' } })
+      .updateBooking('A1', {
+        range: { start: '2026-07-20T10:00:00Z', end: '2026-07-20T10:30:00Z' },
+      })
       .then(() => null)
       .catch((e: any) => e);
     expect(err?.code).toBe('UNSUPPORTED');
@@ -110,10 +114,14 @@ describe('setmore wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/appointments'), method: 'GET' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ response: true, data: { appointments: [] } });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: { appointments: [] } });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().listBookings({
       range: { start: '2026-02-12T00:00:00Z', end: '2026-03-12T00:00:00Z' },
@@ -129,10 +137,14 @@ describe('setmore wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ response: true, data: { slots: ['09.00', '09.30'] } });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: { slots: ['09.00', '09.30'] } });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const slots = await makeClient().searchAvailability({
       range: {
@@ -174,10 +186,14 @@ describe('setmore wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ response: true, data: [] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: [] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await makeClient().searchAvailability({
       range: { start: '2026-07-20T00:00:00Z', end: '2026-07-20T23:00:00Z', timezone: 'UTC' },
@@ -190,15 +206,19 @@ describe('setmore wire format', () => {
     expect(JSON.parse(seen.body).slot_limit).toBe(100);
   });
 
-  it('fans out one slots request per day using each endpoint\'s own offset', async () => {
+  it("fans out one slots request per day using each endpoint's own offset", async () => {
     const dates: string[] = [];
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        dates.push(JSON.parse(String(opts.body)).selected_date);
-        return JSON.stringify({ response: true, data: [] });
-      }, { headers: JSON_HEADERS })
+      .reply(
+        200,
+        (opts: any) => {
+          dates.push(JSON.parse(String(opts.body)).selected_date);
+          return JSON.stringify({ response: true, data: [] });
+        },
+        { headers: JSON_HEADERS },
+      )
       .persist();
 
     await makeClient().searchAvailability({
@@ -250,10 +270,17 @@ describe('setmore wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.includes('/label'), method: 'PUT' })
-      .reply(200, (opts: any) => {
-        seen = opts;
-        return JSON.stringify({ response: true, data: { appointment: { ...APPT, label: 'VIP' } } });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({
+            response: true,
+            data: { appointment: { ...APPT, label: 'VIP' } },
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const b = await makeClient().updateBooking('A1', { title: 'VIP' });
 
@@ -267,14 +294,23 @@ describe('setmore wire format', () => {
     agent
       .get(ORIGIN)
       .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/customer?'), method: 'GET' })
-      .reply(200, JSON.stringify({ response: true, data: { customer: [] } }), { headers: JSON_HEADERS });
+      .reply(200, JSON.stringify({ response: true, data: { customer: [] } }), {
+        headers: JSON_HEADERS,
+      });
     agent
       .get(ORIGIN)
-      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/customer/create'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        created = opts;
-        return JSON.stringify({ response: true, data: { customer: { key: 'C9' } } });
-      }, { headers: JSON_HEADERS });
+      .intercept({
+        path: (p) => p.startsWith('/api/v1/bookingapi/customer/create'),
+        method: 'POST',
+      })
+      .reply(
+        200,
+        (opts: any) => {
+          created = opts;
+          return JSON.stringify({ response: true, data: { customer: { key: 'C9' } } });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const id = await makeClient().customers!.findOrCreate({
       name: 'Jane Doe',
@@ -299,7 +335,9 @@ describe('setmore wire format', () => {
         headers: JSON_HEADERS,
       });
 
-    const err = await makeClient().listBookings({ range: RANGE }).catch((e) => e);
+    const err = await makeClient()
+      .listBookings({ range: RANGE })
+      .catch((e) => e);
     expect(err.code).toBe('UPSTREAM');
     expect(err.providerCode).toBe('not_allowed');
   });

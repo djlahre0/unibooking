@@ -26,7 +26,9 @@ export async function* listAll(
   if (token !== undefined) seen.add(token);
 
   for (;;) {
-    const result = await client.listBookings(token !== undefined ? { ...base, pageToken: token } : base);
+    const result = await client.listBookings(
+      token !== undefined ? { ...base, pageToken: token } : base,
+    );
     for (const booking of result.bookings) yield booking;
 
     pages += 1;

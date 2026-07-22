@@ -46,17 +46,15 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
     pool
       .intercept({ path: (p) => p.includes('/staffMembers'), method: 'GET' })
       .reply(200, JSON.stringify({ value: [{ id: 'staff-1' }] }), { headers: JSON_HEADERS });
-    pool
-      .intercept({ path: (p) => p.includes('/getStaffAvailability'), method: 'POST' })
-      .reply(
-        200,
-        // Documented wrapper is `staffAvailabilityItem`, NOT the usual OData
-        // `value` — reading `value` returned an empty list for every business.
-        JSON.stringify({
-          staffAvailabilityItem: [{ staffId: 'staff-1', availabilityItems: items }],
-        }),
-        { headers: JSON_HEADERS },
-      );
+    pool.intercept({ path: (p) => p.includes('/getStaffAvailability'), method: 'POST' }).reply(
+      200,
+      // Documented wrapper is `staffAvailabilityItem`, NOT the usual OData
+      // `value` — reading `value` returned an empty list for every business.
+      JSON.stringify({
+        staffAvailabilityItem: [{ staffId: 'staff-1', availabilityItems: items }],
+      }),
+      { headers: JSON_HEADERS },
+    );
   }
 
   it('reads the staffAvailabilityItem wrapper instead of returning nothing', async () => {
@@ -67,7 +65,10 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
         endDateTime: { dateTime: '2026-07-20T09:30:00.0000000', timeZone: 'UTC' },
       },
     ]);
-    const slots = await microsoftBookings({ accessToken: 't', businessId: 'b@x.com' }).searchAvailability({
+    const slots = await microsoftBookings({
+      accessToken: 't',
+      businessId: 'b@x.com',
+    }).searchAvailability({
       range: RANGE,
     });
     expect(slots).toHaveLength(1);
@@ -87,7 +88,10 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
         endDateTime: { dateTime: '2026-07-20T12:30:00.0000000', timeZone: 'UTC' },
       },
     ]);
-    const slots = await microsoftBookings({ accessToken: 't', businessId: 'b@x.com' }).searchAvailability({
+    const slots = await microsoftBookings({
+      accessToken: 't',
+      businessId: 'b@x.com',
+    }).searchAvailability({
       range: RANGE,
     });
     expect(slots.map((s) => s.start)).toEqual(['2026-07-20T11:00:00Z']);
@@ -110,7 +114,10 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
         },
       },
     ]);
-    const slots = await microsoftBookings({ accessToken: 't', businessId: 'b@x.com' }).searchAvailability({
+    const slots = await microsoftBookings({
+      accessToken: 't',
+      businessId: 'b@x.com',
+    }).searchAvailability({
       range: RANGE,
     });
     expect(slots[0]!.start).toBe('2026-07-20T17:00:00Z');
@@ -133,7 +140,12 @@ describe('AUDIT calendly: createBooking', () => {
       201,
       (opts: any) => {
         body = JSON.parse(String(opts.body));
-        return JSON.stringify({ resource: { uri: 'https://api.calendly.com/invitees/i1', event: 'https://api.calendly.com/scheduled_events/e1' } });
+        return JSON.stringify({
+          resource: {
+            uri: 'https://api.calendly.com/invitees/i1',
+            event: 'https://api.calendly.com/scheduled_events/e1',
+          },
+        });
       },
       { headers: JSON_HEADERS },
     );
@@ -311,10 +323,18 @@ describe('AUDIT webhooks', () => {
 
     expect(await verifyCalendlySignature(input)).toBe(true);
     expect(
-      await verifyCalendlySignature({ ...input, toleranceMs: 180_000, now: () => t * 1000 + 60_000 }),
+      await verifyCalendlySignature({
+        ...input,
+        toleranceMs: 180_000,
+        now: () => t * 1000 + 60_000,
+      }),
     ).toBe(true);
     expect(
-      await verifyCalendlySignature({ ...input, toleranceMs: 180_000, now: () => t * 1000 + 600_000 }),
+      await verifyCalendlySignature({
+        ...input,
+        toleranceMs: 180_000,
+        now: () => t * 1000 + 600_000,
+      }),
     ).toBe(false);
   });
 

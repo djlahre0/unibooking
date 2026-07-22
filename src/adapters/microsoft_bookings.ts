@@ -147,7 +147,9 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
           // Graph's documented appointment PATCH examples all carry the type
           // annotation (as create does); omitting it is known to fail requests.
           '@odata.type': '#microsoft.graph.bookingAppointment',
-          ...(input.range ? { start: graphDateTime(input.range.start), end: graphDateTime(input.range.end) } : {}),
+          ...(input.range
+            ? { start: graphDateTime(input.range.start), end: graphDateTime(input.range.end) }
+            : {}),
           ...(input.title ? { serviceName: input.title } : {}),
           ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
@@ -199,7 +201,9 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
               $top: query.limit ?? 50,
             },
           });
-      const bookings = asArray(res?.value, 'microsoft_bookings', 'calendarView.value').map(toBooking);
+      const bookings = asArray(res?.value, 'microsoft_bookings', 'calendarView.value').map(
+        toBooking,
+      );
       const next = nextLinkFrom(res);
       return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
     },
@@ -242,7 +246,11 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
       for (const entry of asArray(entries, 'microsoft_bookings', 'staffAvailability')) {
         const e = asRecord(entry, 'microsoft_bookings', 'staffAvailabilityItem');
         const staffId = typeof e.staffId === 'string' ? e.staffId : undefined;
-        for (const item of asArray(e.availabilityItems ?? [], 'microsoft_bookings', 'availabilityItems')) {
+        for (const item of asArray(
+          e.availabilityItems ?? [],
+          'microsoft_bookings',
+          'availabilityItems',
+        )) {
           const slot = asRecord(item, 'microsoft_bookings', 'availabilityItem');
           // `available` windows are bookable; so are `slotsAvailable` ones (1:n
           // group services with remaining capacity). busy/out-of-office are not.
@@ -270,7 +278,10 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
           let page = await http.request(c, { path: `${base(c)}/customers`, query: { $top: 200 } });
           for (let i = 0; i < 50; i++) {
             for (const cust of asArray(page?.value, 'microsoft_bookings', 'customers.value')) {
-              if (typeof cust?.emailAddress === 'string' && cust.emailAddress.toLowerCase() === wanted) {
+              if (
+                typeof cust?.emailAddress === 'string' &&
+                cust.emailAddress.toLowerCase() === wanted
+              ) {
                 return reqString(cust.id, 'microsoft_bookings', 'customer.id');
               }
             }

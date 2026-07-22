@@ -95,10 +95,16 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseSquareError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseSquareError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const errors = (body as any)?.errors;
   if (!Array.isArray(errors) || errors.length === 0) return {};
-  const message = errors.map((e: any) => e.detail ?? e.code).filter(Boolean).join('; ');
+  const message = errors
+    .map((e: any) => e.detail ?? e.code)
+    .filter(Boolean)
+    .join('; ');
   return {
     ...(message ? { message } : {}),
     ...(errors[0]?.code ? { providerCode: errors[0].code } : {}),
@@ -246,7 +252,9 @@ export const square = defineAdapter<SquareCredentials>({
           'booking',
         );
         if (version === undefined) version = current.version;
-        const segs = Array.isArray(current.appointment_segments) ? current.appointment_segments : [];
+        const segs = Array.isArray(current.appointment_segments)
+          ? current.appointment_segments
+          : [];
         curSeg = segs[0];
       }
       const segment = needSegment

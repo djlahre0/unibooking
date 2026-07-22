@@ -9,8 +9,7 @@ export type MangomintCredentials = {
   apiKey: string;
 };
 
-const NOT_IMPL =
-  'not yet implemented — Mangomint publishes no public API documentation';
+const NOT_IMPL = 'not yet implemented — Mangomint publishes no public API documentation';
 
 export const mangomint = defineAdapter<MangomintCredentials>({
   id: 'mangomint',

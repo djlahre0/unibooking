@@ -91,10 +91,17 @@ runConformance({
       path: '/v2/bookings/availability/search',
       reply: {
         availabilities: [
-          { start_at: START, appointment_segments: [{ duration_minutes: 30, team_member_id: 'tm1' }] },
+          {
+            start_at: START,
+            appointment_segments: [{ duration_minutes: 30, team_member_id: 'tm1' }],
+          },
         ],
       },
-      run: (c) => c.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z' }, serviceId: 'sv1' }),
+      run: (c) =>
+        c.searchAvailability({
+          range: { start: START, end: '2026-07-21T00:00:00Z' },
+          serviceId: 'sv1',
+        }),
       check: (slots) => {
         expect(slots).toHaveLength(1);
         expect(slots[0].end).toBe('2026-07-20T22:30:00Z');
@@ -129,12 +136,14 @@ describe('square: customer resolution + version fetch', () => {
       .reply(200, JSON.stringify({ customers: [{ id: 'CUST_FOUND' }] }), {
         headers: { 'content-type': 'application/json' },
       });
-    pool
-      .intercept({ path: '/v2/bookings', method: 'POST' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/bookings', method: 'POST' }).reply(
+      200,
+      (opts) => {
         bodies.push(JSON.parse(String(opts.body)));
         return JSON.stringify({ booking: booking({ customer_id: 'CUST_FOUND' }) });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     const b = await client.createBooking({
@@ -153,12 +162,14 @@ describe('square: customer resolution + version fetch', () => {
   it('createBooking puts providerOptions.service_variation_version on the segment', async () => {
     const pool = agent.get(ORIGIN);
     let body: any;
-    pool
-      .intercept({ path: '/v2/bookings', method: 'POST' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/bookings', method: 'POST' }).reply(
+      200,
+      (opts) => {
         body = JSON.parse(String(opts.body));
         return JSON.stringify({ booking: booking() });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     await client.createBooking({
@@ -186,12 +197,14 @@ describe('square: customer resolution + version fetch', () => {
         headers: { 'content-type': 'application/json' },
       });
     let putBody: any;
-    pool
-      .intercept({ path: '/v2/bookings/B1', method: 'PUT' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/bookings/B1', method: 'PUT' }).reply(
+      200,
+      (opts) => {
         putBody = JSON.parse(String(opts.body));
         return JSON.stringify({ booking: booking() });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     await client.updateBooking('B1', { range: RANGE });
@@ -208,12 +221,14 @@ describe('square: customer resolution + version fetch', () => {
         headers: { 'content-type': 'application/json' },
       });
     let putBody: any;
-    pool
-      .intercept({ path: '/v2/bookings/B1', method: 'PUT' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/bookings/B1', method: 'PUT' }).reply(
+      200,
+      (opts) => {
         putBody = JSON.parse(String(opts.body));
         return JSON.stringify({ booking: booking() });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     await client.updateBooking('B1', { staffId: 'tmNEW', serviceId: 'svNEW', title: 'VIP note' });
@@ -252,7 +267,10 @@ describe('square: customer resolution + version fetch', () => {
       client.searchAvailability({ range: { start: START, end: '2026-07-21T00:00:00Z' } }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     await expect(
-      client.searchAvailability({ range: { start: '2026-07-21T00:00:00Z', end: START }, serviceId: 'sv1' }),
+      client.searchAvailability({
+        range: { start: '2026-07-21T00:00:00Z', end: START },
+        serviceId: 'sv1',
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
@@ -272,18 +290,22 @@ describe('square: customer resolution + version fetch', () => {
     let createCustomerBody: any;
     let bookingBody: any;
     // name-only → findOrCreateCustomer skips the dedup search and creates straight away
-    pool
-      .intercept({ path: '/v2/customers', method: 'POST' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/customers', method: 'POST' }).reply(
+      200,
+      (opts) => {
         createCustomerBody = JSON.parse(String(opts.body));
         return JSON.stringify({ customer: { id: 'CUST_NAMED' } });
-      }, { headers: { 'content-type': 'application/json' } });
-    pool
-      .intercept({ path: '/v2/bookings', method: 'POST' })
-      .reply(200, (opts) => {
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+    pool.intercept({ path: '/v2/bookings', method: 'POST' }).reply(
+      200,
+      (opts) => {
         bookingBody = JSON.parse(String(opts.body));
         return JSON.stringify({ booking: booking({ customer_id: 'CUST_NAMED' }) });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     const b = await client.createBooking({
@@ -304,12 +326,14 @@ describe('square: customer resolution + version fetch', () => {
   it('findOrCreate searches by phone when no email is given', async () => {
     const pool = agent.get(ORIGIN);
     let searchBody: any;
-    pool
-      .intercept({ path: '/v2/customers/search', method: 'POST' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: '/v2/customers/search', method: 'POST' }).reply(
+      200,
+      (opts) => {
         searchBody = JSON.parse(String(opts.body));
         return JSON.stringify({ customers: [{ id: 'CUST_BY_PHONE' }] });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     const id = await client.customers!.findOrCreate({ phone: '555-0100' });

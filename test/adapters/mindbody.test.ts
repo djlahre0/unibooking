@@ -21,7 +21,13 @@ runConformance({
   provider: 'mindbody',
   origin: 'https://api.mindbodyonline.com',
   makeClient: () =>
-    mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', locationId: 'L1', utcOffset: '-08:00' }),
+    mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 'tok',
+      locationId: 'L1',
+      utcOffset: '-08:00',
+    }),
   errorProbe: { method: 'GET', path: APPTS_PATH, run: (c) => c.getBooking('missing') },
   cases: [
     {
@@ -63,7 +69,10 @@ runConformance({
       method: 'GET',
       path: APPTS_PATH,
       reply: { Appointments: [APPT], PaginationResponse: { TotalResults: 1 } },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00-08:00', end: '2026-07-21T00:00:00-08:00' } }),
+      run: (c) =>
+        c.listBookings({
+          range: { start: '2026-07-20T00:00:00-08:00', end: '2026-07-21T00:00:00-08:00' },
+        }),
       check: (r) => {
         expect(r.bookings).toHaveLength(1);
         expect(r.nextPageToken).toBeUndefined();
@@ -75,7 +84,11 @@ runConformance({
       path: '/public/v6/appointment/bookableitems',
       reply: {
         Availabilities: [
-          { StartDateTime: '2026-07-20T15:00:00', EndDateTime: '2026-07-20T15:45:00', Staff: { Id: 5 } },
+          {
+            StartDateTime: '2026-07-20T15:00:00',
+            EndDateTime: '2026-07-20T15:45:00',
+            Staff: { Id: 5 },
+          },
         ],
       },
       run: (c) => c.searchAvailability({ range: RANGE, serviceId: '9' }),
@@ -113,13 +126,23 @@ describe('mindbody: status mapping + site-local query window', () => {
       .reply(200, JSON.stringify({ Appointments: [{ ...APPT, Status: 'Requested' }] }), {
         headers: { 'content-type': 'application/json' },
       });
-    const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' });
+    const client = mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 'tok',
+      utcOffset: '-08:00',
+    });
     expect((await client.getBooking('101')).status).toBe('completed');
     expect((await client.getBooking('101')).status).toBe('pending');
   });
 
   it('createBooking without a locationId is rejected (LocationId is required)', async () => {
-    const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' });
+    const client = mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 'tok',
+      utcOffset: '-08:00',
+    });
     await expect(
       client.createBooking({
         title: 'x',
@@ -134,15 +157,24 @@ describe('mindbody: status mapping + site-local query window', () => {
   it('sends the list window as site-local (offset-stripped) dates', async () => {
     const pool = agent.get('https://api.mindbodyonline.com');
     let startDate: string | null = null;
-    pool
-      .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
-      .reply(200, (opts) => {
+    pool.intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' }).reply(
+      200,
+      (opts) => {
         startDate = new URL('http://x' + opts.path).searchParams.get('StartDate');
         return JSON.stringify({ Appointments: [APPT] });
-      }, { headers: { 'content-type': 'application/json' } });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
-    const client = mindbody({ apiKey: 'k', siteId: '-99', accessToken: 'tok', utcOffset: '-08:00' });
-    await client.listBookings({ range: { start: '2026-07-20T00:00:00-08:00', end: '2026-07-21T00:00:00-08:00' } });
+    const client = mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 'tok',
+      utcOffset: '-08:00',
+    });
+    await client.listBookings({
+      range: { start: '2026-07-20T00:00:00-08:00', end: '2026-07-21T00:00:00-08:00' },
+    });
     // Previously the raw offset instant was forwarded, shifting Mindbody's
     // site-local window; now it's converted to the site's wall clock.
     expect(startDate).toBe('2026-07-20T00:00:00');
@@ -184,10 +216,14 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.mindbodyonline.com')
       .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
-      .reply(200, (opts: any) => {
-        params = new URL('http://x' + opts.path).searchParams;
-        return JSON.stringify({ Appointments: [nextYear] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          params = new URL('http://x' + opts.path).searchParams;
+          return JSON.stringify({ Appointments: [nextYear] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const b = await mindbody(CREDS).getBooking('101');
     expect(params!.get('AppointmentIds')).toBe('101');
@@ -203,10 +239,14 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.mindbodyonline.com')
       .intercept({ path: (p) => p.includes('/appointment/updateappointment'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify({ Appointment: APPT });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({ Appointment: APPT });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await mindbody(CREDS).updateBooking('101', { range: RANGE, serviceId: '9', title: 'Trim' });
     expect(body.AppointmentId).toBe(101);
@@ -241,10 +281,14 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.mindbodyonline.com')
       .intercept({ path: (p) => p.includes('/appointment/addappointment'), method: 'POST' })
-      .reply(200, (opts: any) => {
-        body = JSON.parse(String(opts.body));
-        return JSON.stringify({ Appointment: { ...APPT, Notes: body.Notes } });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({ Appointment: { ...APPT, Notes: body.Notes } });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     const b = await mindbody(CREDS).createBooking({
       title: 'Beard trim',
@@ -265,7 +309,9 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
       .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
       .reply(
         200,
-        JSON.stringify({ Appointments: [{ ...APPT, SessionTypeId: undefined, AppointmentTypeId: 77 }] }),
+        JSON.stringify({
+          Appointments: [{ ...APPT, SessionTypeId: undefined, AppointmentTypeId: 77 }],
+        }),
         { headers: JSON_HEADERS },
       );
     const b = await mindbody(CREDS).getBooking('101');
@@ -277,10 +323,14 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     agent
       .get('https://api.mindbodyonline.com')
       .intercept({ path: (p) => p.startsWith(APPTS_PATH), method: 'GET' })
-      .reply(200, (opts: any) => {
-        params = new URL('http://x' + opts.path).searchParams;
-        return JSON.stringify({ Appointments: [APPT] });
-      }, { headers: JSON_HEADERS });
+      .reply(
+        200,
+        (opts: any) => {
+          params = new URL('http://x' + opts.path).searchParams;
+          return JSON.stringify({ Appointments: [APPT] });
+        },
+        { headers: JSON_HEADERS },
+      );
 
     await mindbody(CREDS).listBookings({
       range: { start: '2026-07-20T00:00:00-08:00', end: '2026-07-21T00:00:00-08:00' },
@@ -295,7 +345,10 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
   it('searchAvailability slices a bookable window into discrete slots', async () => {
     agent
       .get('https://api.mindbodyonline.com')
-      .intercept({ path: (p) => p.startsWith('/public/v6/appointment/bookableitems'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
       .reply(
         200,
         JSON.stringify({
@@ -331,7 +384,10 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
   it('searchAvailability falls back to the session type default length', async () => {
     agent
       .get('https://api.mindbodyonline.com')
-      .intercept({ path: (p) => p.startsWith('/public/v6/appointment/bookableitems'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
       .reply(
         200,
         JSON.stringify({
@@ -357,7 +413,10 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
   it('searchAvailability keeps the window when no duration can be determined', async () => {
     agent
       .get('https://api.mindbodyonline.com')
-      .intercept({ path: (p) => p.startsWith('/public/v6/appointment/bookableitems'), method: 'GET' })
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
       .reply(
         200,
         JSON.stringify({

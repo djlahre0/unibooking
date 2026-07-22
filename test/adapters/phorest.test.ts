@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  getGlobalDispatcher,
-  MockAgent,
-  setGlobalDispatcher,
-  type Dispatcher,
-} from 'undici';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { phorest } from '../../src/adapters/phorest';
 import { runConformance } from '../conformance';
 
@@ -107,7 +102,11 @@ runConformance({
       path: '/third-party-api-server/api/business/biz1/branch/br1/appointment/ap123',
       reply: APPT,
       run: (c) =>
-        c.updateBooking('ap123', { range: RANGE, staffId: 'stf1', providerOptions: { version: 1 } }),
+        c.updateBooking('ap123', {
+          range: RANGE,
+          staffId: 'stf1',
+          providerOptions: { version: 1 },
+        }),
       check: (b) => expect(b.range.end).toBe('2026-07-20T22:45:00Z'),
     },
     {
@@ -122,7 +121,8 @@ runConformance({
       method: 'GET',
       path: '/third-party-api-server/api/business/biz1/branch/br1/appointment',
       reply: { _embedded: [APPT], page: { size: 20, totalElements: 1, totalPages: 1, number: 0 } },
-      run: (c) => c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
+      run: (c) =>
+        c.listBookings({ range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' } }),
       check: (r) => expect(r.bookings).toHaveLength(1),
     },
     {
@@ -185,7 +185,12 @@ describe('phorest multi-call flows', () => {
 
   it('createBooking rejects a missing staffId before calling Phorest', async () => {
     const err = await makeClient()
-      .createBooking({ title: 'Haircut', range: RANGE, serviceId: 'svc1', customer: { id: 'cli1' } })
+      .createBooking({
+        title: 'Haircut',
+        range: RANGE,
+        serviceId: 'svc1',
+        customer: { id: 'cli1' },
+      })
       .then(() => null)
       .catch((e: any) => e);
     expect(err?.code).toBe('INVALID_INPUT');
@@ -203,11 +208,18 @@ describe('phorest multi-call flows', () => {
     let putBody: any;
     agent
       .get('https://platform.phorest.com')
-      .intercept({ path: (p: string) => p.split('?')[0] === `${P}/appointment/ap123`, method: 'PUT' })
-      .reply(200, (opts) => {
-        putBody = JSON.parse(String(opts.body));
-        return JSON.stringify(APPT);
-      }, { headers: { 'content-type': 'application/json' } });
+      .intercept({
+        path: (p: string) => p.split('?')[0] === `${P}/appointment/ap123`,
+        method: 'PUT',
+      })
+      .reply(
+        200,
+        (opts) => {
+          putBody = JSON.parse(String(opts.body));
+          return JSON.stringify(APPT);
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     return () => putBody;
   };
 
@@ -260,7 +272,10 @@ describe('phorest multi-call flows', () => {
     intercept('POST', `${P}/appointments/availability`, {
       data: [
         { startTime: '2026-07-20T22:00:00Z', clientSchedules: [] },
-        { startTime: '2026-07-20T23:00:00Z', clientSchedules: [{ serviceSchedules: [{ staffId: 'staff1' }] }] },
+        {
+          startTime: '2026-07-20T23:00:00Z',
+          clientSchedules: [{ serviceSchedules: [{ staffId: 'staff1' }] }],
+        },
         AVAILABILITY.data[0],
       ],
       links: [],
@@ -274,11 +289,18 @@ describe('phorest multi-call flows', () => {
     let auth = '';
     agent
       .get('https://platform.phorest.com')
-      .intercept({ path: (p: string) => p.split('?')[0] === `${P}/appointment/ap123`, method: 'GET' })
-      .reply(200, (opts: any) => {
-        auth = String(opts.headers.authorization ?? opts.headers.Authorization ?? '');
-        return JSON.stringify(APPT);
-      }, { headers: { 'content-type': 'application/json' } });
+      .intercept({
+        path: (p: string) => p.split('?')[0] === `${P}/appointment/ap123`,
+        method: 'GET',
+      })
+      .reply(
+        200,
+        (opts: any) => {
+          auth = String(opts.headers.authorization ?? opts.headers.Authorization ?? '');
+          return JSON.stringify(APPT);
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     await phorest({
       username: 'global/api@salon.com',
       password: 'pässwörd☕',
@@ -311,16 +333,32 @@ describe('phorest multi-call flows', () => {
     agent
       .get('https://platform.phorest.com')
       .intercept({ path: (p: string) => p.split('?')[0] === `${P}/appointment`, method: 'GET' })
-      .reply(200, (opts: any) => {
-        path = String(opts.path);
-        return JSON.stringify(body);
-      }, { headers: { 'content-type': 'application/json' } });
+      .reply(
+        200,
+        (opts: any) => {
+          path = String(opts.path);
+          return JSON.stringify(body);
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     return () => path;
   };
 
   it('listBookings derives from_date/to_date in UTC and trims to the requested instants', async () => {
-    const IN = { ...APPT, appointmentId: 'ap777', appointmentDate: '2026-07-21', startTime: '05:00:00', endTime: '05:30:00' };
-    const LATE = { ...APPT, appointmentId: 'ap888', appointmentDate: '2026-07-22', startTime: '04:00:00', endTime: '04:30:00' };
+    const IN = {
+      ...APPT,
+      appointmentId: 'ap777',
+      appointmentDate: '2026-07-21',
+      startTime: '05:00:00',
+      endTime: '05:30:00',
+    };
+    const LATE = {
+      ...APPT,
+      appointmentId: 'ap888',
+      appointmentDate: '2026-07-22',
+      startTime: '04:00:00',
+      endTime: '04:30:00',
+    };
     const path = captureList({
       _embedded: [APPT, IN, LATE],
       page: { size: 20, totalElements: 3, totalPages: 1, number: 0 },
@@ -351,7 +389,10 @@ describe('phorest multi-call flows', () => {
   });
 
   it('listBookings clamps size to the documented maximum of 100', async () => {
-    const path = captureList({ _embedded: [], page: { size: 100, totalElements: 0, totalPages: 0, number: 0 } });
+    const path = captureList({
+      _embedded: [],
+      page: { size: 100, totalElements: 0, totalPages: 0, number: 0 },
+    });
     await makeClient().listBookings({
       range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
       limit: 500,
@@ -371,7 +412,7 @@ describe('phorest multi-call flows', () => {
   });
 });
 
-describe("phorest: update backfills required fields", () => {
+describe('phorest: update backfills required fields', () => {
   let agent: MockAgent;
   let previous: Dispatcher;
   beforeEach(() => {
@@ -385,29 +426,34 @@ describe("phorest: update backfills required fields", () => {
     await agent.close();
   });
 
-  it("reads current staffId/startTime when the patch omits them", async () => {
+  it('reads current staffId/startTime when the patch omits them', async () => {
     // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
     // version required, so a serviceId-only patch must backfill the rest.
-    const pool = agent.get("https://platform.phorest.com");
+    const pool = agent.get('https://platform.phorest.com');
     pool
-      .intercept({ path: (p) => p.endsWith("/appointment/ap123"), method: "GET" })
-      .reply(200, JSON.stringify({ ...APPT, version: 7, staffId: "stf-current" }),
-        { headers: { "content-type": "application/json" } });
+      .intercept({ path: (p) => p.endsWith('/appointment/ap123'), method: 'GET' })
+      .reply(200, JSON.stringify({ ...APPT, version: 7, staffId: 'stf-current' }), {
+        headers: { 'content-type': 'application/json' },
+      });
     let body: any;
-    pool
-      .intercept({ path: (p) => p.endsWith("/appointment/ap123"), method: "PUT" })
-      .reply(200, (opts: any) => { body = JSON.parse(String(opts.body)); return JSON.stringify(APPT); },
-        { headers: { "content-type": "application/json" } });
+    pool.intercept({ path: (p) => p.endsWith('/appointment/ap123'), method: 'PUT' }).reply(
+      200,
+      (opts: any) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify(APPT);
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
 
-    await makeClient().updateBooking("ap123", { serviceId: "svc-new" });
+    await makeClient().updateBooking('ap123', { serviceId: 'svc-new' });
 
-    expect(body.appointmentId).toBe("ap123");
+    expect(body.appointmentId).toBe('ap123');
     expect(body.version).toBe(7);
-    expect(body.staffId).toBe("stf-current");
+    expect(body.staffId).toBe('stf-current');
     // Backfilled verbatim: current.appointmentDate + current.startTime are
     // already Phorest's date + LocalTime pair.
-    expect(body.appointmentDate).toBe("2026-07-20");
-    expect(body.startTime).toBe("22:00:00");
-    expect(body.serviceId).toBe("svc-new");
+    expect(body.appointmentDate).toBe('2026-07-20');
+    expect(body.startTime).toBe('22:00:00');
+    expect(body.serviceId).toBe('svc-new');
   });
 });

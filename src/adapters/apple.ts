@@ -206,7 +206,11 @@ export const apple = defineAdapter<AppleCredentials>({
       });
       const event = masterEvent(parseICS(text));
       if (!event) {
-        throw new UnibookingError({ provider: 'apple', code: 'NOT_FOUND', message: `event ${id} not found` });
+        throw new UnibookingError({
+          provider: 'apple',
+          code: 'NOT_FOUND',
+          message: `event ${id} not found`,
+        });
       }
       // Address by the resource id the caller passed, not the VEVENT UID (they
       // can differ), so the returned booking stays re-fetchable.
@@ -227,13 +231,16 @@ export const apple = defineAdapter<AppleCredentials>({
       });
       const current = masterEvent(parseICS(text));
       if (!current || current.start === undefined || current.end === undefined) {
-        throw new UnibookingError({ provider: 'apple', code: 'NOT_FOUND', message: `event ${id} not found` });
+        throw new UnibookingError({
+          provider: 'apple',
+          code: 'NOT_FOUND',
+          message: `event ${id} not found`,
+        });
       }
       // Patch the fetched VCALENDAR in place rather than rebuilding from the lean
       // model — otherwise RRULE, LOCATION, DESCRIPTION, extra attendees, alarms,
       // and VTIMEZONE would be silently dropped on every edit.
-      const status =
-        input.status !== undefined ? toICalStatus(input.status) : undefined;
+      const status = input.status !== undefined ? toICalStatus(input.status) : undefined;
       const ics = patchICS(text, {
         stamp: now(),
         ...(input.range ? { start: input.range.start, end: input.range.end } : {}),

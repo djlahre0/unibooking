@@ -132,7 +132,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseAcuityError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseAcuityError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   if (!b || typeof b !== 'object') return {};
   return {
@@ -322,7 +325,8 @@ export const acuity = defineAdapter<AcuityCredentials>({
         throw new UnibookingError({
           provider: 'acuity',
           code: 'INVALID_INPUT',
-          message: 'Acuity available times are start-only; pass a positive durationMinutes to size each slot',
+          message:
+            'Acuity available times are start-only; pass a positive durationMinutes to size each slot',
         });
       }
       const durationMinutes = query.durationMinutes;

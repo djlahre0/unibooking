@@ -155,7 +155,10 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
-function parseWixError(_status: number, body: unknown): { providerCode?: string; message?: string } {
+function parseWixError(
+  _status: number,
+  body: unknown,
+): { providerCode?: string; message?: string } {
   const b = body as any;
   const message = b?.message ?? b?.details?.applicationError?.description;
   const code = b?.details?.applicationError?.code ?? b?.code;
@@ -237,7 +240,11 @@ async function getBooking(
 ): Promise<Booking> {
   const { raw } = await queryExtendedBookings(http, c, { id });
   if (!raw[0]) {
-    throw new UnibookingError({ provider: 'wix', code: 'NOT_FOUND', message: `booking ${id} not found` });
+    throw new UnibookingError({
+      provider: 'wix',
+      code: 'NOT_FOUND',
+      message: `booking ${id} not found`,
+    });
   }
   return toBooking(raw[0]);
 }
@@ -271,7 +278,11 @@ export const wix = defineAdapter<WixCredentials>({
       assertValidRange(input.range, 'wix');
       const c = await http.resolve();
       let contactId = input.customer?.id;
-      if (contactId === undefined && input.customer && (input.customer.email || input.customer.phone)) {
+      if (
+        contactId === undefined &&
+        input.customer &&
+        (input.customer.email || input.customer.phone)
+      ) {
         contactId = await findOrCreateContact(http, c, input.customer);
       }
       const cust = input.customer;
@@ -366,7 +377,7 @@ export const wix = defineAdapter<WixCredentials>({
               ...(input.serviceId ? { serviceId: input.serviceId } : {}),
               ...(scheduleId !== undefined ? { scheduleId } : {}),
               ...(sessionId !== undefined ? { sessionId } : {}),
-              ...(timezone ?? input.range.timezone
+              ...((timezone ?? input.range.timezone)
                 ? { timezone: timezone ?? input.range.timezone }
                 : {}),
             },
@@ -461,7 +472,8 @@ export const wix = defineAdapter<WixCredentials>({
         throw new UnibookingError({
           provider: 'wix',
           code: 'INVALID_INPUT',
-          message: 'Wix availability (Time Slots V2) is local-time — pass range.timezone (an IANA zone)',
+          message:
+            'Wix availability (Time Slots V2) is local-time — pass range.timezone (an IANA zone)',
         });
       }
       const c = await http.resolve();

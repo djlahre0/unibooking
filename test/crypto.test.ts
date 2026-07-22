@@ -19,7 +19,9 @@ describe('base64ToBytes + hmacSha256BytesBase64', () => {
     const secretB64 = Buffer.from('super-secret-key').toString('base64');
     const msg = 'blvd-admin-v1' + 'business-1' + '1700000000';
     const keyBytes = base64ToBytes(secretB64);
-    const expected = createHmac('sha256', Buffer.from(secretB64, 'base64')).update(msg).digest('base64');
+    const expected = createHmac('sha256', Buffer.from(secretB64, 'base64'))
+      .update(msg)
+      .digest('base64');
     expect(await hmacSha256BytesBase64(keyBytes, msg)).toBe(expected);
   });
 
