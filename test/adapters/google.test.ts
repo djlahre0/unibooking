@@ -200,4 +200,50 @@ describe('google: freeBusy-derived availability', () => {
     expect(JSON.stringify(body)).not.toContain('%40');
     expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z']);
   });
+
+  it('resolves the freeBusy entry when Google lowercases the calendar id', async () => {
+    const REQUESTED = 'Merchant@Example.com';
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(
+        200,
+        // Google normalizes email-form ids to lowercase in the response key.
+        JSON.stringify({ calendars: { 'merchant@example.com': { busy: [] } } }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const slots = await google({ accessToken: 't', calendarId: REQUESTED }).searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
+      durationMinutes: 60,
+    });
+
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z']);
+  });
+
+  it('throws UPSTREAM naming the calendar when no entry matches', async () => {
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          calendars: {
+            'someone-else@example.com': { busy: [] },
+            'third@example.com': { busy: [] },
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    await expect(
+      google({ accessToken: 't', calendarId: 'mine@example.com' }).searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
+        durationMinutes: 60,
+      }),
+    ).rejects.toMatchObject({
+      code: 'UPSTREAM',
+      message: expect.stringContaining('mine@example.com'),
+    });
+  });
 });

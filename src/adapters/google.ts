@@ -120,6 +120,33 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
+/** Google echoes the requested calendar id back as the `calendars` key, but it
+ *  normalizes email-form ids to lowercase — so an exact match is not guaranteed
+ *  even when the request carried the id verbatim. Widen the lookup rather than
+ *  reporting a calendar Google actually answered for. */
+function resolveCalendarEntry(calendars: Record<string, any>, id: string): Record<string, any> {
+  if (calendars[id] !== undefined) {
+    return asRecord(calendars[id], 'google', `freeBusy.calendars[${id}]`);
+  }
+  const lower = id.toLowerCase();
+  for (const [key, value] of Object.entries(calendars)) {
+    if (key.toLowerCase() === lower) {
+      return asRecord(value, 'google', `freeBusy.calendars[${key}]`);
+    }
+  }
+  // Exactly one calendar was requested, so a lone entry can only be that one.
+  const keys = Object.keys(calendars);
+  const only = keys.length === 1 ? keys[0] : undefined;
+  if (only !== undefined) {
+    return asRecord(calendars[only], 'google', `freeBusy.calendars[${only}]`);
+  }
+  throw new UnibookingError({
+    provider: 'google',
+    code: 'UPSTREAM',
+    message: `freeBusy returned no entry for calendar "${id}"`,
+  });
+}
+
 function parseGoogleError(
   _status: number,
   body: unknown,
@@ -268,10 +295,9 @@ export const google = defineAdapter<GoogleCredentials>({
         },
       });
       // Response: { calendars: { [id]: { busy: [{start,end}], errors?: [...] } } }.
-      const cal = asRecord(
-        asRecord(res?.calendars, 'google', 'freeBusy.calendars')[id],
-        'google',
-        'freeBusy.calendars[calendarId]',
+      const cal = resolveCalendarEntry(
+        asRecord(res?.calendars, 'google', 'freeBusy.calendars'),
+        id,
       );
       const errors = asArray(cal.errors, 'google', 'freeBusy.errors');
       if (errors.length > 0) {
