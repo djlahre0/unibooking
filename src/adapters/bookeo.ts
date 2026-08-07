@@ -128,13 +128,7 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
     serviceCatalog: false,
-
     staffDirectory: false,
   },
   baseUrl: BASE,

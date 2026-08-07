@@ -1,5 +1,12 @@
 import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, bookingsWithinRange, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  bookingsWithinRange,
+  defineAdapter,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
 import { slotsWithinRange } from '../availability';
@@ -178,13 +185,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
     serviceCatalog: false,
-
     staffDirectory: false,
   },
   baseUrl: BASE,

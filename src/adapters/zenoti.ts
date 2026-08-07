@@ -6,7 +6,14 @@ import type {
   CreateBookingInput,
   TimeRange,
 } from '../types';
-import { asArray, asRecord, bookingsWithinRange, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  bookingsWithinRange,
+  defineAdapter,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
@@ -373,13 +380,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
     serviceCatalog: false,
-
     staffDirectory: false,
   },
   baseUrl: BASE,

@@ -256,13 +256,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
     serviceCatalog: false,
-
     staffDirectory: false,
   },
   baseUrl: BASE,

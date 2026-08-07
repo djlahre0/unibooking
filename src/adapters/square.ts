@@ -1,4 +1,4 @@
-import type { Booking, BookingStatus, Customer } from '../types';
+import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import type { HttpContext } from '../http';
@@ -159,6 +159,76 @@ async function findOrCreateCustomer(
   return reqString(created?.customer?.id, 'square', 'customer.id');
 }
 
+/** Square's `service_duration` is milliseconds. */
+function durationFromMs(ms: unknown): number | undefined {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n / 60_000;
+}
+
+/**
+ * Flatten one catalog ITEM into one `Service` per ITEM_VARIATION.
+ *
+ * This is the round-trip invariant in action: Square's booking API takes the
+ * **variation** id as `service_variation_id`, so `Service.id` must be the
+ * variation id, not the item id. Returning the item id would enumerate fine and
+ * then fail at booking time with an opaque rejection.
+ */
+function itemToServices(raw: unknown): Service[] {
+  const obj = asRecord(raw, 'square', 'catalog.item');
+  const data = asRecord(obj.item_data ?? {}, 'square', 'catalog.item_data');
+  const itemName = typeof data.name === 'string' ? data.name : '';
+  const deleted = obj.is_deleted === true;
+  return asArray(data.variations, 'square', 'catalog.item_data.variations').flatMap(
+    (v: any): Service[] => {
+      const variation = asRecord(v, 'square', 'catalog.variation');
+      const vd = asRecord(
+        variation.item_variation_data ?? {},
+        'square',
+        'catalog.item_variation_data',
+      );
+      const id = typeof variation.id === 'string' ? variation.id : '';
+      if (!id) return [];
+      const vName = typeof vd.name === 'string' ? vd.name : '';
+      // Per the integration doc: append the variation name unless it is the
+      // default "Regular", which would read as "Gel Nails - Regular".
+      const name = vName && vName !== 'Regular' ? `${itemName} - ${vName}` : itemName;
+      const duration = durationFromMs(vd.service_duration);
+      const money = vd.price_money;
+      const amount = Number(money?.amount);
+      const currency = typeof money?.currency === 'string' ? money.currency : undefined;
+      return [
+        {
+          id,
+          name: name || id,
+          ...(typeof data.description === 'string' && data.description
+            ? { description: data.description }
+            : {}),
+          ...(duration !== undefined ? { durationMinutes: duration } : {}),
+          ...(Number.isFinite(amount) && currency ? { price: { amount, currency } } : {}),
+          ...(typeof data.category_id === 'string' ? { categoryId: data.category_id } : {}),
+          active: !deleted && variation.is_deleted !== true,
+          // The owning item stays reachable for consumers that need to regroup.
+          raw: { item: obj, variation },
+        },
+      ];
+    },
+  );
+}
+
+function toStaff(raw: unknown): Staff {
+  const t = asRecord(raw, 'square', 'team_member');
+  const name = [t.given_name, t.family_name].filter(Boolean).join(' ');
+  return {
+    id: reqString(t.id, 'square', 'team_member.id'),
+    name: name || String(t.id),
+    ...(t.email_address ? { email: String(t.email_address) } : {}),
+    ...(t.phone_number ? { phone: String(t.phone_number) } : {}),
+    active: t.status === 'ACTIVE',
+    raw: t,
+  };
+}
+
 export const square = defineAdapter<SquareCredentials>({
   id: 'square',
   capabilities: {
@@ -168,10 +238,8 @@ export const square = defineAdapter<SquareCredentials>({
     webhooks: true,
     idempotency: true,
     customers: true,
-    // Enumeration is not implemented yet; these flip to true per
-    // adapter as listServices/listStaff land.
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -415,6 +483,48 @@ export const square = defineAdapter<SquareCredentials>({
           raw: a,
         };
       });
+    },
+
+    async listServices(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        path: 'catalog/search-catalog-items',
+        body: {
+          enabled_location_ids: [c.locationId],
+          // Only appointment services are bookable; the rest of the catalog
+          // (retail items, gift cards) cannot be attached to a booking.
+          product_types: ['APPOINTMENTS_SERVICE'],
+          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+          ...(query?.pageToken ? { cursor: query.pageToken } : {}),
+        },
+      });
+      const services = asArray(res?.items, 'square', 'catalog.items').flatMap(itemToServices);
+      return {
+        services,
+        ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+      };
+    },
+
+    async listStaff(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        path: 'team-members/search',
+        body: {
+          // Deliberately unfiltered by status: filtering to ACTIVE would make
+          // `Staff.active` always true and hide deactivated members a consumer
+          // still needs in order to reconcile past bookings.
+          query: { filter: { location_ids: [c.locationId] } },
+          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+          ...(query?.pageToken ? { cursor: query.pageToken } : {}),
+        },
+      });
+      const staff = asArray(res?.team_members, 'square', 'team_members').map(toStaff);
+      return {
+        staff,
+        ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+      };
     },
 
     customers: {

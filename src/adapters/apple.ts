@@ -155,8 +155,6 @@ export const apple = defineAdapter<AppleCredentials>({
     webhooks: false,
     idempotency: true,
     customers: false,
-    // Enumeration is not implemented yet; these flip to true per
-    // adapter as listServices/listStaff land.
     serviceCatalog: false,
     staffDirectory: false,
   },

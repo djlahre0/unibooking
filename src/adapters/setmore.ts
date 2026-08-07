@@ -1,4 +1,4 @@
-import type { AvailabilitySlot, Booking, Customer } from '../types';
+import type { AvailabilitySlot, Booking, Customer, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
@@ -62,6 +62,13 @@ import { localToInstant } from '../tz';
  */
 export type SetmoreCredentials = {
   accessToken: string;
+  /** ISO-4217 code for the account's currency, e.g. `'USD'`.
+   *
+   *  Setmore returns a bare `cost` on services with no currency alongside it,
+   *  and a `Money` without a currency is not usable. Supply this and
+   *  `listServices` fills in `Service.price`; omit it and `price` is left
+   *  undefined rather than guessed, with the raw `cost` still in `raw`. */
+  currency?: string;
 };
 
 const BASE = 'https://developer.setmore.com/';
@@ -336,6 +343,50 @@ async function findOrCreateCustomer(
   return reqString(String(dataOf(created)?.customer?.key ?? ''), 'setmore', 'customer.key');
 }
 
+/** Setmore prices are decimal strings (`"45.00"`) with no currency. Convert to
+ *  integer minor units; the currency has to come from credentials. Rounds rather
+ *  than truncates so `"45.005"` cannot silently lose a cent downward. */
+function toMinorUnits(cost: unknown): number | undefined {
+  if (cost === null || cost === undefined || cost === '') return undefined;
+  const n = Number(cost);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.round(n * 100);
+}
+
+function toService(raw: unknown, categories: Map<string, string>, currency?: string): Service {
+  const s = asRecord(raw, 'setmore', 'service');
+  const amount = toMinorUnits(s.cost);
+  const duration = Number(s.duration);
+  const categoryKey = s.category_key ? String(s.category_key) : undefined;
+  const categoryName = categoryKey ? categories.get(categoryKey) : undefined;
+  return {
+    id: reqString(String(s.key ?? ''), 'setmore', 'service.key'),
+    name: reqString(String(s.service_name ?? ''), 'setmore', 'service.service_name'),
+    ...(s.service_description ? { description: String(s.service_description) } : {}),
+    ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+    ...(amount !== undefined && currency ? { price: { amount, currency } } : {}),
+    ...(categoryKey ? { categoryId: categoryKey } : {}),
+    ...(categoryName ? { categoryName } : {}),
+    // Setmore's service payload carries no active/inactive flag — everything it
+    // returns is bookable.
+    active: true,
+    raw: s,
+  };
+}
+
+function toStaff(raw: unknown): Staff {
+  const s = asRecord(raw, 'setmore', 'staff');
+  return {
+    id: reqString(String(s.key ?? ''), 'setmore', 'staff.key'),
+    name: reqString(String(s.staff_name ?? ''), 'setmore', 'staff.staff_name'),
+    ...(s.email_id ? { email: String(s.email_id) } : {}),
+    ...(s.cell_phone ? { phone: String(s.cell_phone) } : {}),
+    // No active/inactive concept in the staffs payload.
+    active: true,
+    raw: s,
+  };
+}
+
 export const setmore = defineAdapter<SetmoreCredentials>({
   id: 'setmore',
   capabilities: {
@@ -346,14 +397,8 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
-    serviceCatalog: false,
-
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
@@ -575,6 +620,34 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       // `selected_date` is date-granular, so each request answers with the whole
       // business day; narrow to the hours the caller actually asked for.
       return slotsWithinRange(out, query.range);
+    },
+
+    async listServices() {
+      const c = await http.resolve();
+      // Categories arrive as a separate flat list keyed by `category_key`. One
+      // extra request for the whole set — never one per service.
+      const [servicesRes, categoriesRes] = await Promise.all([
+        http.request(c, { path: `${V1}/services` }),
+        http.request(c, { path: `${V1}/services/categories` }),
+      ]);
+      const categories = new Map<string, string>();
+      for (const raw of asArray(dataOf(categoriesRes)?.categories, 'setmore', 'categories')) {
+        const cat = asRecord(raw, 'setmore', 'category');
+        if (cat.key && cat.category_name) {
+          categories.set(String(cat.key), String(cat.category_name));
+        }
+      }
+      const services = asArray(dataOf(servicesRes)?.services, 'setmore', 'services').map((s) =>
+        toService(s, categories, c.currency),
+      );
+      // The endpoint takes no paging parameters and returns everything.
+      return { services };
+    },
+
+    async listStaff() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: `${V1}/staffs` });
+      return { staff: asArray(dataOf(res)?.staffs, 'setmore', 'staffs').map(toStaff) };
     },
 
     customers: {

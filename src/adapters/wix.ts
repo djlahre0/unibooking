@@ -1,5 +1,12 @@
 import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, probeConnection, reqString, unsupported } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  probeConnection,
+  reqString,
+  unsupported,
+} from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, formatWithOffset } from '../time';
@@ -269,8 +276,6 @@ export const wix = defineAdapter<WixCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
-    // Enumeration is not implemented yet; these flip to true per
-    // adapter as listServices/listStaff land.
     serviceCatalog: false,
     staffDirectory: false,
   },

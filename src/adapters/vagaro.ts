@@ -205,13 +205,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     idempotency: false,
     // Vagaro exposes /customers CRUD, but this adapter does not model it yet.
     customers: false,
-
-    // Enumeration is not implemented yet; these flip to true per
-
-    // adapter as listServices/listStaff land.
-
     serviceCatalog: false,
-
     staffDirectory: false,
   },
   baseUrl: BASE,
