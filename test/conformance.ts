@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
-import type { Booking, BookingClient, ProviderId } from '../src/types';
+import type { Booking, BookingClient, ProviderId, Service, Staff } from '../src/types';
 import { isInstant } from '../src/time';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -165,6 +165,21 @@ export function runConformance(config: ConformanceConfig): void {
       }
     });
 
+    it('capability↔method: enumeration methods match their flags', () => {
+      const client = config.makeClient();
+      // checkConnection is unconditional — the whole point is that a call site
+      // can use it as a health check without first consulting a flag.
+      expect(typeof client.checkConnection, 'checkConnection is present').toBe('function');
+      expect(
+        typeof client.listServices === 'function',
+        'listServices presence matches capabilities.serviceCatalog',
+      ).toBe(client.capabilities.serviceCatalog);
+      expect(
+        typeof client.listStaff === 'function',
+        'listStaff presence matches capabilities.staffDirectory',
+      ).toBe(client.capabilities.staffDirectory);
+    });
+
     it('capability↔method: unsupported availability throws UNSUPPORTED', async () => {
       const client = config.makeClient();
       if (client.capabilities.availability) return;
@@ -177,4 +192,25 @@ export function runConformance(config: ConformanceConfig): void {
       expect(err?.code).toBe('UNSUPPORTED');
     });
   });
+}
+
+/** Canonical invariants every Service must satisfy, regardless of provider. */
+export function assertCanonicalService(s: Service): void {
+  expect(s.id, 'service.id is non-empty').toBeTruthy();
+  expect(s.name, 'service.name is non-empty').toBeTruthy();
+  expect(typeof s.active, 'service.active is a boolean').toBe('boolean');
+  if (s.price !== undefined) {
+    expect(Number.isInteger(s.price.amount), 'price.amount is integer minor units').toBe(true);
+    expect(s.price.currency, 'price.currency is non-empty').toBeTruthy();
+  }
+  if (s.durationMinutes !== undefined) {
+    expect(s.durationMinutes, 'durationMinutes is positive').toBeGreaterThan(0);
+  }
+}
+
+/** Canonical invariants every Staff must satisfy, regardless of provider. */
+export function assertCanonicalStaff(s: Staff): void {
+  expect(s.id, 'staff.id is non-empty').toBeTruthy();
+  expect(s.name, 'staff.name is non-empty').toBeTruthy();
+  expect(typeof s.active, 'staff.active is a boolean').toBe('boolean');
 }
