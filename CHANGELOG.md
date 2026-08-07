@@ -6,6 +6,53 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`checkConnection()` on every adapter.** Answers "do these credentials still
+  work?" using values you loaded from your own database, and **does not throw**
+  when the answer is no — a dead connection is the expected result, returned as
+  `{ ok: false, reason }` where `reason` is `AUTH`, `FORBIDDEN` or `NOT_FOUND`.
+  Transient faults (network, timeout, rate limit, 5xx) still **throw**, so a
+  blip cannot be mistaken for a revoked integration and cause a consumer to
+  disconnect a healthy salon. Where the provider exposes it, `account` carries
+  the connected identity (Square reports the location the credentials are bound
+  to, not merely the first one listed).
+
+  ```ts
+  const status = await square(storedCreds).checkConnection();
+  if (!status.ok) await markDisconnected(salonId, status.reason);
+  ```
+
+- **`Service`, `Staff`, `Money` and `ConnectionStatus` canonical types**, plus
+  the `serviceCatalog` and `staffDirectory` capability flags. The flags are
+  `false` on every adapter in this release — `listServices()` / `listStaff()`
+  land next. They are deliberately **separate** from the existing
+  `services` / `staff` flags, which say only that a booking can *reference* a
+  service or staff member; several providers have one without the other.
+- **`probeConnection` is exported** for custom-adapter authors, so a
+  hand-written adapter classifies connection failures identically.
+
+### Changed
+
+- **BREAKING — `Capabilities` gains two required fields** (`serviceCatalog`,
+  `staffDirectory`) and **`AdapterMethods` gains a required `checkConnection`**.
+  This only affects code that builds a custom adapter with `defineAdapter`;
+  consumers of the built-in adapters are unaffected. To migrate, add both flags
+  (`false` unless you implement enumeration) and a probe:
+
+  ```ts
+  build: (http) => ({
+    // ...existing methods...
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('your_provider', async () => {
+        const res = await http.request(c, { path: 'cheapest/authenticated/read' });
+        return { raw: res };
+      });
+    },
+  }),
+  ```
+
 ### Security
 
 - **Every HMAC webhook verifier threw a `TypeError` instead of returning `false`

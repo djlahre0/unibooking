@@ -520,12 +520,64 @@ Example
     customers: true,
     webhooks: true,
     idempotency: true,
+    serviceCatalog: false,
+    staffDirectory: false,
 }
 ```
 
 No more trial-and-error.
 
 Your application knows exactly what the provider supports.
+
+> **Note**
+>
+> `services` and `serviceCatalog` are different questions, and so are `staff`
+> and `staffDirectory`. The first pair asks whether a **booking can reference**
+> a service or staff member; the second asks whether you can **enumerate** them.
+> Plenty of providers have one without the other.
+
+---
+
+# Check a Connection
+
+Salons revoke access, tokens get rotated, and OAuth apps get uninstalled. Every
+adapter exposes `checkConnection()` — pass it the credentials you loaded from
+your own database and it tells you whether they still work.
+
+```ts
+const status = await square(storedCreds).checkConnection();
+
+if (!status.ok) {
+    // status.reason is "AUTH" | "FORBIDDEN" | "NOT_FOUND"
+    await markDisconnected(salonId, status.reason);
+    return;
+}
+
+console.log(status.account); // { id: "LOC1", name: "Manhattan Glow" }
+```
+
+**It does not throw when the connection is dead** — that is the expected answer
+to the question, so it comes back as `ok: false`.
+
+**It does throw on a transient fault.** A network blip, timeout, rate limit or
+5xx is *not* evidence that a salon revoked access. If those were reported as
+`ok: false`, a momentary outage would disconnect every healthy integration you
+have. Only `AUTH`, `FORBIDDEN` and `NOT_FOUND` mean the credentials themselves
+stopped working.
+
+```ts
+try {
+    const status = await client.checkConnection();
+    if (!status.ok) await promptReconnect(salonId);
+} catch (err) {
+    // Transient — leave the integration connected and retry later.
+    logger.warn({ err }, "connection check failed, will retry");
+}
+```
+
+`checkConnection()` is present on **every** adapter, with no capability flag to
+consult first — a health check you must ask permission to run is not a health
+check.
 
 ---
 
