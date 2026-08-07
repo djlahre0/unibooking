@@ -1,7 +1,8 @@
 import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, bookingsWithinRange, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
+import { slotsWithinRange } from '../availability';
 
 /**
  * Acuity Scheduling. Auth is either HTTP Basic (account user id + API key) or,
@@ -28,17 +29,30 @@ function offsetToken(iso: string): string {
   return m ? m[1]! : 'Z';
 }
 
-/** The `YYYY-MM-DD` dates (in `range.start`'s offset) that the window overlaps —
- *  Acuity's `availability/times` is single-date, so a multi-day range needs one
- *  call per day. Capped so an over-wide range can't fan out unboundedly. */
-function datesInRange(startIso: string, endIso: string, cap = 31): string[] {
+/** Acuity's `availability/times` is single-date, so a multi-day range needs one
+ *  call per day. Bound the fan-out so an over-wide range can't issue hundreds of
+ *  requests (Vagaro 31, Setmore 62 — same idea, same contract). */
+const MAX_AVAILABILITY_DAYS = 31;
+
+/** The `YYYY-MM-DD` dates (in `range.start`'s offset) that the window overlaps.
+ *  Past the cap this throws: exhausting the loop and returning the first N days
+ *  answered a quarter-long query with a month of slots and no indication that
+ *  the rest had been dropped. */
+function datesInRange(startIso: string, endIso: string, cap = MAX_AVAILABILITY_DAYS): string[] {
   const offset = offsetToken(startIso);
   const endMs = Date.parse(endIso);
   const dates: string[] = [];
   let dateStr = startIso.slice(0, 10);
-  for (let i = 0; i < cap; i++) {
+  for (;;) {
     const dayStartMs = Date.parse(`${dateStr}T00:00:00${offset}`);
     if (dayStartMs >= endMs) break;
+    if (dates.length >= cap) {
+      throw new UnibookingError({
+        provider: 'acuity',
+        code: 'INVALID_INPUT',
+        message: `Acuity availability is queried one day at a time; ranges may not exceed ${cap} days`,
+      });
+    }
     dates.push(dateStr);
     const d = new Date(`${dateStr}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() + 1);
@@ -300,20 +314,19 @@ export const acuity = defineAdapter<AcuityCredentials>({
           max: query.limit ?? 100,
           // Acuity "calendar" is the closest thing to a staff filter.
           calendarID: query.staffId,
-          canceled: query.status === 'cancelled' ? true : undefined,
+          // `noShow` rides on top of `canceled` (see `toBooking`), so a no_show
+          // query has to ask for cancelled rows too — leaving the default
+          // excluded exactly the appointments it was looking for.
+          canceled: query.status === 'cancelled' || query.status === 'no_show' ? true : undefined,
         },
       });
       // minDate/maxDate are whole dates in the business timezone, so Acuity
       // returns the entire end day (and part of the start day) regardless of the
       // range's times. Trim to the instants the caller actually asked for.
-      const from = Date.parse(query.range.start);
-      const to = Date.parse(query.range.end);
-      const bookings = asArray(res, 'acuity', 'appointments')
-        .map(toBooking)
-        .filter((b) => {
-          const s = Date.parse(b.range.start);
-          return s >= from && s < to;
-        });
+      const bookings = bookingsWithinRange(
+        asArray(res, 'acuity', 'appointments').map(toBooking),
+        query.range,
+      );
       return { bookings };
     },
 
@@ -332,8 +345,6 @@ export const acuity = defineAdapter<AcuityCredentials>({
       const durationMinutes = query.durationMinutes;
       const serviceId = requireService(query.serviceId);
       const c = await http.resolve();
-      const windowStart = Date.parse(query.range.start);
-      const windowEnd = Date.parse(query.range.end);
       // `availability/times` returns one date's slots, so page a call per day the
       // window overlaps and keep only slots that actually fall inside the range.
       const out: AvailabilitySlot[] = [];
@@ -345,8 +356,6 @@ export const acuity = defineAdapter<AcuityCredentials>({
         for (const t of asArray(res, 'acuity', 'availability/times')) {
           const start = normalizeInstant(t.time);
           if (start === undefined) continue;
-          const startMs = Date.parse(start);
-          if (startMs < windowStart || startMs >= windowEnd) continue;
           out.push({
             start,
             end: endFromDuration(start, durationMinutes),
@@ -355,7 +364,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
           });
         }
       }
-      return out;
+      return slotsWithinRange(out, query.range);
     },
   }),
 });

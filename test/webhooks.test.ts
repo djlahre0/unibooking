@@ -309,3 +309,84 @@ describe('bookeo webhook (HMAC-SHA256 hex)', () => {
     ).toBe(true);
   });
 });
+
+describe('a missing or malformed signature header is a clean false, never a throw', () => {
+  // The canonical handler reads the header straight off the request
+  // (`req.headers['x-...']`), which is `string | undefined` in every Node
+  // framework. Throwing there turns an unsigned request into a 500 instead of
+  // the 401 the caller intended — and gives an attacker who simply omits the
+  // header a different, noisier code path than one who sends a wrong one.
+  const missing = [undefined, null, ''] as const;
+
+  for (const sig of missing) {
+    const label = sig === undefined ? 'undefined' : sig === null ? 'null' : 'empty';
+
+    it(`square: ${label}`, async () => {
+      await expect(
+        verifySquareSignature({
+          signatureKey: 'k',
+          notificationUrl: 'https://e.test/hook',
+          body: '{}',
+          signature: sig as any,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it(`acuity: ${label}`, async () => {
+      await expect(
+        verifyAcuitySignature({ apiKey: 'k', body: '{}', signature: sig as any }),
+      ).resolves.toBe(false);
+    });
+
+    it(`mindbody: ${label}`, async () => {
+      await expect(
+        verifyMindbodySignature({ signatureKey: 'k', body: '{}', signature: sig as any }),
+      ).resolves.toBe(false);
+    });
+
+    it(`bookeo: ${label}`, async () => {
+      await expect(
+        verifyBookeoSignature({
+          secretKey: 'k',
+          timestamp: '1',
+          messageId: 'm',
+          webhookUrl: 'https://e.test/hook',
+          body: '{}',
+          signature: sig as any,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it(`calendly: ${label}`, async () => {
+      await expect(
+        verifyCalendlySignature({ signingKey: 'k', body: '{}', signatureHeader: sig as any }),
+      ).resolves.toBe(false);
+    });
+
+    it(`boulevard: ${label}`, async () => {
+      await expect(
+        verifyBoulevardSignature({
+          signingSecret: btoa('secret'),
+          salt: 'blvd-webhook-v1:uuid:1',
+          body: '{}',
+          signature: sig as any,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it(`vagaro: ${label}`, () => {
+      expect(verifyVagaroToken(sig as any, 'expected')).toBe(false);
+    });
+  }
+
+  it('boulevard: a signing secret that is not valid base64 is false, not a DOMException', async () => {
+    await expect(
+      verifyBoulevardSignature({
+        signingSecret: 'not!valid!base64',
+        salt: 'blvd-webhook-v1:uuid:1',
+        body: '{}',
+        signature: 'whatever',
+      }),
+    ).resolves.toBe(false);
+  });
+});

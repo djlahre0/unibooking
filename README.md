@@ -542,6 +542,23 @@ Result
 ]
 ```
 
+Two guarantees hold across every provider, regardless of what the upstream API
+returns:
+
+- **Slots are ordered by start**, earliest first, so `slots[0]` is the earliest
+  opening. Providers order their answers however they iterate — Mindbody and
+  Microsoft Bookings return a whole shift per staff member, and the single-date
+  providers return one day after another — so this is normalized for you. Slots
+  sharing a start keep the provider's own order (usually staff order).
+- **Slots fall inside `range`.** A slot is included when it *starts* at or after
+  `range.start` and strictly before `range.end`. Its `end` may run past
+  `range.end`: providers that return start times only have the length come from
+  the service duration, so the last bookable start of a window legitimately
+  overruns it. Several providers can only be queried a whole day at a time
+  (Acuity, Setmore, Vagaro, Zenoti) or answer with a whole staff shift
+  (Mindbody); the adapter narrows those to your window rather than handing back
+  the entire business day.
+
 ---
 
 # Create or Find Customer
@@ -658,6 +675,14 @@ page.bookings
 
 page.nextPageToken
 ```
+
+`status` filters on the **canonical** status, so it means the same thing on every
+provider even though almost none of them expose a matching filter — adapters
+forward whatever their API supports and the rest is applied to the mapped result.
+Because the filter runs per page, a page can come back with fewer bookings than
+`limit` (or empty) while still carrying a `nextPageToken`; that is normal, and
+`listAll` walks through it for you. Bookings fall inside `range` on the same
+half-open, starts-within basis as availability slots.
 
 ---
 
@@ -837,7 +862,7 @@ unibooking currently supports the following providers.
 | [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
 | [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
 | [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| [Setmore](https://setmore.docs.apiary.io/) | — | ✅ | ⚠️ | — | ✅ | ✅ | ✅ | ✅ | — |
+| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
 | [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
@@ -855,9 +880,17 @@ unibooking currently supports the following providers.
 > - Boulevard availability requires the separate Client cart API, and its
 >   `UpdateAppointmentInput` accepts only notes, state and custom fields — staff
 >   and service changes are not expressible. Rescheduling is supported natively.
-> - Setmore has **no** fetch-by-id and **no** cancel/delete endpoint — its entire
->   API is 11 routes, and the only mutation on an existing appointment is a label
->   change. Read bookings via `listBookings` over a date range.
+> - Setmore runs **two API generations at once** (`api/v1/bookingapi` and
+>   `api/v2/bookingapi`) and neither is a superset of the other, so the adapter
+>   pins each operation to the generation that routes it: availability (`slots`)
+>   is v1-only, while reschedule (`PUT` on the appointment) and cancel/delete are
+>   v2. You do not have to think about this — but `providerOptions.apiVersion`
+>   (`'v1'`/`'v2'`) overrides the choice on `updateBooking`/`cancelBooking` if
+>   your account is provisioned differently.
+> - Setmore has **no** fetch-by-id on either generation, so `getBooking` throws;
+>   read bookings via `listBookings` over a date range. `cancelBooking` **deletes**
+>   the appointment rather than moving it to a cancelled state (Setmore has no
+>   status field), which is also why `updateBooking({ status })` throws.
 > - Vagaro has no date-range list; `listBookings` requires a `customerId`.
 > - Mindbody has no cancel *path* — cancellation is an action on the update
 >   endpoint, which `cancelBooking` handles for you.

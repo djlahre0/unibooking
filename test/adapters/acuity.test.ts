@@ -161,6 +161,65 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     agent.assertNoPendingInterceptors();
   });
 
+  it('asks Acuity for cancelled appointments when filtering for no_show', async () => {
+    // `noShow` rides on top of `canceled` in Acuity's model, so a no_show query
+    // that leaves `canceled` at its default excludes the very rows it wants and
+    // can only ever come back empty.
+    let path = '';
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
+      .reply(
+        200,
+        (opts: any) => {
+          path = String(opts.path);
+          return JSON.stringify([
+            {
+              id: 1,
+              type: 'Cut',
+              datetime: '2026-07-20T09:00:00+0000',
+              duration: '60',
+              canceled: true,
+              noShow: true,
+            },
+            {
+              id: 2,
+              type: 'Cut',
+              datetime: '2026-07-20T10:00:00+0000',
+              duration: '60',
+              canceled: true,
+            },
+          ]);
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const res = await acuity({ userId: 'u', apiKey: 'k' }).listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+      status: 'no_show',
+    });
+    expect(path).toContain('canceled=true');
+    expect(res.bookings.map((b) => b.id)).toEqual(['1']);
+  });
+
+  it('searchAvailability rejects a range past the per-day fan-out cap instead of truncating', async () => {
+    // README: "Beyond the cap you get an error rather than a silently truncated
+    // slot list." This used to return the first 31 days and drop the rest.
+    const client = acuity({ userId: 'u', apiKey: 'k' });
+    const err = await client
+      .searchAvailability({
+        range: { start: '2026-01-01T00:00:00Z', end: '2026-04-01T00:00:00Z' },
+        serviceId: '12',
+        durationMinutes: 60,
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('31');
+    // Rejected client-side — no interceptors were registered, so any request
+    // would have surfaced as a network error instead.
+  });
+
   it('searchAvailability rejects an inverted range before hitting the network', async () => {
     const client = acuity({ userId: 'u', apiKey: 'k' });
     await expect(

@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { createHttp, type AuthFn, type HttpConfig, type HttpContext } from './http';
 import { UnibookingError } from './errors';
+import { sortSlots } from './availability';
 
 /** The method set an adapter implements (everything on BookingClient except the
  *  static `id`/`capabilities`, which `defineAdapter` attaches). */
@@ -56,12 +57,60 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       getBooking: m.getBooking,
       updateBooking: m.updateBooking,
       cancelBooking: m.cancelBooking,
-      listBookings: m.listBookings,
-      searchAvailability: m.searchAvailability,
+      // `ListBookingsQuery.status` is documented without caveat, but most
+      // providers have no status filter to forward it to — Google, Square,
+      // Mindbody, Setmore, Acuity and Vagaro all returned cancelled bookings
+      // from a `status: 'confirmed'` query. Adapters forward whatever their
+      // provider supports (it is cheaper upstream and keeps pages dense); this
+      // is the backstop that makes the documented filter true everywhere.
+      // Re-filtering an already-filtered list is a no-op, so adapters that
+      // handle it themselves are unaffected.
+      listBookings: async (query) => {
+        const result = await m.listBookings(query);
+        if (query.status === undefined) return result;
+        // Keep `nextPageToken` even when a page filters down to nothing: the
+        // matches may be on a later page, and dropping the token would end
+        // pagination early. `listAll` already walks past empty pages.
+        return { ...result, bookings: result.bookings.filter((b) => b.status === query.status) };
+      },
+      // Chronological order is part of the canonical result, not something each
+      // adapter re-derives — see `sortSlots` for why provider order isn't it.
+      searchAvailability: async (query) => sortSlots(await m.searchAvailability(query)),
       ...(m.customers ? { customers: m.customers } : {}),
     };
   };
   return Object.assign(impl, { id: def.id, capabilities: def.capabilities });
+}
+
+/**
+ * Trim bookings to the canonical range.
+ *
+ * Several list endpoints take whole DATES rather than instants — Acuity's
+ * `minDate`/`maxDate`, Phorest's `from_date`/`to_date`, Setmore's
+ * `startDate`/`endDate`, Zenoti's date pair — so they answer with the entire
+ * start and end days no matter what times were asked for. Vagaro is worse: its
+ * endpoint takes no window at all and returns the customer's whole history.
+ *
+ * Same half-open convention as `slotsWithinRange`: kept when the booking
+ * *starts* at or after `range.start` and strictly before `range.end`. Note this
+ * is a deliberate choice of "starts within" over "overlaps" — it matches what
+ * the date-granular providers are being asked for and keeps paging honest. It is
+ * applied per-adapter rather than in `defineAdapter` precisely because providers
+ * that filter server-side (Google, Outlook, Graph) return bookings that merely
+ * *overlap* the window, and re-trimming those at the boundary would discard an
+ * in-progress booking the provider deliberately included.
+ */
+export function bookingsWithinRange<T extends { range: { start: string } }>(
+  bookings: T[],
+  range: { start: string; end: string },
+): T[] {
+  const from = Date.parse(range.start);
+  const to = Date.parse(range.end);
+  if (Number.isNaN(from) || Number.isNaN(to)) return bookings;
+  return bookings.filter((b) => {
+    const s = Date.parse(b.range.start);
+    return !Number.isNaN(s) && s >= from && s < to;
+  });
 }
 
 /** Throw a consistent UNSUPPORTED error (for capabilities a provider lacks). */

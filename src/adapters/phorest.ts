@@ -1,8 +1,15 @@
 import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  bookingsWithinRange,
+  defineAdapter,
+  reqString,
+  unsupported,
+} from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
-import { assertValidRange } from '../time';
+import { assertValidRange, isInstant } from '../time';
 
 /**
  * Phorest third-party API. HTTP Basic auth; `businessId`/`branchId` scope every
@@ -404,15 +411,9 @@ export const phorest = defineAdapter<PhorestCredentials>({
       // to_date is INCLUSIVE and both bounds are whole UTC days, so the response
       // overshoots the canonical (exclusive) range at both ends. Trim to the
       // instants actually asked for, then honor the requested status.
-      const from = Date.parse(query.range.start);
-      const to = Date.parse(query.range.end);
-      const bookings = embedded(res)
-        .map(toBooking)
-        .filter((b) => {
-          const s = Date.parse(b.range.start);
-          return s >= from && s < to;
-        })
-        .filter((b) => query.status === undefined || b.status === query.status);
+      const bookings = bookingsWithinRange(embedded(res).map(toBooking), query.range).filter(
+        (b) => query.status === undefined || b.status === query.status,
+      );
       const page = res?.page;
       const next =
         page && typeof page.number === 'number' && page.number + 1 < page.totalPages
@@ -450,7 +451,13 @@ export const phorest = defineAdapter<PhorestCredentials>({
       const out: AvailabilitySlot[] = [];
       for (const entry of asArray(body.data, 'phorest', 'availability.data')) {
         const start = entry?.startTime;
-        if (typeof start !== 'string' || !start) continue;
+        // Both ends must be canonical instants before they leave the adapter.
+        // Phorest deals in branch-local times elsewhere in its API, and an
+        // offset-less (or otherwise non-RFC3339) value forwarded verbatim is an
+        // ambiguous instant at best — at worst a start that `Date.parse` reads
+        // as NaN, which breaks every downstream comparison silently. Skip, as
+        // acuity and calendly do for the same reason.
+        if (typeof start !== 'string' || !isInstant(start)) continue;
         for (const cs of asArray(
           entry.clientSchedules,
           'phorest',
@@ -461,8 +468,9 @@ export const phorest = defineAdapter<PhorestCredentials>({
             'phorest',
             'availability.serviceSchedules',
           )) {
-            // No endTime means no derivable end — skip rather than invent one.
-            if (typeof ss?.endTime !== 'string' || !ss.endTime) continue;
+            // No usable endTime means no derivable end — skip rather than
+            // invent one.
+            if (typeof ss?.endTime !== 'string' || !isInstant(ss.endTime)) continue;
             out.push({
               start,
               end: ss.endTime,

@@ -1,4 +1,4 @@
-import { base64ToBytes, hmacSha256BytesBase64, timingSafeEqual } from '../crypto';
+import { hmacSha256BytesBase64, timingSafeEqual, tryBase64ToBytes } from '../crypto';
 
 /**
  * Verify a Boulevard webhook signature.
@@ -36,7 +36,11 @@ export interface BoulevardWebhookInput {
 }
 
 export async function verifyBoulevardSignature(input: BoulevardWebhookInput): Promise<boolean> {
+  // The secret is base64 at rest; a mistyped one used to surface as an opaque
+  // DOMException from `atob` rather than a verification failure.
+  const key = tryBase64ToBytes(input.signingSecret);
+  if (key === undefined) return false;
   const payload = `${input.salt}:${input.body}`;
-  const expected = await hmacSha256BytesBase64(base64ToBytes(input.signingSecret), payload);
+  const expected = await hmacSha256BytesBase64(key, payload);
   return timingSafeEqual(expected, input.signature);
 }

@@ -4,6 +4,191 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Every HMAC webhook verifier threw a `TypeError` instead of returning `false`
+  when the signature header was absent.** The canonical handler reads the header
+  straight off the request — `req.headers['x-square-hmacsha256-signature']` and
+  friends are `string | undefined` in every Node framework — so an unsigned
+  request produced an unhandled throw (a 500, or a crashed handler) rather than
+  the 401 the caller wrote. It also gave anyone who simply omitted the header a
+  different, noisier code path from anyone who sent a wrong one. Square, Acuity,
+  Mindbody, Bookeo, Calendly and Boulevard were all affected; only the Vagaro
+  token check guarded its input.
+
+  `timingSafeEqual` now rejects a non-string outright, and the three verifiers
+  that touch the header before comparing it (Mindbody's `sha256=` strip,
+  Calendly's `t=,v1=` parse, Boulevard's base64 secret decode) guard first. A
+  Boulevard signing secret that is not valid base64 is likewise `false` rather
+  than an opaque `DOMException` out of `atob`. No signature that verified before
+  stops verifying — this only changes the failure mode.
+
+### Fixed
+
+- **`ListBookingsQuery.status` was silently ignored by most providers.** The
+  field is documented without caveat, but Google, Square, Mindbody, Setmore,
+  Acuity and Vagaro had no status filter to forward it to and dropped it — a
+  `status: 'confirmed'` query returned cancelled bookings. Adapters still send
+  whatever their provider supports (it is cheaper upstream and keeps pages
+  dense); `defineAdapter` now applies the canonical status as a backstop, so the
+  documented filter is true everywhere and future adapters inherit it. Adapters
+  that already filtered themselves are unaffected — re-filtering is a no-op.
+
+  A page that filters down to nothing keeps its `nextPageToken`: the matches may
+  be on a later page, and dropping the token would end pagination early.
+
+- **`status: 'no_show'` could only ever return empty on Acuity and Bookeo.** In
+  both providers a no-show *is* a cancelled record (`noShow` rides on top of
+  `canceled`, as each adapter's own status mapping notes), but the upstream
+  filter asked for cancelled rows only when the query said `'cancelled'`. A
+  no_show query therefore excluded exactly the rows it was looking for. Both now
+  request the cancelled side for either status, matching what Boulevard and
+  Zenoti already did.
+
+- **Setmore's `listBookings` ignored `limit` and returned whole days.**
+  `startDate`/`endDate` are day-first *dates*, so a query for three hours came
+  back with both entire end days; and the endpoint takes no page-size parameter,
+  so `limit` did nothing at all. Both are now applied client-side, as Acuity,
+  Phorest, Vagaro and Zenoti already did for the range. The shared
+  `bookingsWithinRange` helper replaces what had become five copies of the same
+  predicate.
+
+  It is applied per-adapter rather than at the `defineAdapter` boundary on
+  purpose: providers that filter server-side (Google, Outlook, Graph) return
+  bookings that merely *overlap* the window, and re-trimming those centrally
+  would discard an in-progress booking the provider deliberately included.
+
+- **Mindbody mixed two spellings of the same offset in one result set.** An
+  instant anchored straight from a provider string carried the site offset
+  verbatim (`2026-07-20T09:00:00+00:00`) while any instant that had arithmetic
+  applied went through the shared formatter (`2026-07-20T10:00:00Z`), so a
+  single slot list could contain both. Both forms parse to the same moment, but
+  grouping or de-duplicating slots by string quietly broke. Mindbody now emits
+  every instant through `formatWithOffset`.
+
+- **`searchAvailability` results were not in chronological order.** Providers
+  group their answers by whatever they iterate over: Mindbody and Microsoft
+  Bookings return a whole shift per staff member (all of staff A's day, then all
+  of staff B's), and the single-date adapters concatenate one day's answer after
+  the next. So `slots[0]` meant "first thing the provider happened to mention",
+  not "earliest opening" — and the same logical availability came back in a
+  different order depending on which provider served it, which is precisely the
+  cross-provider variance this package exists to erase.
+
+  Slots are now sorted by start instant. The sort is applied in `defineAdapter`,
+  so it covers every adapter (including third-party ones built on the same kit)
+  and none has to remember. It compares instants rather than strings —
+  `08:00-07:00` is later than `12:00Z` despite sorting earlier lexically — and is
+  stable, so slots sharing a start keep the provider's own order.
+
+- **Acuity silently truncated availability ranges past its 31-day cap.** The
+  per-day fan-out loop simply stopped at 31 iterations and returned what it had,
+  so a quarter-long query answered with a month of slots and no indication the
+  rest had been dropped. The README already promised the opposite ("Beyond the
+  cap you get an error rather than a silently truncated slot list"), and Vagaro
+  and Setmore both throw. Acuity now throws `INVALID_INPUT` too, before issuing
+  any request rather than after 31 of them.
+
+- **Phorest could emit availability slots whose timestamps were not canonical
+  instants.** `startTime`/`endTime` were forwarded verbatim after a bare
+  `typeof === 'string'` check. Phorest deals in branch-local times elsewhere in
+  its API, and an offset-less value is an ambiguous instant — while a
+  non-RFC3339 one (e.g. a single-digit hour) is worse than ambiguous, since
+  `Date.parse` reads it as `NaN` and every downstream comparison then fails
+  silently. Both ends are now validated with `isInstant` and the entry skipped
+  otherwise, matching what Acuity and Calendly already did.
+
+- **`searchAvailability` returned slots outside the requested range on every
+  provider whose availability endpoint is date-granular.** Mindbody, Setmore and
+  Zenoti answered a partial-day query with the whole business day: asking for
+  12:00–14:00 came back with 09:00, 10:00, … 16:00. Callers who trusted `range`
+  (the obvious reading) were offering customers times they had explicitly
+  excluded.
+
+  The endpoints cannot express the window — Setmore takes a `selected_date`,
+  Zenoti's transient booking is scoped to a `date`, and Mindbody's
+  `Availabilities[]` entry is a staff *shift* that merely overlaps the query — so
+  the narrowing has to happen adapter-side. Acuity and Vagaro already did it,
+  each with its own copy of the predicate; that is how the other three drifted.
+  It is now one shared helper (`slotsWithinRange`) that all five call.
+
+  A slot survives if it **starts** at or after `range.start` and strictly before
+  `range.end`. The end is deliberately unbounded: for a start-only provider the
+  length comes from the service duration, so the last bookable start of a window
+  routinely runs past it and is still a real, bookable slot.
+
+  - Mindbody keeps its bookable grid anchored to the shift's own start rather
+    than to `range.start` — re-anchoring would invent start times the provider
+    never offers (a 45-minute service on a 09:00 shift is bookable at 12:00, not
+    at 12:10 because that is when you asked).
+  - Mindbody's no-duration fallback (no `durationMinutes`, no
+    `SessionType.DefaultTimeLength`) still returns the shift rather than
+    nothing, but clamped to its overlap with the query — coarse but truthful,
+    and never wider than what was asked for. A shift that does not overlap at
+    all is now dropped instead of returned in full.
+  - Setmore's per-day fan-out counted a day that the range only touched at its
+    exclusive end, so a whole-day query (`00:00Z` → next `00:00Z`) spent a second
+    request on the following day and returned that day's slots as if they were in
+    range. It now fans out to one day, as Acuity and Vagaro already did.
+
+  Providers whose endpoint takes real instants — Square, Calendly, Bookeo,
+  Phorest, Wix, Google, Outlook, Microsoft Bookings — filter server-side and were
+  never affected.
+
+- **Setmore: cancel/delete and reschedule now work — they were on the other API
+  generation.** Setmore serves `api/v1/bookingapi` and `api/v2/bookingapi` side
+  by side on the same host, and neither is a superset of the other. Previous
+  releases pinned every call to v1 and, reading the published v1 spec, concluded
+  that cancel/delete and reschedule simply did not exist; `cancelBooking` and
+  `updateBooking({ range | staffId | serviceId })` threw `UNSUPPORTED`.
+
+  Probing the live host (401 = routed, 404 = not routed, 405 = wrong method for a
+  routed path) shows the split clearly:
+
+  | operation                      | v1  | v2  | now uses |
+  | ------------------------------ | --- | --- | -------- |
+  | `POST /slots`                  | 401 | 404 | **v1**   |
+  | `PUT /appointments/{id}`       | 405 | 401 | **v2**   |
+  | `DELETE /appointments/{id}`    | 401 | 401 | **v2**   |
+  | `GET /appointments/{id}`       | 405 | 405 | — absent |
+
+  Each operation is now pinned to the generation that actually routes it.
+  Availability is why the adapter can't move wholesale to v2 (`slots` is 404
+  there); reschedule is why it can't stay wholly on v1 (405).
+
+  - `cancelBooking` issues `DELETE` on the v2 appointment resource. Setmore
+    *deletes* rather than cancels — it has no status field — and carries neither
+    a reason nor a notify flag, so `CancelOptions.reason`/`notify` are ignored.
+    A `response: false` envelope on an HTTP 200 still surfaces as `UPSTREAM`.
+  - `updateBooking` splits by intent: a title-only edit stays on the documented
+    v1 label sub-resource (narrower, and it cannot disturb the booking's time),
+    while any `range`/`staffId`/`serviceId` change uses the v2 `PUT`. The range
+    is validated before the request goes out.
+  - `updateBooking({})` with no updatable field is now `INVALID_INPUT` instead of
+    reporting a misleading "requires a title".
+  - `providerOptions: { apiVersion: 'v1' | 'v2' }` overrides the pinned
+    generation on `updateBooking` (both the reschedule and the label branch, since
+    `/label` routes on both) and `cancelBooking`. It is stripped from the request
+    body rather than merged in as a bogus field; every *other* key in
+    `providerOptions` is still shallow-merged as `CancelOptions` documents, and an
+    `apiVersion` outside `'v1'`/`'v2'` is `INVALID_INPUT` rather than a silently
+    mis-routed call. `createBooking`, `listBookings` and `searchAvailability` do
+    not read it — their generation is fixed.
+  - README's Setmore row gains **Cancel ✅**, and its docs link now points at
+    `developers.setmore.com` — the old `setmore.docs.apiary.io` blueprint is
+    gone (`setmoreapi.docs.apiary.io` now serves Apiary's default "Polls"
+    boilerplate, not Setmore's spec).
+
+  `getBooking` still throws `UNSUPPORTED`: `GET /appointments/{id}` answers 405
+  on **both** generations, so no fetch-by-id exists. Use `listBookings` over a
+  date range.
+
+  Routing for the v2 routes is verified against the live host; their request and
+  response **bodies** are inferred from the create endpoint's shape and remain
+  unverified — Setmore has no sandbox. Confirm against a throwaway account.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

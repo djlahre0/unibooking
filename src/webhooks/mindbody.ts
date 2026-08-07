@@ -15,6 +15,8 @@ export interface MindbodyWebhookInput {
 }
 
 export async function verifyMindbodySignature(input: MindbodyWebhookInput): Promise<boolean> {
+  // A missing header is an unsigned request, not a crash — see `timingSafeEqual`.
+  if (typeof input.signature !== 'string' || input.signature === '') return false;
   const provided = input.signature.replace(/^sha256=/i, '');
   const expected = await hmacSha256Base64(input.signatureKey, input.body);
   return timingSafeEqual(expected, provided);

@@ -20,6 +20,21 @@ function toHex(bytes: Uint8Array): string {
  *  e.g. Boulevard's API secret). */
 export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
+  return bytesOf(bin);
+}
+
+/** As `base64ToBytes`, but `undefined` instead of throwing on invalid base64 —
+ *  for call sites where a bad value is a verification failure, not a crash. */
+export function tryBase64ToBytes(b64: unknown): Uint8Array<ArrayBuffer> | undefined {
+  if (typeof b64 !== 'string' || b64 === '') return undefined;
+  try {
+    return bytesOf(atob(b64));
+  } catch {
+    return undefined;
+  }
+}
+
+function bytesOf(bin: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
@@ -132,8 +147,15 @@ async function importRsaPublicKey(pem: string): Promise<CryptoKey> {
 
 /** Constant-time-ish string comparison. Returns early on a length mismatch
  *  (leaking only the expected digest's length, which is public per scheme);
- *  equal-length inputs are compared without early exit. */
+ *  equal-length inputs are compared without early exit.
+ *
+ *  A non-string input is `false`, not a throw. The value being compared is a
+ *  request header — `string | undefined` in every Node framework — and a
+ *  verifier that throws on a missing header turns an unsigned request into a
+ *  500 rather than the 401 the caller wrote, while handing anyone who omits the
+ *  header a different code path from anyone who gets it wrong. */
 export function timingSafeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);

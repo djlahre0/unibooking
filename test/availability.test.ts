@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { freeSlots } from '../src/availability';
+import { freeSlots, slotsWithinRange, sortSlots } from '../src/availability';
 import { isInstant } from '../src/time';
 
 // A 3-hour window; most cases slice it at a 60-minute duration.
@@ -106,5 +106,124 @@ describe('freeSlots', () => {
     // 03:00-07:00 == 10:00Z .. 11:00Z busy → 09–10 and 11–12 free.
     expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z']);
     for (const s of slots) expect(isInstant(s.start)).toBe(true);
+  });
+});
+
+describe('slotsWithinRange', () => {
+  const slot = (start: string) => ({ start, end: addHour(start) });
+  const addHour = (s: string) =>
+    new Date(Date.parse(s) + 3_600_000).toISOString().slice(0, 19) + 'Z';
+  // A full business day of hourly starts, 09:00–17:00Z.
+  const day = [9, 10, 11, 12, 13, 14, 15, 16].map((h) =>
+    slot(`2026-07-20T${String(h).padStart(2, '0')}:00:00Z`),
+  );
+
+  it('keeps only the slots starting inside a narrow window', () => {
+    const kept = slotsWithinRange(day, {
+      start: '2026-07-20T12:00:00Z',
+      end: '2026-07-20T14:00:00Z',
+    });
+    expect(kept.map((s) => s.start)).toEqual(['2026-07-20T12:00:00Z', '2026-07-20T13:00:00Z']);
+  });
+
+  it('is half-open: a slot starting exactly at range.end is excluded', () => {
+    const kept = slotsWithinRange(day, {
+      start: '2026-07-20T09:00:00Z',
+      end: '2026-07-20T12:00:00Z',
+    });
+    expect(kept.map((s) => s.start)).toEqual([
+      '2026-07-20T09:00:00Z',
+      '2026-07-20T10:00:00Z',
+      '2026-07-20T11:00:00Z',
+    ]);
+  });
+
+  it('keeps a slot that starts inside but runs past range.end', () => {
+    // A start-only provider sizes the slot from the service duration, so the
+    // last bookable start legitimately overruns the window.
+    const kept = slotsWithinRange(
+      [{ start: '2026-07-20T13:30:00Z', end: '2026-07-20T14:30:00Z' }],
+      { start: '2026-07-20T12:00:00Z', end: '2026-07-20T14:00:00Z' },
+    );
+    expect(kept).toHaveLength(1);
+  });
+
+  it('compares instants, not wall clocks, across differing offsets', () => {
+    // 06:00-07:00 == 13:00Z, inside the window; 06:00+02:00 == 04:00Z, outside.
+    const kept = slotsWithinRange(
+      [
+        { start: '2026-07-20T06:00:00-07:00', end: '2026-07-20T07:00:00-07:00' },
+        { start: '2026-07-20T06:00:00+02:00', end: '2026-07-20T07:00:00+02:00' },
+      ],
+      { start: '2026-07-20T12:00:00Z', end: '2026-07-20T14:00:00Z' },
+    );
+    expect(kept.map((s) => s.start)).toEqual(['2026-07-20T06:00:00-07:00']);
+  });
+
+  it('drops slots whose start does not parse', () => {
+    const kept = slotsWithinRange([{ start: 'not-a-time', end: 'nope' }], {
+      start: '2026-07-20T12:00:00Z',
+      end: '2026-07-20T14:00:00Z',
+    });
+    expect(kept).toEqual([]);
+  });
+});
+
+describe('sortSlots', () => {
+  it('orders by start instant', () => {
+    const sorted = sortSlots([
+      { start: '2026-07-20T14:00:00Z', end: '2026-07-20T15:00:00Z' },
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
+      { start: '2026-07-20T11:00:00Z', end: '2026-07-20T12:00:00Z' },
+    ]);
+    expect(sorted.map((s) => s.start)).toEqual([
+      '2026-07-20T09:00:00Z',
+      '2026-07-20T11:00:00Z',
+      '2026-07-20T14:00:00Z',
+    ]);
+  });
+
+  it('interleaves per-staff blocks into one chronological list', () => {
+    // How Mindbody and Microsoft Bookings arrive: a whole shift per staff.
+    const sorted = sortSlots([
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z', staffId: 'A' },
+      { start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z', staffId: 'A' },
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z', staffId: 'B' },
+      { start: '2026-07-20T10:00:00Z', end: '2026-07-20T11:00:00Z', staffId: 'B' },
+    ]);
+    expect(sorted.map((s) => `${s.start.slice(11, 16)}/${s.staffId}`)).toEqual([
+      '09:00/A',
+      '09:00/B',
+      '10:00/A',
+      '10:00/B',
+    ]);
+  });
+
+  it('compares instants, not strings, across differing offsets', () => {
+    // 08:00-07:00 == 15:00Z, which is LATER than 12:00Z despite sorting first
+    // as a string.
+    const sorted = sortSlots([
+      { start: '2026-07-20T08:00:00-07:00', end: '2026-07-20T09:00:00-07:00' },
+      { start: '2026-07-20T12:00:00Z', end: '2026-07-20T13:00:00Z' },
+    ]);
+    expect(sorted[0]!.start).toBe('2026-07-20T12:00:00Z');
+  });
+
+  it('is stable for equal starts and does not mutate its input', () => {
+    const input = [
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z', staffId: 'B' },
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z', staffId: 'A' },
+    ];
+    const sorted = sortSlots(input);
+    expect(sorted.map((s) => s.staffId)).toEqual(['B', 'A']);
+    expect(input.map((s) => s.staffId)).toEqual(['B', 'A']);
+  });
+
+  it('parks unparseable starts at the end rather than dropping them', () => {
+    const sorted = sortSlots([
+      { start: 'not-a-time', end: 'nope' },
+      { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
+    ]);
+    expect(sorted.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', 'not-a-time']);
   });
 });

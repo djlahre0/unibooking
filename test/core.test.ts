@@ -4,6 +4,7 @@ import { UnibookingError } from '../src/errors';
 import { createRegistry } from '../src/registry';
 import { withRetry } from '../src/retry';
 import { collectAll, listAll } from '../src/paginate';
+import { defineAdapter } from '../src/adapter-kit';
 import { google } from '../src/adapters/google';
 import { square } from '../src/adapters/square';
 
@@ -48,6 +49,53 @@ const rateLimit = (retryAfterMs?: number) =>
     message: 'slow down',
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   });
+
+describe('defineAdapter: canonical guarantees applied to every adapter', () => {
+  const RANGE = { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' };
+
+  const mixed = defineAdapter({
+    id: 'square',
+    capabilities: CAPS,
+    baseUrl: 'https://example.invalid/',
+    auth: () => ({ headers: {} }),
+    build: () => ({
+      createBooking: async () => fakeBooking('new'),
+      getBooking: async (id) => fakeBooking(id),
+      updateBooking: async (id) => fakeBooking(id),
+      cancelBooking: async () => {},
+      // A provider that cannot express a status filter upstream: it hands back
+      // whatever it has, in whatever order it has it.
+      listBookings: async () => ({
+        bookings: [
+          { ...fakeBooking('a'), status: 'confirmed' as const },
+          { ...fakeBooking('b'), status: 'cancelled' as const },
+          { ...fakeBooking('c'), status: 'confirmed' as const },
+        ],
+        nextPageToken: 'p2',
+      }),
+      searchAvailability: async () => [
+        { start: '2026-07-20T14:00:00Z', end: '2026-07-20T15:00:00Z' },
+        { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
+      ],
+    }),
+  });
+
+  it('applies the status filter an adapter could not express upstream', async () => {
+    const client = mixed({});
+    const all = await client.listBookings({ range: RANGE });
+    expect(all.bookings.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+
+    const confirmed = await client.listBookings({ range: RANGE, status: 'confirmed' });
+    expect(confirmed.bookings.map((b) => b.id)).toEqual(['a', 'c']);
+    // Filtering a page must not end pagination — the next page may hold matches.
+    expect(confirmed.nextPageToken).toBe('p2');
+  });
+
+  it('sorts availability slots chronologically', async () => {
+    const slots = await mixed({}).searchAvailability({ range: RANGE });
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T14:00:00Z']);
+  });
+});
 
 describe('createRegistry', () => {
   it('dispatches by id and reports membership', () => {

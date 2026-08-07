@@ -1,7 +1,8 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
 import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
-import { addMinutes, assertValidRange, formatWithOffset } from '../time';
+import { addMinutes, assertValidRange, formatWithOffset, parseOffsetMinutes } from '../time';
+import { slotsWithinRange } from '../availability';
 import { localToInstant, zoneOffsetMinutes } from '../tz';
 
 /**
@@ -60,14 +61,25 @@ function offsetMinutesOf(token: string): number {
 function toInstant(naive: unknown, tz: SiteTz): string | undefined {
   if (typeof naive !== 'string' || !naive) return undefined;
   if (/(Z|[+-]\d{2}:?\d{2})$/i.test(naive)) {
-    return naive.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+    return canonical(naive.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
   }
   if (tz.zone) {
     const resolved = localToInstant(naive, tz.zone, (ms) => formatWithOffset(ms, 0));
     if (resolved !== undefined) return resolved;
   }
   const token = tz.offset ?? 'Z';
-  return naive + (token.toUpperCase() === 'Z' ? 'Z' : token);
+  return canonical(naive + (token.toUpperCase() === 'Z' ? 'Z' : token));
+}
+
+/** Re-emit an instant through the shared formatter so its offset is spelled the
+ *  way the rest of the library spells it. Anchoring a provider string produced
+ *  the offset token verbatim (`+00:00`) while any arithmetic on it went through
+ *  `formatWithOffset` (`Z`), so a single result set could carry both spellings
+ *  of the same moment. */
+function canonical(iso: string): string | undefined {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return undefined;
+  return formatWithOffset(ms, parseOffsetMinutes(iso) ?? 0);
 }
 
 /** Canonical instant → the site-local (offset-less) datetime Mindbody expects.
@@ -366,13 +378,30 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       // it into bookable starts using the requested duration, else the session
       // type's default length. With neither we keep the window: it is coarse but
       // still truthful, and throwing would hide real availability.
-      return items.flatMap((a: any): AvailabilitySlot[] => {
+      //
+      // A returned window is any shift that OVERLAPS the query, so it routinely
+      // extends past it on both sides — a 12:00–14:00 question came back as the
+      // whole 09:00–17:00 shift. The slices below stay anchored to the shift's
+      // own start (that is where the real bookable grid begins, and re-anchoring
+      // on `range.start` would invent starts the provider never offers); the
+      // range is applied afterwards, by `slotsWithinRange`.
+      const winStart = Date.parse(query.range.start);
+      const winEnd = Date.parse(query.range.end);
+      const out = items.flatMap((a: any): AvailabilitySlot[] => {
         const start = toInstant(a.StartDateTime, tz);
         const end = toInstant(a.EndDateTime, tz);
         if (start === undefined || end === undefined) return [];
         const staff = a.Staff?.Id !== undefined ? { staffId: String(a.Staff.Id) } : {};
         const size = query.durationMinutes ?? a.SessionType?.DefaultTimeLength;
-        if (typeof size !== 'number' || size <= 0) return [{ start, end, ...staff, raw: a }];
+        if (typeof size !== 'number' || size <= 0) {
+          // No slot size, so there is no grid to filter against. Report the
+          // shift's overlap with the query instead of the whole shift — still
+          // coarse, still truthful, but never wider than what was asked for.
+          const from = Date.parse(start) < winStart ? query.range.start : start;
+          const to = Date.parse(end) > winEnd ? query.range.end : end;
+          if (Date.parse(to) <= Date.parse(from)) return [];
+          return [{ start: from, end: to, ...staff, raw: a }];
+        }
         // BookableEndDateTime is "the time of day that the last appointment can
         // start" — a start cap, not an end cap.
         const lastStart = toInstant(a.BookableEndDateTime, tz);
@@ -386,6 +415,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
         }
         return slots;
       });
+      return slotsWithinRange(out, query.range);
     },
   }),
 });

@@ -150,6 +150,29 @@ describe('zenoti flows', () => {
     expect(slots[0]?.end).toBe('2026-07-20T22:45:00Z');
   });
 
+  it('searchAvailability drops slots outside the requested window', async () => {
+    intercept('POST', '/v1/bookings', { id: 'bk1' });
+    // The slot list is scoped to a DATE, so Zenoti answers with the whole day
+    // no matter how narrow the caller's window is.
+    intercept('GET', '/v1/bookings/bk1/slots', {
+      slots: [
+        { Time: '2026-07-20T09:00:00Z' },
+        { Time: '2026-07-20T12:00:00Z' },
+        { Time: '2026-07-20T13:30:00Z' },
+        { Time: '2026-07-20T14:00:00Z' },
+        { Time: '2026-07-20T16:00:00Z' },
+      ],
+    });
+    const slots = await makeClient().searchAvailability({
+      range: { start: '2026-07-20T12:00:00Z', end: '2026-07-20T14:00:00Z' },
+      serviceId: 'svc1',
+      durationMinutes: 45,
+      providerOptions: { guestId: 'g1' },
+    });
+    // 14:00 starts exactly at the exclusive end, so it is out.
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T12:00:00Z', '2026-07-20T13:30:00Z']);
+  });
+
   it('searchAvailability requires durationMinutes (no zero-length slots)', async () => {
     const err = await makeClient()
       .searchAvailability({ range: RANGE, serviceId: 'svc1', providerOptions: { guestId: 'g1' } })

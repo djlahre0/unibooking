@@ -285,6 +285,39 @@ describe('phorest multi-call flows', () => {
     expect(slots.every((s) => s.start === '2026-07-20T22:00:00Z')).toBe(true);
   });
 
+  it('searchAvailability skips times that are not canonical instants', async () => {
+    intercept('POST', `${P}/appointments/availability`, {
+      data: [
+        {
+          // Single-digit hour: not RFC3339, and `Date.parse` returns NaN for it.
+          // Emitted verbatim this became a slot whose start broke all date math.
+          startTime: '2026-07-20T9:00:00Z',
+          clientSchedules: [{ serviceSchedules: [{ endTime: '2026-07-20T10:00:00Z' }] }],
+        },
+        {
+          // Offset-less local time — parseable, but an ambiguous instant.
+          startTime: '2026-07-20T22:00:00',
+          clientSchedules: [{ serviceSchedules: [{ endTime: '2026-07-20T23:00:00Z' }] }],
+        },
+        {
+          startTime: '2026-07-20T22:00:00Z',
+          clientSchedules: [{ serviceSchedules: [{ endTime: '2026-07-20T22:30:00' }] }],
+        },
+        AVAILABILITY.data[0],
+      ],
+      links: [],
+    });
+    const slots = await makeClient().searchAvailability({ range: RANGE, serviceId: 'svc1' });
+    // Only the well-formed fixture entry survives — it fans out to its two
+    // staff schedules. The three malformed entries are dropped.
+    expect(slots).toHaveLength(2);
+    expect(slots.map((s) => s.staffId)).toEqual(['staff1', 'staff2']);
+    for (const s of slots) {
+      expect(s.start).toBe('2026-07-20T22:00:00Z');
+      expect(Number.isNaN(Date.parse(s.end))).toBe(false);
+    }
+  });
+
   it('base64-encodes non-Latin-1 credentials as UTF-8', async () => {
     let auth = '';
     agent

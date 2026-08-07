@@ -255,7 +255,12 @@ export const bookeo = defineAdapter<BookeoCredentials>({
                 itemsPerPage: Math.min(query.limit ?? 100, 100),
                 // Cancelled bookings are excluded by default, so asking for them
                 // would otherwise return nothing.
-                ...(query.status === 'cancelled' ? { includeCanceled: true } : {}),
+                // `noShow` rides on top of `canceled` (see `toBooking`), so a
+                // no_show query has to include cancelled rows or it filters out
+                // exactly what it is looking for.
+                ...(query.status === 'cancelled' || query.status === 'no_show'
+                  ? { includeCanceled: true }
+                  : {}),
               }),
         },
       });

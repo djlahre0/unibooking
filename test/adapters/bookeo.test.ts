@@ -300,6 +300,27 @@ describe('bookeo: request payloads (spec diff, July 2026)', () => {
     expect(paths[1]).toContain('includeCanceled=true');
   });
 
+  it('includes cancelled bookings when filtering for no_show', async () => {
+    // Bookeo's `noShow` rides on top of `canceled` (see the status mapping), so
+    // a no_show query that omits `includeCanceled` filters out the very rows it
+    // is looking for and can only ever return empty.
+    let path = '';
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
+      .reply(
+        200,
+        (opts: any) => {
+          path = String(opts.path);
+          return JSON.stringify({ data: [], info: { totalItems: 0 } });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await bookeo({ apiKey: 'k', secretKey: 's' }).listBookings({ range: DAY, status: 'no_show' });
+    expect(path).toContain('includeCanceled=true');
+  });
+
   it('listBookings rejects a range wider than the documented 31 days', async () => {
     await expect(
       bookeo({ apiKey: 'k', secretKey: 's' }).listBookings({

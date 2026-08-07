@@ -6,10 +6,11 @@ import type {
   CreateBookingInput,
   TimeRange,
 } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, bookingsWithinRange, defineAdapter, reqString } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
+import { slotsWithinRange } from '../availability';
 
 /**
  * Zenoti (api.zenoti.com, /v1). Auth: `Authorization: apikey <key>`. `center_id`
@@ -494,16 +495,11 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
             : {}),
         },
       });
-      const from = Date.parse(query.range.start);
-      const to = Date.parse(query.range.end);
-      const bookings = asArray(res?.appointments, 'zenoti', 'appointments')
-        .map(toBooking)
-        // Whole-date fetching overshoots the caller's instants at both ends.
-        .filter((b) => {
-          const s = Date.parse(b.range.start);
-          return s >= from && s < to;
-        })
-        .filter((b) => query.status === undefined || b.status === query.status);
+      // Whole-date fetching overshoots the caller's instants at both ends.
+      const bookings = bookingsWithinRange(
+        asArray(res?.appointments, 'zenoti', 'appointments').map(toBooking),
+        query.range,
+      ).filter((b) => query.status === undefined || b.status === query.status);
       // The endpoint returns no cursor, so `limit` is applied client-side and no
       // nextPageToken is fabricated.
       return { bookings: query.limit !== undefined ? bookings.slice(0, query.limit) : bookings };
@@ -570,7 +566,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
       const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
       const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
-      return slots.flatMap((s: any) => {
+      const out = slots.flatMap((s: any) => {
         const start = anchorSlotTime(s.Time, query.range.start);
         if (start === undefined) return [];
         // Each slot carries an Available flag; an unavailable slot is not
@@ -585,6 +581,9 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           },
         ];
       });
+      // The transient booking is scoped to a DATE, so its slot list covers the
+      // whole center-local day; narrow it to the window the caller asked for.
+      return slotsWithinRange(out, query.range);
     },
 
     customers: {

@@ -434,4 +434,137 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     expect(slots).toHaveLength(1);
     expect(slots[0]!.end).toBe('2026-07-20T17:00:00-08:00');
   });
+
+  it('emits one consistent offset form across a whole result set', async () => {
+    agent
+      .get('https://api.mindbodyonline.com')
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          Availabilities: [
+            {
+              StartDateTime: '2026-07-20T09:00:00',
+              EndDateTime: '2026-07-20T12:00:00',
+              Staff: { Id: 5 },
+            },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    // A zero site offset used to render as `+00:00` when the instant came
+    // straight from the provider string, but as `Z` once any arithmetic ran —
+    // so one list mixed both spellings of the same moment.
+    const slots = await mindbody({ ...CREDS, utcOffset: '+00:00' }).searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      serviceId: '9',
+      durationMinutes: 60,
+    });
+
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-07-20T09:00:00Z',
+      '2026-07-20T10:00:00Z',
+      '2026-07-20T11:00:00Z',
+    ]);
+    expect(slots.map((s) => s.end)).toEqual([
+      '2026-07-20T10:00:00Z',
+      '2026-07-20T11:00:00Z',
+      '2026-07-20T12:00:00Z',
+    ]);
+  });
+
+  it('searchAvailability keeps slices inside the requested window', async () => {
+    agent
+      .get('https://api.mindbodyonline.com')
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          Availabilities: [
+            {
+              // An `Availabilities[]` entry is a staff SHIFT that merely overlaps
+              // the query, so a 2-hour question comes back as an 8-hour answer.
+              StartDateTime: '2026-07-20T09:00:00',
+              EndDateTime: '2026-07-20T17:00:00',
+              BookableEndDateTime: '2026-07-20T16:00:00',
+              Staff: { Id: 5 },
+            },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const slots = await mindbody(CREDS).searchAvailability({
+      range: { start: '2026-07-20T12:00:00-08:00', end: '2026-07-20T14:00:00-08:00' },
+      serviceId: '9',
+      durationMinutes: 60,
+    });
+
+    // The bookable grid stays anchored to the shift start (09:00), so the slots
+    // are real ones — only those starting inside the window survive.
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-07-20T12:00:00-08:00',
+      '2026-07-20T13:00:00-08:00',
+    ]);
+  });
+
+  it('clamps an unsliceable window to the requested range', async () => {
+    agent
+      .get('https://api.mindbodyonline.com')
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          Availabilities: [
+            { StartDateTime: '2026-07-20T09:00:00', EndDateTime: '2026-07-20T17:00:00' },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const slots = await mindbody(CREDS).searchAvailability({
+      range: { start: '2026-07-20T12:00:00-08:00', end: '2026-07-20T14:00:00-08:00' },
+      serviceId: '9',
+    });
+
+    // With no slot size the shift can't be sliced. Report the overlap rather
+    // than the whole shift — coarse but truthful, and never wider than asked.
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.start).toBe('2026-07-20T12:00:00-08:00');
+    expect(slots[0]!.end).toBe('2026-07-20T14:00:00-08:00');
+  });
+
+  it('drops a shift that does not overlap the requested window at all', async () => {
+    agent
+      .get('https://api.mindbodyonline.com')
+      .intercept({
+        path: (p) => p.startsWith('/public/v6/appointment/bookableitems'),
+        method: 'GET',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          Availabilities: [
+            { StartDateTime: '2026-07-20T15:00:00', EndDateTime: '2026-07-20T17:00:00' },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const slots = await mindbody(CREDS).searchAvailability({
+      range: { start: '2026-07-20T09:00:00-08:00', end: '2026-07-20T11:00:00-08:00' },
+      serviceId: '9',
+    });
+    expect(slots).toEqual([]);
+  });
 });

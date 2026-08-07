@@ -60,37 +60,43 @@ runConformance({
         }),
       check: (b) => expect(b.id).toBe('A1'),
     },
+    {
+      name: 'cancelBooking deletes on v2',
+      method: 'DELETE',
+      path: '/api/v2/bookingapi/appointments/A1',
+      reply: { response: true, data: {} },
+      run: (c) => c.cancelBooking('A1'),
+    },
   ],
 });
 
 describe('setmore: operations the API genuinely lacks', () => {
-  it.each([
-    ['getBooking', (c: any) => c.getBooking('A1')],
-    ['cancelBooking', (c: any) => c.cancelBooking('A1')],
-  ])('%s throws UNSUPPORTED', async (_name, call) => {
-    const err = await call(makeClient())
-      .then(() => null)
-      .catch((e: any) => e);
-    expect(err?.code).toBe('UNSUPPORTED');
-  });
-
-  it('updateBooking rejects time/staff/service changes — only a label can change', async () => {
+  it('getBooking throws UNSUPPORTED', async () => {
+    // GET /appointments/{id} answers 405 on BOTH v1 and v2 — the path is routed
+    // (it backs DELETE) but no generation exposes a fetch-by-id.
     const err = await makeClient()
-      .updateBooking('A1', {
-        range: { start: '2026-07-20T10:00:00Z', end: '2026-07-20T10:30:00Z' },
-      })
+      .getBooking('A1')
       .then(() => null)
       .catch((e: any) => e);
     expect(err?.code).toBe('UNSUPPORTED');
   });
 
-  it('updateBooking rejects a status change as UNSUPPORTED, not as a missing title', async () => {
+  it('updateBooking rejects a status change and points at cancelBooking', async () => {
     const err = await makeClient()
       .updateBooking('A1', { status: 'cancelled' })
       .then(() => null)
       .catch((e: any) => e);
     expect(err?.code).toBe('UNSUPPORTED');
     expect(err?.message).toContain('status');
+    expect(err?.message).toContain('cancelBooking');
+  });
+
+  it('updateBooking with no updatable field is INVALID_INPUT, not a silent no-op', async () => {
+    const err = await makeClient()
+      .updateBooking('A1', {})
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
   });
 });
 
@@ -130,6 +136,61 @@ describe('setmore wire format', () => {
     // dd-mm-yyyy for the list endpoint — not the slots endpoint's DD/MM/YYYY.
     expect(seen.path).toContain('startDate=12-02-2026');
     expect(seen.path).toContain('endDate=12-03-2026');
+  });
+
+  it('trims listBookings to the requested instants and honors limit', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/appointments'), method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({
+          response: true,
+          data: {
+            appointments: [
+              // startDate/endDate are whole dates (dd-mm-yyyy), so Setmore hands
+              // back both entire days regardless of the hours asked for.
+              {
+                key: 'early',
+                label: 'E',
+                start_time: '2026-07-20T08:00',
+                end_time: '2026-07-20T09:00',
+              },
+              {
+                key: 'in1',
+                label: 'I1',
+                start_time: '2026-07-20T13:00',
+                end_time: '2026-07-20T14:00',
+              },
+              {
+                key: 'in2',
+                label: 'I2',
+                start_time: '2026-07-20T14:00',
+                end_time: '2026-07-20T15:00',
+              },
+              {
+                key: 'late',
+                label: 'L',
+                start_time: '2026-07-20T20:00',
+                end_time: '2026-07-20T21:00',
+              },
+            ],
+          },
+        }),
+        { headers: JSON_HEADERS },
+      )
+      .persist();
+
+    const inWindow = await makeClient().listBookings({
+      range: { start: '2026-07-20T12:00:00Z', end: '2026-07-20T15:00:00Z' },
+    });
+    expect(inWindow.bookings.map((b) => b.id)).toEqual(['in1', 'in2']);
+
+    const capped = await makeClient().listBookings({
+      range: { start: '2026-07-20T12:00:00Z', end: '2026-07-20T15:00:00Z' },
+      limit: 1,
+    });
+    expect(capped.bookings.map((b) => b.id)).toEqual(['in1']);
   });
 
   it('requests slots by POST with slash-separated dates and an explicit timezone', async () => {
@@ -237,6 +298,63 @@ describe('setmore wire format', () => {
     expect(dates).toEqual(['07/03/2026', '08/03/2026', '09/03/2026']);
   });
 
+  it('does not fan out to a day the range only touches at its exclusive end', async () => {
+    const dates: string[] = [];
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
+      .reply(
+        200,
+        (opts: any) => {
+          dates.push(JSON.parse(String(opts.body)).selected_date);
+          return JSON.stringify({ response: true, data: [] });
+        },
+        { headers: JSON_HEADERS },
+      )
+      .persist();
+
+    await makeClient().searchAvailability({
+      // Exactly one calendar day. The range ends the instant the 21st begins,
+      // so the 21st contributes nothing and must not cost a request.
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z', timezone: 'UTC' },
+      serviceId: 'svc1',
+      staffId: 's1',
+      durationMinutes: 30,
+    });
+
+    expect(dates).toEqual(['20/07/2026']);
+  });
+
+  it('drops slots outside the requested window (the day endpoint returns them all)', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/api/v1/bookingapi/slots'), method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          response: true,
+          data: { slots: ['09.00', '11.30', '12.00', '13.30', '14.00', '16.00'] },
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    // `selected_date` is date-granular, so Setmore answers with the whole
+    // business day regardless of the hours the caller asked for.
+    const slots = await makeClient().searchAvailability({
+      range: { start: '2026-07-20T12:00:00Z', end: '2026-07-20T14:00:00Z', timezone: 'UTC' },
+      serviceId: 'svc1',
+      staffId: 's1',
+      durationMinutes: 30,
+    });
+
+    // 12:00 and 13:30 start inside the window; 14:00 starts exactly at the
+    // exclusive end and is out.
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-07-20T12:00:00.000Z',
+      '2026-07-20T13:30:00.000Z',
+    ]);
+  });
+
   it('rejects an availability range wider than the per-day fan-out cap', async () => {
     const err = await makeClient()
       .searchAvailability({
@@ -325,6 +443,210 @@ describe('setmore wire format', () => {
     // Documented field is cell_phone; cell_no silently dropped the number.
     expect(body.cell_phone).toBe('+15550100');
     expect(body.email_id).toBe('jane@example.com');
+  });
+
+  it('cancels via DELETE on the v2 appointment resource', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: {}, msg: 'Appointment deleted' });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await makeClient().cancelBooking('A1');
+
+    // v2, not v1: cancel/delete lives on the newer generation.
+    expect(seen.path).toContain('/api/v2/bookingapi/appointments/A1');
+  });
+
+  it('surfaces a response:false cancel as UPSTREAM rather than silently succeeding', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'DELETE' })
+      .reply(200, JSON.stringify({ response: false, error: 'not_found', msg: 'no such appt' }), {
+        headers: JSON_HEADERS,
+      });
+
+    const err = await makeClient()
+      .cancelBooking('A1')
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('UPSTREAM');
+    expect(err?.providerCode).toBe('not_found');
+  });
+
+  it('lets providerOptions.apiVersion pin cancel to v1 without leaking into the body', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: {} });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await makeClient().cancelBooking('A1', { providerOptions: { apiVersion: 'v1' } });
+
+    expect(seen.path).toContain('/api/v1/bookingapi/appointments/A1');
+    expect(String(seen.body ?? '')).not.toContain('apiVersion');
+  });
+
+  it('forwards leftover cancel providerOptions into the body instead of dropping them', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: {} });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    // CancelOptions.providerOptions is contractually shallow-merged into the
+    // body; apiVersion is the one key consumed for routing.
+    await makeClient().cancelBooking('A1', {
+      providerOptions: { apiVersion: 'v2', send_notification: false },
+    });
+
+    const body = JSON.parse(seen.body);
+    expect(body.send_notification).toBe(false);
+    expect(body.apiVersion).toBeUndefined();
+  });
+
+  it('sends no body at all when cancel has nothing beyond apiVersion', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: {} });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await makeClient().cancelBooking('A1');
+
+    expect(seen.body ?? '').toBe('');
+  });
+
+  it('rejects a bogus apiVersion rather than routing somewhere unintended', async () => {
+    const err = await makeClient()
+      .cancelBooking('A1', { providerOptions: { apiVersion: 'v3' } })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+    expect(err?.message).toContain('apiVersion');
+  });
+
+  it('honors apiVersion on the label branch too, not just on reschedule', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/label'), method: 'PUT' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({ response: true, data: { appointment: APPT } });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await makeClient().updateBooking('A1', {
+      title: 'VIP',
+      providerOptions: { apiVersion: 'v2' },
+    });
+
+    expect(seen.path).toContain('/api/v2/bookingapi/appointments/A1/label');
+  });
+
+  it('reschedules via PUT on the v2 appointment resource', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/appointments/A1'), method: 'PUT' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({
+            response: true,
+            data: {
+              appointment: {
+                ...APPT,
+                start_time: '2026-07-20T10:00Z',
+                end_time: '2026-07-20T10:30Z',
+              },
+            },
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    const b = await makeClient().updateBooking('A1', {
+      range: { start: '2026-07-20T10:00:00Z', end: '2026-07-20T10:30:00Z' },
+      staffId: 's2',
+      serviceId: 'svc2',
+      title: 'Moved',
+    });
+
+    // PUT /appointments/{id} is 405 on v1 — reschedule exists only on v2.
+    expect(seen.path).toContain('/api/v2/bookingapi/appointments/A1');
+    const body = JSON.parse(seen.body);
+    expect(body.start_time).toBe('2026-07-20T10:00Z');
+    expect(body.end_time).toBe('2026-07-20T10:30Z');
+    expect(body.staff_key).toBe('s2');
+    expect(body.service_key).toBe('svc2');
+    expect(body.label).toBe('Moved');
+    expect(b.range.start).toBe('2026-07-20T10:00Z');
+  });
+
+  it('validates the range before issuing a reschedule', async () => {
+    const err = await makeClient()
+      .updateBooking('A1', {
+        range: { start: '2026-07-20T11:00:00Z', end: '2026-07-20T10:00:00Z' },
+      })
+      .then(() => null)
+      .catch((e: any) => e);
+    expect(err?.code).toBe('INVALID_INPUT');
+  });
+
+  it('keeps a title-only edit on the documented v1 label endpoint', async () => {
+    let seen: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.includes('/label'), method: 'PUT' })
+      .reply(
+        200,
+        (opts: any) => {
+          seen = opts;
+          return JSON.stringify({
+            response: true,
+            data: { appointment: { ...APPT, label: 'VIP' } },
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    await makeClient().updateBooking('A1', { title: 'VIP' });
+
+    expect(seen.path).toContain('/api/v1/bookingapi/appointments/A1/label');
   });
 
   it('treats response:false as a failure even on HTTP 200', async () => {

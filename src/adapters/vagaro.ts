@@ -1,8 +1,16 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  bookingsWithinRange,
+  defineAdapter,
+  reqString,
+  unsupported,
+} from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration, parseOffsetMinutes } from '../time';
+import { slotsWithinRange } from '../availability';
 
 /**
  * Vagaro Enterprise Business API V2. Public docs, enterprise-gated access.
@@ -337,12 +345,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
       const rows = asArray((res as any)?.data, 'vagaro', 'appointments');
       // The endpoint takes no date window — it returns the customer's whole
       // history — so trim to the instants the caller actually asked for.
-      const from = Date.parse(query.range.start);
-      const to = Date.parse(query.range.end);
-      const bookings = rows.map(toBooking).filter((b) => {
-        const s = Date.parse(b.range.start);
-        return s >= from && s < to;
-      });
+      const bookings = bookingsWithinRange(rows.map(toBooking), query.range);
       // No pagination envelope exists — page numerically until a short page, and
       // only when a real page size was asked for. Falling back to `rows.length`
       // made `rows.length >= pageSize` true on every non-empty page, so a caller
@@ -371,8 +374,6 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         });
       }
       const c = await http.resolve();
-      const windowStart = Date.parse(query.range.start);
-      const windowEnd = Date.parse(query.range.end);
       const out: AvailabilitySlot[] = [];
       // `appointmentDate` is a single date, so page a call per day the window
       // overlaps and keep only slots that actually fall inside the range.
@@ -412,10 +413,6 @@ export const vagaro = defineAdapter<VagaroCredentials>({
             const m = /^(\d{1,2}):(\d{2})$/.exec(String(t).trim());
             if (!m) continue;
             const start = `${date}T${m[1]!.padStart(2, '0')}:${m[2]}:00${suffix}`;
-            // A day's slots cover the whole business day, so a partial-day window
-            // would otherwise return times the caller excluded.
-            const startMs = Date.parse(start);
-            if (startMs < windowStart || startMs >= windowEnd) continue;
             out.push({
               start,
               end: endFromDuration(start, duration),
@@ -425,7 +422,9 @@ export const vagaro = defineAdapter<VagaroCredentials>({
           }
         }
       }
-      return out;
+      // A day's slots cover the whole business day, so a partial-day window
+      // would otherwise return times the caller excluded.
+      return slotsWithinRange(out, query.range);
     },
   }),
 });

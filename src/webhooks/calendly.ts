@@ -38,6 +38,8 @@ function parseHeader(header: string): { t?: string; v1?: string } {
 }
 
 export async function verifyCalendlySignature(input: CalendlyWebhookInput): Promise<boolean> {
+  // A missing header is an unsigned request, not a crash — see `timingSafeEqual`.
+  if (typeof input.signatureHeader !== 'string' || input.signatureHeader === '') return false;
   const { t, v1 } = parseHeader(input.signatureHeader);
   if (!t || !v1) return false;
   if (input.toleranceMs !== undefined) {

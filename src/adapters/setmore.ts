@@ -1,8 +1,16 @@
 import type { AvailabilitySlot, Booking, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  bookingsWithinRange,
+  defineAdapter,
+  reqString,
+  unsupported,
+} from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration, isInstant, parseOffsetMinutes } from '../time';
+import { slotsWithinRange } from '../availability';
 import { localToInstant } from '../tz';
 
 /**
@@ -11,11 +19,40 @@ import { localToInstant } from '../tz';
  * exchange your long-lived refresh token for one yourself via
  * `GET api/v1/o/oauth2/token?refreshToken=…` (access tokens last ~7 days).
  *
- * The API surface is genuinely small — 11 endpoints total. Notably there is
- * **no** fetch-by-id, **no** cancel/delete, and **no** reschedule: the only
- * mutation on an existing appointment is a label change. `getBooking` and
- * `cancelBooking` therefore throw UNSUPPORTED rather than calling endpoints that
- * do not exist. Verified against the official Apiary blueprint (2025-09-03).
+ * ## Two API generations, and you need both
+ *
+ * Setmore serves `api/v1/bookingapi` and `api/v2/bookingapi` side by side on the
+ * same host, and they are **not** interchangeable — neither is a superset of the
+ * other, so this adapter pins each operation to the generation that actually
+ * routes it:
+ *
+ * | operation                     | v1    | v2    | used |
+ * | ----------------------------- | ----- | ----- | ---- |
+ * | `POST /slots`                 | ✅    | 404   | v1   |
+ * | `GET /appointments` (list)    | ✅    | ✅    | v1   |
+ * | `POST /appointment/create`    | ✅    | ✅    | v1   |
+ * | `PUT /appointments/{id}/label`| ✅    | ✅    | v1   |
+ * | `PUT /appointments/{id}`      | 405   | ✅    | v2   |
+ * | `DELETE /appointments/{id}`   | ✅    | ✅    | v2   |
+ * | `GET /appointments/{id}`      | 405   | 405   | —    |
+ *
+ * Availability is the reason the whole adapter can't simply move to v2: `slots`
+ * exists only on v1. Reschedule is the reason it can't stay on v1: `PUT` on the
+ * appointment resource answers 405 there. Cancel/delete routes on *both*, so
+ * routing alone can't settle it; it is pinned to v2 to sit on the same
+ * generation as reschedule (and because that is the generation reported to work
+ * in practice), overridable per call with `providerOptions: { apiVersion: 'v1' }`.
+ * Nothing "documents" v2 — see below.
+ *
+ * The published OpenAPI spec (developers.setmore.com) describes only the ten v1
+ * routes and omits the v2 generation entirely, so `PUT`/`DELETE` on the
+ * appointment resource are **verified to route** (401 with no token vs 404 for
+ * an unrouted path) but their request/response bodies are inferred from the
+ * create endpoint's shape. There is no sandbox — confirm against a throwaway
+ * account before relying on them.
+ *
+ * `getBooking` remains genuinely absent: `GET /appointments/{id}` answers 405 on
+ * both generations, so it still throws UNSUPPORTED.
  *
  * Three different day-first date encodings are in play — `dd-mm-yyyy` when
  * listing, `DD/MM/YYYY` for slots, and `yyyy-MM-ddTHH:mm` on create. They are not
@@ -26,6 +63,37 @@ export type SetmoreCredentials = {
 };
 
 const BASE = 'https://developer.setmore.com/';
+
+/** The two generations. Every path below is written against one of these
+ *  explicitly — there is no "current version" default, because picking one
+ *  wrongly is exactly the bug this split exists to prevent. */
+const V1 = 'api/v1/bookingapi';
+const V2 = 'api/v2/bookingapi';
+
+type SetmoreApiVersion = 'v1' | 'v2';
+
+const VERSION_PREFIX: Record<SetmoreApiVersion, string> = { v1: V1, v2: V2 };
+
+/** Pull the `apiVersion` routing hint out of `providerOptions` so it selects a
+ *  path prefix instead of being shallow-merged into the request body as a bogus
+ *  field. Returns the remaining options untouched. */
+function takeApiVersion(
+  options: Record<string, unknown> | undefined,
+  fallback: SetmoreApiVersion,
+): { prefix: string; rest: Record<string, unknown> } {
+  const { apiVersion, ...rest } = options ?? {};
+  if (apiVersion !== undefined && apiVersion !== 'v1' && apiVersion !== 'v2') {
+    throw new UnibookingError({
+      provider: 'setmore',
+      code: 'INVALID_INPUT',
+      message: `providerOptions.apiVersion must be 'v1' or 'v2', got ${String(apiVersion)}`,
+    });
+  }
+  return {
+    prefix: VERSION_PREFIX[(apiVersion as SetmoreApiVersion | undefined) ?? fallback],
+    rest,
+  };
+}
 
 /** The slots endpoint is single-date, so a multi-day availability query fans out
  *  one request per day. Cap the fan-out so a pathological range can't issue
@@ -116,7 +184,10 @@ function datesInRange(
       new Date(startMs).getUTCDate(),
     ),
   );
-  while (cursor.getTime() <= endMs) {
+  // `range.end` is exclusive, so a day that begins exactly at it is not touched
+  // by the range — `<=` here spent a request on the day after a whole-day query
+  // and returned that day's slots as if they were in range.
+  while (cursor.getTime() < endMs) {
     // An over-wide range is a caller error, not something to quietly truncate.
     if (out.length >= MAX_AVAILABILITY_DAYS) {
       throw new UnibookingError({
@@ -240,7 +311,7 @@ async function findOrCreateCustomer(
   // nameless customer can only ever be created, never matched.
   if (first) {
     const res = await http.request(c, {
-      path: 'api/v1/bookingapi/customer',
+      path: `${V1}/customer`,
       query: {
         firstname: first,
         ...(customer.email ? { email: customer.email } : {}),
@@ -252,7 +323,7 @@ async function findOrCreateCustomer(
   }
   const created = await http.request(c, {
     method: 'POST',
-    path: 'api/v1/bookingapi/customer/create',
+    path: `${V1}/customer/create`,
     body: {
       first_name: first ?? 'Guest',
       ...(rest.length ? { last_name: rest.join(' ') } : {}),
@@ -291,7 +362,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       requireField(customerKey, 'a customer (customer_key) to book');
       const res = await http.request(c, {
         method: 'POST',
-        path: 'api/v1/bookingapi/appointment/create',
+        path: `${V1}/appointment/create`,
         body: {
           staff_key: staffKey,
           service_key: serviceKey,
@@ -308,43 +379,93 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     getBooking: async () =>
       unsupported(
         'setmore',
-        'getBooking (the Booking API has no fetch-by-id endpoint; use listBookings over a date range)',
+        'getBooking (neither API generation exposes a fetch-by-id — GET on the appointment resource is 405 on both; use listBookings over a date range)',
       ),
 
     async updateBooking(id, input) {
-      if (input.range || input.staffId || input.serviceId) {
-        return unsupported(
-          'setmore',
-          'updateBooking of time/staff/service (the only mutation Setmore exposes is a label change)',
-        );
-      }
-      // An appointment carries no status field and there is no cancel endpoint,
-      // so a status change has to be rejected here — otherwise it falls through
-      // to the label path and surfaces as a bogus "requires a title".
+      // An appointment carries no status field, so a status change can't be
+      // expressed as an edit. Reject it here — otherwise it falls through to the
+      // label path and surfaces as a bogus "requires a title".
       if (input.status !== undefined) {
         return unsupported(
           'setmore',
-          'updateBooking of status (an appointment has no status field, and no cancel endpoint exists)',
+          'updateBooking of status (an appointment carries no status field — use cancelBooking to cancel one)',
         );
       }
-      const label = requireField(input.title, 'a title (label) — the only updatable field');
+
+      const reschedules =
+        input.range !== undefined || input.staffId !== undefined || input.serviceId !== undefined;
+
+      // A title-only edit stays on the documented v1 label sub-resource: it is
+      // the narrower call, and it can't disturb the booking's time or staffing.
+      // `/label` routes on both generations, so `apiVersion` is honored here too
+      // — otherwise the same option would work on one branch of this method and
+      // be silently ignored on the other.
+      if (!reschedules) {
+        const label = requireField(
+          input.title,
+          'at least one of title, range, staffId or serviceId to update',
+        );
+        const { prefix } = takeApiVersion(input.providerOptions, 'v1');
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'PUT',
+          path: `${prefix}/appointments/${enc(id)}/label`,
+          query: { label },
+        });
+        return toBooking(dataOf(res)?.appointment);
+      }
+
+      if (input.range) assertValidRange(input.range, 'setmore');
+      // v2 only — v1 answers 405 on PUT against the appointment resource.
+      const { prefix, rest } = takeApiVersion(input.providerOptions, 'v2');
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'PUT',
-        path: `api/v1/bookingapi/appointments/${enc(id)}/label`,
-        query: { label },
+        path: `${prefix}/appointments/${enc(id)}`,
+        body: {
+          ...(input.range
+            ? {
+                start_time: toSetmoreInstant(input.range.start),
+                end_time: toSetmoreInstant(input.range.end),
+              }
+            : {}),
+          ...(input.staffId !== undefined ? { staff_key: input.staffId } : {}),
+          ...(input.serviceId !== undefined ? { service_key: input.serviceId } : {}),
+          ...(input.title !== undefined ? { label: input.title } : {}),
+          ...rest,
+        },
       });
       return toBooking(dataOf(res)?.appointment);
     },
 
-    cancelBooking: async () =>
-      unsupported('setmore', 'cancelBooking (the Booking API has no cancel or delete endpoint)'),
+    async cancelBooking(id, options) {
+      // Setmore deletes rather than cancels — there is no status to move an
+      // appointment into, so the appointment is removed outright. The endpoint
+      // takes no documented reason or notify field, so `options.reason` and
+      // `options.notify` are ignored.
+      const { prefix, rest } = takeApiVersion(options?.providerOptions, 'v2');
+      const c = await http.resolve();
+      // `response: false` can ride along with a 200, so the envelope still has
+      // to be asserted even though the body is otherwise discarded.
+      assertOk(
+        await http.request(c, {
+          method: 'DELETE',
+          path: `${prefix}/appointments/${enc(id)}`,
+          // `CancelOptions.providerOptions` is contractually shallow-merged into
+          // the body, so anything left after `apiVersion` is forwarded rather
+          // than dropped. Omit the body entirely when there is nothing to send —
+          // a bare `{}` on a DELETE is a needless deviation from the plain call.
+          ...(Object.keys(rest).length > 0 ? { body: rest } : {}),
+        }),
+      );
+    },
 
     async listBookings(query) {
       assertValidRange(query.range, 'setmore');
       const c = await http.resolve();
       const res = await http.request(c, {
-        path: 'api/v1/bookingapi/appointments',
+        path: `${V1}/appointments`,
         query: {
           startDate: toDashDate(query.range.start),
           endDate: toDashDate(query.range.end),
@@ -354,7 +475,16 @@ export const setmore = defineAdapter<SetmoreCredentials>({
         },
       });
       const data = dataOf(res);
-      const bookings = asArray(data?.appointments, 'setmore', 'appointments').map(toBooking);
+      // startDate/endDate are whole dates (dd-mm-yyyy), so Setmore returns both
+      // entire end days regardless of the times asked for. Trim to the instants,
+      // then apply `limit` — the endpoint takes no page-size parameter, so
+      // ignoring it silently returned the whole day to a caller who asked for
+      // three bookings.
+      let bookings = bookingsWithinRange(
+        asArray(data?.appointments, 'setmore', 'appointments').map(toBooking),
+        query.range,
+      );
+      if (query.limit !== undefined && query.limit >= 0) bookings = bookings.slice(0, query.limit);
       const cursor = data?.cursor;
       // Docs never specify how the final page is signalled; treat an absent,
       // empty, or unchanged cursor as terminal.
@@ -393,7 +523,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       for (const day of datesInRange(query.range.start, query.range.end)) {
         const res = await http.request(c, {
           method: 'POST',
-          path: 'api/v1/bookingapi/slots',
+          path: `${V1}/slots`,
           body: {
             staff_key: staffKey,
             service_key: serviceKey,
@@ -422,7 +552,9 @@ export const setmore = defineAdapter<SetmoreCredentials>({
           });
         }
       }
-      return out;
+      // `selected_date` is date-granular, so each request answers with the whole
+      // business day; narrow to the hours the caller actually asked for.
+      return slotsWithinRange(out, query.range);
     },
 
     customers: {
