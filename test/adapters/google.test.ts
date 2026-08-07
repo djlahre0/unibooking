@@ -173,4 +173,31 @@ describe('google: freeBusy-derived availability', () => {
       }),
     ).rejects.toMatchObject({ code: 'UPSTREAM' });
   });
+
+  it('sends the raw calendar id in the freeBusy body, not a percent-encoded one', async () => {
+    const CAL = 'c_188ag7abcdef@group.calendar.google.com';
+    let body: any;
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(
+        200,
+        (opts) => {
+          body = JSON.parse(String(opts.body));
+          // Google keys the response by the calendar id it was given.
+          return JSON.stringify({ calendars: { [CAL]: { busy: [] } } });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const slots = await google({ accessToken: 't', calendarId: CAL }).searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T11:00:00Z' },
+      durationMinutes: 60,
+    });
+
+    expect(body.items).toEqual([{ id: CAL }]);
+    // The '@' must survive: '%40' here is the bug.
+    expect(JSON.stringify(body)).not.toContain('%40');
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z']);
+  });
 });

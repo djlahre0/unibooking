@@ -22,8 +22,17 @@ export type GoogleCredentials = {
 
 const BASE = 'https://www.googleapis.com/calendar/v3/';
 
+/** The calendar id exactly as the API expects it inside a JSON body or as a
+ *  response key. */
+function rawCalId(c: GoogleCredentials): string {
+  return c.calendarId ?? 'primary';
+}
+
+/** The same id escaped for a URL path segment. Never use this in a request body:
+ *  freeBusy's `items[]` entry and the `calendars` key it answers with are both
+ *  raw, and every calendar id except `primary` contains an `@`. */
 function calId(c: GoogleCredentials): string {
-  return encodeURIComponent(c.calendarId ?? 'primary');
+  return encodeURIComponent(rawCalId(c));
 }
 
 function point(instant: string, timezone: string | undefined): Record<string, unknown> {
@@ -247,7 +256,7 @@ export const google = defineAdapter<GoogleCredentials>({
       }
       const durationMinutes = query.durationMinutes;
       const c = await http.resolve();
-      const id = calId(c);
+      const id = rawCalId(c);
       const res = await http.request(c, {
         method: 'POST',
         path: 'freeBusy',
