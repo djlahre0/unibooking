@@ -1,5 +1,5 @@
 import type { Booking, BookingStatus, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import type { HttpContext } from '../http';
 import { assertValidRange, endFromDuration } from '../time';
@@ -168,6 +168,10 @@ export const square = defineAdapter<SquareCredentials>({
     webhooks: true,
     idempotency: true,
     customers: true,
+    // Enumeration is not implemented yet; these flip to true per
+    // adapter as listServices/listStaff land.
+    serviceCatalog: false,
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -175,6 +179,28 @@ export const square = defineAdapter<SquareCredentials>({
   }),
   parseError: parseSquareError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('square', async () => {
+        const res = await http.request(c, { path: 'locations' });
+        const locations = asArray(res?.locations, 'square', 'locations');
+        // Report the location the credentials are actually bound to. A token
+        // valid for the merchant but not for this location is a real failure
+        // mode, and naming some other location would hide it.
+        const mine = locations.find((l: any) => l?.id === c.locationId) ?? locations[0];
+        return {
+          ...(mine
+            ? {
+                account: {
+                  ...(mine.id ? { id: String(mine.id) } : {}),
+                  ...(mine.name ? { name: String(mine.name) } : {}),
+                },
+              }
+            : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'square');
       const c = await http.resolve();

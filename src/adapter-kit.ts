@@ -3,13 +3,14 @@ import type {
   BookingClient,
   Capabilities,
   ClientOptions,
+  ConnectionStatus,
   CredsInput,
   CustomerOps,
   ProviderCredentials,
   ProviderId,
 } from './types';
 import { createHttp, type AuthFn, type HttpConfig, type HttpContext } from './http';
-import { UnibookingError } from './errors';
+import { UnibookingError, type ErrorCode } from './errors';
 import { sortSlots } from './availability';
 
 /** The method set an adapter implements (everything on BookingClient except the
@@ -21,6 +22,9 @@ export interface AdapterMethods {
   cancelBooking: BookingClient['cancelBooking'];
   listBookings: BookingClient['listBookings'];
   searchAvailability: BookingClient['searchAvailability'];
+  checkConnection: BookingClient['checkConnection'];
+  listServices?: NonNullable<BookingClient['listServices']>;
+  listStaff?: NonNullable<BookingClient['listStaff']>;
   customers?: CustomerOps;
 }
 
@@ -76,6 +80,9 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       // Chronological order is part of the canonical result, not something each
       // adapter re-derives — see `sortSlots` for why provider order isn't it.
       searchAvailability: async (query) => sortSlots(await m.searchAvailability(query)),
+      checkConnection: m.checkConnection,
+      ...(m.listServices ? { listServices: m.listServices } : {}),
+      ...(m.listStaff ? { listStaff: m.listStaff } : {}),
       ...(m.customers ? { customers: m.customers } : {}),
     };
   };
@@ -111,6 +118,39 @@ export function bookingsWithinRange<T extends { range: { start: string } }>(
     const s = Date.parse(b.range.start);
     return !Number.isNaN(s) && s >= from && s < to;
   });
+}
+
+/** Codes that mean "these credentials no longer work". Everything else is a
+ *  fault, not a verdict on the connection. */
+const DEAD_CONNECTION_CODES = new Set<ErrorCode>(['AUTH', 'FORBIDDEN', 'NOT_FOUND']);
+
+/**
+ * Run a liveness probe and classify the outcome.
+ *
+ * A dead connection is the expected answer to `checkConnection`, so it is
+ * returned rather than thrown. A network blip, timeout, rate limit or 5xx is
+ * NOT evidence that a salon revoked access — those rethrow, so a consumer
+ * cannot mistake a transient failure for a revoked integration and disconnect
+ * a healthy one.
+ */
+export async function probeConnection(
+  _provider: ProviderId,
+  probe: () => Promise<{ account?: ConnectionStatus['account']; raw: unknown }>,
+): Promise<ConnectionStatus> {
+  try {
+    const { account, raw } = await probe();
+    return { ok: true, ...(account ? { account } : {}), raw };
+  } catch (e) {
+    if (e instanceof UnibookingError && DEAD_CONNECTION_CODES.has(e.code)) {
+      return {
+        ok: false,
+        reason: e.code as NonNullable<ConnectionStatus['reason']>,
+        message: e.message,
+        raw: e,
+      };
+    }
+    throw e;
+  }
 }
 
 /** Throw a consistent UNSUPPORTED error (for capabilities a provider lacks). */

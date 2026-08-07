@@ -4,6 +4,7 @@ import {
   asRecord,
   bookingsWithinRange,
   defineAdapter,
+  probeConnection,
   reqString,
   unsupported,
 } from '../adapter-kit';
@@ -345,11 +346,29 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   parseError: parseSetmoreError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('setmore', async () => {
+        // Setmore exposes no account or profile endpoint, so its cheapest
+        // authenticated read doubles as the probe. It surfaces no identity.
+        const res = await http.request(c, { path: `${V1}/services` });
+        assertOk(res);
+        return { raw: res };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'setmore');
       const c = await http.resolve();

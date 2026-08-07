@@ -4,6 +4,7 @@ import {
   asRecord,
   bookingsWithinRange,
   defineAdapter,
+  probeConnection,
   reqString,
   unsupported,
 } from '../adapter-kit';
@@ -204,12 +205,31 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     idempotency: false,
     // Vagaro exposes /customers CRUD, but this adapter does not model it yet.
     customers: false,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   // apiKey scheme: a raw `accessToken` header, not `Authorization: Bearer`.
   auth: (c) => ({ headers: { accessToken: c.accessToken } }),
   parseError: parseVagaroError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('vagaro', async () => {
+        const res = await http.request(c, {
+          method: 'POST',
+          path: apiPath(c, 'locations'),
+          body: { businessId: c.businessId },
+        });
+        return { account: { id: c.businessId }, raw: res };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'vagaro');
       const c = await http.resolve();

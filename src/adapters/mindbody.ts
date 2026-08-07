@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { addMinutes, assertValidRange, formatWithOffset, parseOffsetMinutes } from '../time';
 import { slotsWithinRange } from '../availability';
@@ -205,6 +205,14 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -212,6 +220,24 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
   }),
   parseError: parseMindbodyError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('mindbody', async () => {
+        const res = await http.request(c, { path: 'site/sites' });
+        const first = asArray(res?.Sites, 'mindbody', 'Sites')[0];
+        return {
+          ...(first
+            ? {
+                account: {
+                  ...(first.Id !== undefined ? { id: String(first.Id) } : {}),
+                  ...(first.Name ? { name: String(first.Name) } : {}),
+                },
+              }
+            : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'mindbody');
       const c = await http.resolve();

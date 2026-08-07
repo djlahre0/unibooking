@@ -43,6 +43,7 @@ export {
 export {
   defineAdapter,
   unsupported,
+  probeConnection,
   asRecord,
   asArray,
   reqString,

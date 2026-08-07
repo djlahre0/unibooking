@@ -40,6 +40,12 @@ export interface Capabilities {
   idempotency: boolean;
   /** Exposes `client.customers.findOrCreate(...)`. */
   customers: boolean;
+  /** `listServices()` is available. Deliberately distinct from `services`,
+   *  which only says bookings *reference* a service — a provider can have one
+   *  without the other, and several do. */
+  serviceCatalog: boolean;
+  /** `listStaff()` is available. Distinct from `staff` for the same reason. */
+  staffDirectory: boolean;
 }
 
 /** An absolute time span. `start`/`end` are RFC3339 timestamps **with offset**
@@ -156,6 +162,82 @@ export interface AvailabilitySlot {
   raw?: unknown;
 }
 
+/** A price. Integer minor units avoid float rounding; both fields are required
+ *  so a consumer never has to guess a currency. An adapter whose provider omits
+ *  the currency leaves `price` undefined rather than assuming one. */
+export interface Money {
+  /** Integer minor units, e.g. 4500 = $45.00. */
+  amount: number;
+  /** ISO-4217, e.g. 'USD'. */
+  currency: string;
+}
+
+export interface Service {
+  /** The id that `CreateBookingInput.serviceId` accepts for this provider. Not
+   *  always the provider's most obvious "service" id — Square's booking API
+   *  takes the item *variation* id, so that adapter flattens each catalog item
+   *  into one Service per variation. */
+  id: string;
+  name: string;
+  description?: string;
+  durationMinutes?: number;
+  price?: Money;
+  categoryId?: string;
+  categoryName?: string;
+  /** False only when the provider explicitly says so; true when it has no
+   *  active/inactive concept (everything it returns is bookable). */
+  active: boolean;
+  raw: unknown;
+}
+
+export interface Staff {
+  /** The id that `CreateBookingInput.staffId` accepts for this provider. */
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  active: boolean;
+  raw: unknown;
+}
+
+export interface ListServicesQuery {
+  limit?: number;
+  /** Opaque, provider-defined. Pass the previous result's `nextPageToken`. */
+  pageToken?: string;
+}
+
+export interface ListServicesResult {
+  services: Service[];
+  nextPageToken?: string;
+}
+
+export interface ListStaffQuery {
+  limit?: number;
+  pageToken?: string;
+}
+
+export interface ListStaffResult {
+  staff: Staff[];
+  nextPageToken?: string;
+}
+
+/** The result of a liveness probe. A dead connection is the expected answer to
+ *  this question, so it is reported rather than thrown. */
+export interface ConnectionStatus {
+  ok: boolean;
+  /** Set when `ok` is false. Deliberately a narrow literal union rather than
+   *  `ErrorCode`: only these three mean "the credentials no longer work", and
+   *  importing `ErrorCode` here would form a cycle (`errors.ts` already imports
+   *  `ProviderId` from this module). */
+  reason?: 'AUTH' | 'FORBIDDEN' | 'NOT_FOUND';
+  /** The provider's own message, when it gave one. */
+  message?: string;
+  /** Whatever identity the probe surfaced. All fields optional — providers
+   *  differ widely in what a probe returns. */
+  account?: { id?: string; name?: string; email?: string };
+  raw: unknown;
+}
+
 /** Credentials are never persisted by this package. With the function form of
  *  `CredsInput`, no token is even retained on the client — it is fetched fresh
  *  per request. Each adapter narrows this to its own concrete credential type. */
@@ -197,6 +279,15 @@ export interface BookingClient {
   listBookings(query: ListBookingsQuery): Promise<ListBookingsResult>;
   /** Throws `UnibookingError('UNSUPPORTED')` when `capabilities.availability` is false. */
   searchAvailability(query: AvailabilityQuery): Promise<AvailabilitySlot[]>;
+  /** Present on every adapter. Never throws for a dead connection — that is the
+   *  expected answer, returned as `{ ok: false, reason }`. Genuine faults
+   *  (network, timeout, rate limit, 5xx) still throw, so a transient blip is
+   *  never mistaken for a revoked integration. */
+  checkConnection(): Promise<ConnectionStatus>;
+  /** Present when `capabilities.serviceCatalog` is true. */
+  listServices?(query?: ListServicesQuery): Promise<ListServicesResult>;
+  /** Present when `capabilities.staffDirectory` is true. */
+  listStaff?(query?: ListStaffQuery): Promise<ListStaffResult>;
   customers?: CustomerOps;
 }
 

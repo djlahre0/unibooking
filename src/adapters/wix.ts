@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
-import { asArray, asRecord, defineAdapter, reqString, unsupported } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString, unsupported } from '../adapter-kit';
 import type { HttpContext } from '../http';
 import { UnibookingError } from '../errors';
 import { assertValidRange, formatWithOffset } from '../time';
@@ -269,11 +269,27 @@ export const wix = defineAdapter<WixCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
+    // Enumeration is not implemented yet; these flip to true per
+    // adapter as listServices/listStaff land.
+    serviceCatalog: false,
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: c.accessToken } }),
   parseError: parseWixError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('wix', async () => {
+        // Wix exposes no lightweight identity endpoint; the cheapest
+        // authenticated read is a one-item services query.
+        const res = await http.request(c, {
+          path: 'bookings/v2/services',
+          query: { 'paging.limit': 1 },
+        });
+        return { raw: res };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'wix');
       const c = await http.resolve();

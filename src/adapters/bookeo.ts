@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 
@@ -128,11 +128,29 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ query: { apiKey: c.apiKey, secretKey: c.secretKey } }),
   parseError: parseBookeoError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('bookeo', async () => {
+        const res = await http.request(c, { path: 'settings/business' });
+        return {
+          ...(res?.name ? { account: { name: String(res.name) } } : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'bookeo');
       // `participants` is required by the Booking schema and only the caller

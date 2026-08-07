@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, bookingsWithinRange, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, bookingsWithinRange, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange, endFromDuration } from '../time';
 import { slotsWithinRange } from '../availability';
@@ -178,6 +178,14 @@ export const acuity = defineAdapter<AcuityCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   // OAuth2 apps send a bearer token; single-account keys use HTTP Basic.
@@ -189,6 +197,21 @@ export const acuity = defineAdapter<AcuityCredentials>({
   }),
   parseError: parseAcuityError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('acuity', async () => {
+        const res = await http.request(c, { path: 'me' });
+        const name = [res?.firstName, res?.lastName].filter(Boolean).join(' ');
+        return {
+          account: {
+            ...(res?.id ? { id: String(res.id) } : {}),
+            ...(name ? { name } : {}),
+            ...(res?.email ? { email: String(res.email) } : {}),
+          },
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'acuity');
       const c = await http.resolve();

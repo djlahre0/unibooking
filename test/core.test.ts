@@ -4,7 +4,7 @@ import { UnibookingError } from '../src/errors';
 import { createRegistry } from '../src/registry';
 import { withRetry } from '../src/retry';
 import { collectAll, listAll } from '../src/paginate';
-import { defineAdapter } from '../src/adapter-kit';
+import { defineAdapter, probeConnection } from '../src/adapter-kit';
 import { google } from '../src/adapters/google';
 import { square } from '../src/adapters/square';
 
@@ -15,6 +15,8 @@ const CAPS: Capabilities = {
   webhooks: false,
   idempotency: false,
   customers: false,
+  serviceCatalog: false,
+  staffDirectory: false,
 };
 
 function fakeBooking(id: string): Booking {
@@ -38,6 +40,7 @@ function fakeClient(overrides: Partial<BookingClient>): BookingClient {
     cancelBooking: async () => {},
     listBookings: async () => ({ bookings: [] }),
     searchAvailability: async () => [],
+    checkConnection: async () => ({ ok: true, raw: {} }),
   };
   return { ...base, ...overrides };
 }
@@ -77,6 +80,7 @@ describe('defineAdapter: canonical guarantees applied to every adapter', () => {
         { start: '2026-07-20T14:00:00Z', end: '2026-07-20T15:00:00Z' },
         { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
       ],
+      checkConnection: async () => ({ ok: true, raw: {} }),
     }),
   });
 
@@ -254,5 +258,48 @@ describe('listAll', () => {
       if (seen.length > 10) break; // safety in case the guard fails
     }
     expect(seen).toEqual(['start', 'p1', 'p2']);
+  });
+});
+
+describe('probeConnection', () => {
+  it('reports a dead connection instead of throwing', async () => {
+    for (const code of ['AUTH', 'FORBIDDEN', 'NOT_FOUND'] as const) {
+      const status = await probeConnection('google', async () => {
+        throw new UnibookingError({ provider: 'google', code, message: 'nope' });
+      });
+      expect(status.ok).toBe(false);
+      expect(status.reason).toBe(code);
+      expect(status.message).toContain('nope');
+    }
+  });
+
+  it('rethrows faults that do not mean the credentials are bad', async () => {
+    // A network blip is not evidence a salon revoked access. Mapping it to
+    // ok:false would make consumers disconnect healthy integrations.
+    for (const code of ['NETWORK', 'TIMEOUT', 'UPSTREAM', 'RATE_LIMIT'] as const) {
+      await expect(
+        probeConnection('google', async () => {
+          throw new UnibookingError({ provider: 'google', code, message: 'blip' });
+        }),
+      ).rejects.toMatchObject({ code });
+    }
+  });
+
+  it('passes through account identity on success', async () => {
+    const status = await probeConnection('google', async () => ({
+      account: { email: 'salon@example.com' },
+      raw: { hello: 'world' },
+    }));
+    expect(status).toEqual({
+      ok: true,
+      account: { email: 'salon@example.com' },
+      raw: { hello: 'world' },
+    });
+  });
+
+  it('omits account entirely when the probe surfaces no identity', async () => {
+    const status = await probeConnection('setmore', async () => ({ raw: {} }));
+    expect(status.ok).toBe(true);
+    expect('account' in status).toBe(false);
   });
 });

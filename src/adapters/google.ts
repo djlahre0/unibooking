@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { freeSlots } from '../availability';
@@ -169,11 +169,29 @@ export const google = defineAdapter<GoogleCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    // Enumeration is not implemented yet; these flip to true per
+    // adapter as listServices/listStaff land.
+    serviceCatalog: false,
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   parseError: parseGoogleError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('google', async () => {
+        const res = await http.request(c, {
+          path: 'users/me/calendarList',
+          query: { maxResults: 1 },
+        });
+        const first = asArray(res?.items, 'google', 'calendarList.items')[0];
+        return {
+          ...(first?.id ? { account: { id: String(first.id) } } : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'google');
       const c = await http.resolve();

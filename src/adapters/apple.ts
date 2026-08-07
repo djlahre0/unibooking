@@ -1,5 +1,5 @@
 import type { Booking, BookingStatus, Customer } from '../types';
-import { defineAdapter, unsupported } from '../adapter-kit';
+import { defineAdapter, probeConnection, unsupported } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import {
@@ -155,10 +155,28 @@ export const apple = defineAdapter<AppleCredentials>({
     webhooks: false,
     idempotency: true,
     customers: false,
+    // Enumeration is not implemented yet; these flip to true per
+    // adapter as listServices/listStaff land.
+    serviceCatalog: false,
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` } }),
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('apple', async () => {
+        // CalDAV has no identity endpoint. A Depth:0 PROPFIND on the collection
+        // is the cheapest proof the credentials still open it.
+        const res = await http.request(c, {
+          method: 'PROPFIND',
+          path: c.calendarUrl,
+          headers: { depth: '0' },
+          parse: 'text',
+        });
+        return { account: { name: c.username }, raw: res };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'apple');
       const c = await http.resolve();

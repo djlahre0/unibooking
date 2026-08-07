@@ -79,6 +79,16 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     cancelBooking: (id, opts) => run(() => client.cancelBooking(id, opts), true),
     listBookings: (query) => run(() => client.listBookings(query), true),
     searchAvailability: (query) => run(() => client.searchAvailability(query), true),
+    // Read-only and safe to retry. Note this retries the transient faults the
+    // probe rethrows (network, 5xx, rate limit); a dead connection is returned,
+    // not thrown, so it is reported on the first attempt rather than retried.
+    checkConnection: () => run(() => client.checkConnection(), true),
+    ...(client.listServices
+      ? { listServices: (query) => run(() => client.listServices!(query), true) }
+      : {}),
+    ...(client.listStaff
+      ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
+      : {}),
     ...(client.customers
       ? {
           customers: {

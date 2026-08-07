@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
@@ -86,12 +86,30 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    // Enumeration is not implemented yet; these flip to true per
+    // adapter as listServices/listStaff land.
+    serviceCatalog: false,
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   requestIdHeader: 'request-id',
   parseError: parseGraphError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('microsoft_bookings', async () => {
+        const res = await http.request(c, { path: base(c) });
+        return {
+          account: {
+            ...(res?.id ? { id: String(res.id) } : {}),
+            ...(res?.displayName ? { name: String(res.displayName) } : {}),
+            ...(res?.email ? { email: String(res.email) } : {}),
+          },
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'microsoft_bookings');
       const c = await http.resolve();

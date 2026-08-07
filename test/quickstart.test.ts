@@ -143,7 +143,10 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       timeoutMs: 10_000,
     });
 
-    // capabilities — every one true for Square.
+    // capabilities — every booking capability is true for Square. The two
+    // enumeration flags are false until listServices/listStaff land; they are
+    // deliberately separate from `services`/`staff`, which describe what a
+    // booking can reference rather than what can be listed.
     expect(client.capabilities).toEqual({
       availability: true,
       staff: true,
@@ -151,6 +154,8 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       webhooks: true,
       idempotency: true,
       customers: true,
+      serviceCatalog: false,
+      staffDirectory: false,
     });
 
     const serviceId = 'SERVICE_VARIATION_ID';

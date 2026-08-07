@@ -4,6 +4,7 @@ import {
   asRecord,
   bookingsWithinRange,
   defineAdapter,
+  probeConnection,
   reqString,
   unsupported,
 } from '../adapter-kit';
@@ -255,11 +256,32 @@ export const phorest = defineAdapter<PhorestCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+
+    // Enumeration is not implemented yet; these flip to true per
+
+    // adapter as listServices/listStaff land.
+
+    serviceCatalog: false,
+
+    staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),
   parseError: parsePhorestError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('phorest', async () => {
+        const res = await http.request(c, { path: `business/${enc(c.businessId)}` });
+        return {
+          account: {
+            id: res?.businessId ? String(res.businessId) : c.businessId,
+            ...(res?.name ? { name: String(res.name) } : {}),
+          },
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'phorest');
       const c = await http.resolve();
