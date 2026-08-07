@@ -17,7 +17,8 @@ import { localToInstant } from '../tz';
  * Setmore (Booking API). Gated beta: a paid Setmore Pro account plus manual
  * access approval (email api@setmore.com). Bring your own bearer access token —
  * exchange your long-lived refresh token for one yourself via
- * `GET api/v1/o/oauth2/token?refreshToken=…` (access tokens last ~7 days).
+ * `GET api/v1/o/oauth2/token?refreshToken=…` (access tokens last 7200 seconds —
+ * two hours — so a long-lived process must refresh, not cache).
  *
  * ## Two API generations, and you need both
  *

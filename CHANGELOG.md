@@ -27,6 +27,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`google` sent a percent-encoded calendar id to `freeBusy`**, in both the
+  request body and the response lookup key. Every Google calendar id except
+  `primary` contains an `@` — the `c_…@group.calendar.google.com` form and the
+  plain-email form alike — so `searchAvailability` was broken for every real
+  calendar and failed as an opaque `UPSTREAM` about a missing `calendars` entry.
+  The id is now sent raw. The response key is additionally resolved
+  case-insensitively (Google lowercases email-form ids), falling back to a lone
+  entry, and the error now names the calendar that was requested.
+- **`square.createBooking` allowed a request Square always rejects.** Square
+  requires segment `team_member_id`, `service_variation_id` and
+  `service_variation_version`; all three were optional, so omitting one surfaced
+  as an opaque `400 MISSING_REQUIRED_PARAMETER`. They are now checked
+  client-side with an error naming the missing field. Supplying
+  `providerOptions.appointment_segments` still bypasses the check — that escape
+  hatch is unchanged. The README's Square examples were teaching the failing
+  form and now read `service_variation_version` off the availability slot's
+  `raw` segment, which is where Square already returns it.
+- **`setmore`** — corrected a doc comment claiming access tokens last ~7 days.
+  They last 7200 seconds (two hours), so a long-lived process must refresh
+  rather than cache.
+
 - **`ListBookingsQuery.status` was silently ignored by most providers.** The
   field is documented without caveat, but Google, Square, Mindbody, Setmore,
   Acuity and Vagaro had no status filter to forward it to and dropped it — a
