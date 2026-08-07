@@ -54,6 +54,13 @@ function requireService(serviceId: string | undefined): string {
   return serviceId;
 }
 
+/** Reject client-side what Square would reject with an opaque 400. */
+function requireCreateField(value: unknown, message: string): void {
+  if (value === undefined || value === null || value === '') {
+    throw new UnibookingError({ provider: 'square', code: 'INVALID_INPUT', message });
+  }
+}
+
 function mapStatus(s: unknown): BookingStatus {
   switch (s) {
     case 'ACCEPTED':
@@ -189,6 +196,29 @@ export const square = defineAdapter<SquareCredentials>({
       // body. The rest of providerOptions still merges onto the booking (a caller
       // can also override `appointment_segments` wholesale that way).
       const { service_variation_version, ...bookingOptions } = input.providerOptions ?? {};
+      // Square requires location_id, start_at, and segment team_member_id +
+      // service_variation_id + service_variation_version. Catching the omission
+      // here turns an opaque upstream MISSING_REQUIRED_PARAMETER into an error
+      // that names the field.
+      //
+      // A caller supplying `appointment_segments` has replaced the segment
+      // wholesale — a documented escape hatch — so validating the fields they
+      // deliberately overrode would break working code.
+      if (bookingOptions.appointment_segments === undefined) {
+        requireCreateField(
+          input.serviceId,
+          'Square createBooking requires a serviceId (service_variation_id)',
+        );
+        requireCreateField(
+          input.staffId,
+          'Square createBooking requires a staffId (team_member_id)',
+        );
+        requireCreateField(
+          service_variation_version,
+          'Square createBooking requires providerOptions.service_variation_version — ' +
+            "read it from a searchAvailability slot's raw.appointment_segments[0].service_variation_version",
+        );
+      }
       const res = await http.request(c, {
         method: 'POST',
         path: 'bookings',

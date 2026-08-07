@@ -328,10 +328,23 @@ const booking = await client.createBooking({
         start: "2026-07-20T09:00:00-07:00",
         end: "2026-07-20T09:45:00-07:00",
     },
+    staffId: "TM_...",
+    serviceId: "SVC_VARIATION_...",
+    // Square pins the catalog version on every booking. `searchAvailability`
+    // hands it to you on each slot — see "Create a Booking" below.
+    providerOptions: { service_variation_version: 1621345678900 },
 });
 
 console.log(booking.id);
 ```
+
+> **Note**
+>
+> Square requires `staffId`, `serviceId` and `service_variation_version` on every
+> create; omitting any is a `400`. unibooking checks them client-side and names
+> the missing one rather than letting the provider answer with
+> `MISSING_REQUIRED_PARAMETER`. Providers with fewer requirements (Google,
+> Outlook, CalDAV) need only `title` and `range`.
 
 Now replace
 
@@ -595,6 +608,37 @@ const booking = await client.createBooking({
     },
 
     idempotencyKey: crypto.randomUUID(),
+});
+```
+
+On Square, the slot you are booking already carries the catalog version the
+create needs, so read it straight back off `slot.raw` instead of making a
+separate catalog call:
+
+```ts
+const segment = (slot.raw as any).appointment_segments[0];
+
+const booking = await client.createBooking({
+    title: "Haircut",
+
+    serviceId,
+
+    staffId: slot.staffId,
+
+    customer: {
+        id: customerId,
+    },
+
+    range: {
+        start: slot.start,
+        end: slot.end,
+    },
+
+    idempotencyKey: crypto.randomUUID(),
+
+    providerOptions: {
+        service_variation_version: segment.service_variation_version,
+    },
 });
 ```
 

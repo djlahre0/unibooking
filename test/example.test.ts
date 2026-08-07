@@ -48,6 +48,9 @@ describe('end-to-end (mocked)', () => {
     const booking = await client.createBooking({
       title: 'Cut',
       range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+      providerOptions: { service_variation_version: 1 },
     });
     expect(booking.range.end).toBe('2026-07-20T22:30:00Z');
     expect(Date.parse(booking.range.end)).toBeGreaterThan(Date.parse(booking.range.start));
@@ -77,6 +80,9 @@ describe('end-to-end (mocked)', () => {
       .createBooking({
         title: 'x',
         range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' },
+        staffId: 'tm1',
+        serviceId: 'sv1',
+        providerOptions: { service_variation_version: 1 },
       })
       .catch((e) => e);
     expect(isUnibookingError(err) && err.code).toBe('CONFLICT');
