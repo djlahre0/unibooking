@@ -157,6 +157,8 @@ export const apple = defineAdapter<AppleCredentials>({
     customers: false,
     serviceCatalog: false,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` } }),

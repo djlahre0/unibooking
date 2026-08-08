@@ -89,6 +89,30 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     ...(client.listStaff
       ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
       : {}),
+    // Creates are NOT auto-retried: neither provider write takes an idempotency
+    // key from the caller, so a network retry after a create that actually
+    // succeeded would duplicate the service or staff member. Same reasoning as
+    // createBooking without an idempotencyKey, and as customers.findOrCreate.
+    ...(client.createService
+      ? { createService: (input) => run(() => client.createService!(input), false) }
+      : {}),
+    ...(client.createStaff
+      ? { createStaff: (input) => run(() => client.createStaff!(input), false) }
+      : {}),
+    // Updates are idempotent -- the same body applied twice lands the same
+    // state -- so they are safe to retry.
+    ...(client.updateService
+      ? { updateService: (id, input) => run(() => client.updateService!(id, input), true) }
+      : {}),
+    ...(client.setServiceActive
+      ? { setServiceActive: (id, active) => run(() => client.setServiceActive!(id, active), true) }
+      : {}),
+    ...(client.updateStaff
+      ? { updateStaff: (id, input) => run(() => client.updateStaff!(id, input), true) }
+      : {}),
+    ...(client.setStaffActive
+      ? { setStaffActive: (id, active) => run(() => client.setStaffActive!(id, active), true) }
+      : {}),
     ...(client.customers
       ? {
           customers: {

@@ -399,6 +399,8 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     customers: true,
     serviceCatalog: true,
     staffDirectory: true,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),

@@ -25,6 +25,12 @@ export interface AdapterMethods {
   checkConnection: BookingClient['checkConnection'];
   listServices?: NonNullable<BookingClient['listServices']>;
   listStaff?: NonNullable<BookingClient['listStaff']>;
+  createService?: NonNullable<BookingClient['createService']>;
+  updateService?: NonNullable<BookingClient['updateService']>;
+  setServiceActive?: NonNullable<BookingClient['setServiceActive']>;
+  createStaff?: NonNullable<BookingClient['createStaff']>;
+  updateStaff?: NonNullable<BookingClient['updateStaff']>;
+  setStaffActive?: NonNullable<BookingClient['setStaffActive']>;
   customers?: CustomerOps;
 }
 
@@ -83,6 +89,12 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       checkConnection: m.checkConnection,
       ...(m.listServices ? { listServices: m.listServices } : {}),
       ...(m.listStaff ? { listStaff: m.listStaff } : {}),
+      ...(m.createService ? { createService: m.createService } : {}),
+      ...(m.updateService ? { updateService: m.updateService } : {}),
+      ...(m.setServiceActive ? { setServiceActive: m.setServiceActive } : {}),
+      ...(m.createStaff ? { createStaff: m.createStaff } : {}),
+      ...(m.updateStaff ? { updateStaff: m.updateStaff } : {}),
+      ...(m.setStaffActive ? { setStaffActive: m.setStaffActive } : {}),
       ...(m.customers ? { customers: m.customers } : {}),
     };
   };

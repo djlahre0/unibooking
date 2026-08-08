@@ -46,6 +46,12 @@ export interface Capabilities {
   serviceCatalog: boolean;
   /** `listStaff()` is available. Distinct from `staff` for the same reason. */
   staffDirectory: boolean;
+  /** `createService()` / `updateService()` / `setServiceActive()` are available.
+   *  Far rarer than reading — most providers' catalogs are read-only to
+   *  third parties. */
+  serviceCatalogWrite: boolean;
+  /** `createStaff()` / `updateStaff()` / `setStaffActive()` are available. */
+  staffDirectoryWrite: boolean;
 }
 
 /** An absolute time span. `start`/`end` are RFC3339 timestamps **with offset**
@@ -221,6 +227,39 @@ export interface ListStaffResult {
   nextPageToken?: string;
 }
 
+export interface CreateServiceInput {
+  name: string;
+  description?: string;
+  durationMinutes?: number;
+  price?: Money;
+  /** Escape hatch for provider-specific required fields. */
+  providerOptions?: Record<string, unknown>;
+}
+
+/** Partial update. Omitted fields are left untouched — an adapter must never
+ *  clear a field the caller did not mention. */
+export interface UpdateServiceInput {
+  name?: string;
+  description?: string;
+  durationMinutes?: number;
+  price?: Money;
+  providerOptions?: Record<string, unknown>;
+}
+
+export interface CreateStaffInput {
+  name: string;
+  email?: string;
+  phone?: string;
+  providerOptions?: Record<string, unknown>;
+}
+
+export interface UpdateStaffInput {
+  name?: string;
+  email?: string;
+  phone?: string;
+  providerOptions?: Record<string, unknown>;
+}
+
 /** The result of a liveness probe. A dead connection is the expected answer to
  *  this question, so it is reported rather than thrown. */
 export interface ConnectionStatus {
@@ -288,6 +327,27 @@ export interface BookingClient {
   listServices?(query?: ListServicesQuery): Promise<ListServicesResult>;
   /** Present when `capabilities.staffDirectory` is true. */
   listStaff?(query?: ListStaffQuery): Promise<ListStaffResult>;
+
+  // --- Writes. Present when the matching `*Write` capability is true. --------
+  //
+  // There is deliberately no `deleteService` / `deleteStaff`. Deletion is not a
+  // portable concept here: Square has no team-member delete at all (only
+  // `status: INACTIVE`), and its catalog delete CASCADES — removing an item
+  // removes every variation under it, and `Service.id` *is* a variation id. A
+  // canonical `delete` would therefore mean something different, and something
+  // irreversible, on each provider. `setServiceActive(id, false)` expresses the
+  // thing callers actually want: make it unbookable, keep the history.
+
+  createService?(input: CreateServiceInput): Promise<Service>;
+  updateService?(id: string, input: UpdateServiceInput): Promise<Service>;
+  /** Make a service bookable or unbookable without destroying it. */
+  setServiceActive?(id: string, active: boolean): Promise<Service>;
+
+  createStaff?(input: CreateStaffInput): Promise<Staff>;
+  updateStaff?(id: string, input: UpdateStaffInput): Promise<Staff>;
+  /** Activate or deactivate a staff member without destroying them. */
+  setStaffActive?(id: string, active: boolean): Promise<Staff>;
+
   customers?: CustomerOps;
 }
 

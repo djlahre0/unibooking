@@ -141,6 +141,8 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     customers: false,
     serviceCatalog: true,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ query: { apiKey: c.apiKey, secretKey: c.secretKey } }),

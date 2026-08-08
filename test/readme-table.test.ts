@@ -60,6 +60,8 @@ const COLUMNS: Array<[keyof Capabilities, number]> = [
   ['webhooks', 8],
   ['serviceCatalog', 9],
   ['staffDirectory', 10],
+  ['serviceCatalogWrite', 11],
+  ['staffDirectoryWrite', 12],
 ];
 
 const YES = '✅';

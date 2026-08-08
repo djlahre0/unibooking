@@ -167,6 +167,73 @@ function durationFromMs(ms: unknown): number | undefined {
 }
 
 /**
+ * Read the ITEM that owns a service variation, so a write can be applied as a
+ * read-modify-write against the current version.
+ *
+ * `Service.id` is a variation id, but a variation's name and description live on
+ * the parent ITEM, and Square's upsert needs the object's `version` for
+ * optimistic concurrency. So an update costs two reads: the variation (to learn
+ * `item_id`) and the item itself.
+ */
+async function readServiceItem(
+  http: HttpContext<SquareCredentials>,
+  c: SquareCredentials,
+  variationId: string,
+): Promise<{ item: Record<string, any>; variation: Record<string, any> }> {
+  const varRes = await http.request(c, { path: `catalog/object/${enc(variationId)}` });
+  const variation = asRecord(varRes?.object, 'square', 'catalog.object');
+  const itemId = variation.item_variation_data?.item_id;
+  if (typeof itemId !== 'string' || !itemId) {
+    throw new UnibookingError({
+      provider: 'square',
+      code: 'UPSTREAM',
+      message: `catalog object ${variationId} is not a service variation (no item_variation_data.item_id)`,
+    });
+  }
+  const itemRes = await http.request(c, { path: `catalog/object/${enc(itemId)}` });
+  return { item: asRecord(itemRes?.object, 'square', 'catalog.object'), variation };
+}
+
+/** Locate a variation inside its parent item's `variations` array. */
+function findVariation(item: Record<string, any>, variationId: string): Record<string, any> {
+  const list = Array.isArray(item.item_data?.variations) ? item.item_data.variations : [];
+  const found = list.find((v: any) => v?.id === variationId);
+  if (!found) {
+    throw new UnibookingError({
+      provider: 'square',
+      code: 'UPSTREAM',
+      message: `variation ${variationId} is missing from its own parent item`,
+    });
+  }
+  return found;
+}
+
+/** Upsert an ITEM and map the named variation back to a canonical Service. */
+async function upsertItem(
+  http: HttpContext<SquareCredentials>,
+  c: SquareCredentials,
+  item: Record<string, any>,
+  variationId: string | undefined,
+): Promise<Service> {
+  const res = await http.request(c, {
+    method: 'POST',
+    path: 'catalog/object',
+    body: { idempotency_key: globalThis.crypto.randomUUID(), object: item },
+  });
+  const saved = asRecord(res?.object, 'square', 'catalog.object');
+  const services = itemToServices(saved);
+  const match = variationId ? services.find((s) => s.id === variationId) : services[0];
+  if (!match) {
+    throw new UnibookingError({
+      provider: 'square',
+      code: 'UPSTREAM',
+      message: 'upsert returned an item with no usable service variation',
+    });
+  }
+  return match;
+}
+
+/**
  * Flatten one catalog ITEM into one `Service` per ITEM_VARIATION.
  *
  * This is the round-trip invariant in action: Square's booking API takes the
@@ -240,6 +307,8 @@ export const square = defineAdapter<SquareCredentials>({
     customers: true,
     serviceCatalog: true,
     staffDirectory: true,
+    serviceCatalogWrite: true,
+    staffDirectoryWrite: true,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -525,6 +594,143 @@ export const square = defineAdapter<SquareCredentials>({
         staff,
         ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
       };
+    },
+
+    async createService(input) {
+      const c = await http.resolve();
+      // A bookable Square service is an ITEM whose product_type is
+      // APPOINTMENTS_SERVICE, carrying at least one variation. Both objects need
+      // client-side placeholder ids prefixed with '#'; Square swaps them for
+      // real ids in the response.
+      const item = {
+        type: 'ITEM',
+        id: '#service',
+        item_data: {
+          name: input.name,
+          product_type: 'APPOINTMENTS_SERVICE',
+          ...(input.description ? { description: input.description } : {}),
+          variations: [
+            {
+              type: 'ITEM_VARIATION',
+              id: '#variation',
+              item_variation_data: {
+                // "Regular" is Square's default variation name, and
+                // `itemToServices` deliberately does not append it to the
+                // service name — so a single-variation service reads cleanly.
+                name: 'Regular',
+                pricing_type: input.price ? 'FIXED_PRICING' : 'VARIABLE_PRICING',
+                available_for_booking: true,
+                ...(input.price
+                  ? {
+                      price_money: {
+                        amount: input.price.amount,
+                        currency: input.price.currency,
+                      },
+                    }
+                  : {}),
+                ...(input.durationMinutes !== undefined
+                  ? { service_duration: input.durationMinutes * 60_000 }
+                  : {}),
+              },
+            },
+          ],
+        },
+        ...input.providerOptions,
+      };
+      return upsertItem(http, c, item, undefined);
+    },
+
+    async updateService(id, input) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      const variation = findVariation(item, id);
+      const vd = variation.item_variation_data ?? {};
+
+      // Partial update: only touch what the caller named. Square's upsert
+      // REPLACES the object, so anything dropped here is genuinely erased --
+      // which is why this is a read-modify-write rather than a bare PUT.
+      if (input.name !== undefined) item.item_data.name = input.name;
+      if (input.description !== undefined) item.item_data.description = input.description;
+      if (input.durationMinutes !== undefined) {
+        vd.service_duration = input.durationMinutes * 60_000;
+      }
+      if (input.price !== undefined) {
+        vd.pricing_type = 'FIXED_PRICING';
+        vd.price_money = { amount: input.price.amount, currency: input.price.currency };
+      }
+      variation.item_variation_data = vd;
+      Object.assign(item, input.providerOptions ?? {});
+      return upsertItem(http, c, item, id);
+    },
+
+    async setServiceActive(id, active) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      const variation = findVariation(item, id);
+      // `available_for_booking` is the honest lever: it makes the variation
+      // unbookable while leaving it, its history and its past bookings intact.
+      // Square's actual delete cascades from the item down through every
+      // variation, which is why no `deleteService` exists.
+      variation.item_variation_data = {
+        ...(variation.item_variation_data ?? {}),
+        available_for_booking: active,
+      };
+      return upsertItem(http, c, item, id);
+    },
+
+    async createStaff(input) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        path: 'team-members',
+        body: {
+          idempotency_key: globalThis.crypto.randomUUID(),
+          team_member: {
+            status: 'ACTIVE',
+            ...splitName(input.name),
+            ...(input.email ? { email_address: input.email } : {}),
+            ...(input.phone ? { phone_number: input.phone } : {}),
+            // Without an explicit assignment the member is bookable nowhere,
+            // which would make them invisible to listStaff's location filter.
+            assigned_locations: {
+              assignment_type: 'EXPLICIT_LOCATIONS',
+              location_ids: [c.locationId],
+            },
+            ...input.providerOptions,
+          },
+        },
+      });
+      return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
+    },
+
+    async updateStaff(id, input) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'PUT',
+        path: `team-members/${enc(id)}`,
+        body: {
+          team_member: {
+            ...(input.name ? splitName(input.name) : {}),
+            ...(input.email ? { email_address: input.email } : {}),
+            ...(input.phone ? { phone_number: input.phone } : {}),
+            ...input.providerOptions,
+          },
+        },
+      });
+      return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
+    },
+
+    async setStaffActive(id, active) {
+      const c = await http.resolve();
+      // Square has NO team-member delete. Deactivation is the only removal it
+      // offers, which is exactly why the canonical surface is setStaffActive
+      // rather than a delete that would be a lie here.
+      const res = await http.request(c, {
+        method: 'PUT',
+        path: `team-members/${enc(id)}`,
+        body: { team_member: { status: active ? 'ACTIVE' : 'INACTIVE' } },
+      });
+      return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
     },
 
     customers: {

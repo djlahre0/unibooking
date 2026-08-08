@@ -22,6 +22,8 @@ export const mangomint = defineAdapter<MangomintCredentials>({
     customers: false,
     serviceCatalog: false,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: 'https://api.mangomint.com/',
   auth: () => ({}),

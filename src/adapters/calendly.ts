@@ -188,6 +188,8 @@ export const calendly = defineAdapter<CalendlyCredentials>({
     customers: false,
     serviceCatalog: true,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.token}` } }),

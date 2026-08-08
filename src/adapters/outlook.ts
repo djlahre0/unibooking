@@ -107,6 +107,8 @@ export const outlook = defineAdapter<OutlookCredentials>({
     customers: false,
     serviceCatalog: false,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),

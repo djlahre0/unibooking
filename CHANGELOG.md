@@ -51,6 +51,30 @@ All notable changes to this project are documented here. The format is based on
   when the provider supplies no currency (pass `currency` in Setmore's
   credentials to populate it).
 
+- **Catalog writes on Square** — `createService`, `updateService`,
+  `setServiceActive`, `createStaff`, `updateStaff`, `setStaffActive`, behind the
+  new `serviceCatalogWrite` / `staffDirectoryWrite` flags. Square is the only
+  provider with them; most catalogs are read-only to third parties.
+
+  Updates are partial: omitted fields are left alone. On Square that requires a
+  read-modify-write, because its upsert *replaces* the object — anything not
+  sent back is erased.
+
+  **There is deliberately no `deleteService` or `deleteStaff.`** Square has no
+  team-member delete at all (only `status: INACTIVE`), and its catalog delete
+  **cascades** — removing an item removes every variation under it, and
+  `Service.id` *is* a variation id. A canonical `delete` would mean something
+  different, and irreversible, per provider. `setServiceActive(id, false)`
+  expresses the intent without destroying booking history.
+
+  Creates are **not** auto-retried by `withRetry` — neither Square write accepts
+  a caller-supplied idempotency key, so a retry after a create that actually
+  succeeded would duplicate the record. Updates and the active toggles are
+  idempotent and are retried.
+
+  Note these need `ITEMS_WRITE` / `EMPLOYEES_WRITE`, which
+  `unibooking/oauth/square` does not request by default.
+
 - **`checkConnection()` on every adapter.** Answers "do these credentials still
   work?" using values you loaded from your own database, and **does not throw**
   when the answer is no — a dead connection is the expected result, returned as

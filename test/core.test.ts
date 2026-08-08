@@ -17,6 +17,8 @@ const CAPS: Capabilities = {
   customers: false,
   serviceCatalog: false,
   staffDirectory: false,
+  serviceCatalogWrite: false,
+  staffDirectoryWrite: false,
 };
 
 function fakeBooking(id: string): Booking {
