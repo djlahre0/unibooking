@@ -8,6 +8,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **OAuth connect helpers under `unibooking/oauth`** — **server-only**, and
+  stateless like everything else here: `authorizationUrl()` → `exchangeCode()`
+  → `refresh()` return token data and store nothing. `withAutoRefresh()` bridges
+  stored tokens into `CredsInput`, refreshing just before expiry and handing the
+  new tokens to an `onRefresh` callback for you to persist. It persists *before*
+  returning credentials — a failed write propagates rather than proceeding as
+  though the token were saved.
+
+  Modules: `google`, `microsoft` (`outlookOAuth` + `microsoftBookingsOAuth`),
+  `square`, `acuity`, `calendly`, plus two partials — `setmore` (`refresh` only;
+  no authorization-code flow exists) and `wix` (no `authorizationUrl`; the grant
+  keys on an install-time `instanceId`). Apple/CalDAV, Bookeo, Boulevard,
+  Mindbody, Phorest and Zenoti get no module because they do not use OAuth2.
+  Vagaro is excluded pending confirmation of its grant type.
+
+  Opt into PKCE with `authorizationUrl({ pkce: true })`.
+
+  These take a **client secret**, so they ship as separate entry points that no
+  adapter imports — bundling an adapter cannot pull secrets-handling code into a
+  browser build.
+
+- **`listServices()` and `listStaff()`** on Setmore, Square and Microsoft
+  Bookings, behind the new `serviceCatalog` / `staffDirectory` flags. `Service`
+  carries name, description, duration, price, category and active state;
+  `Staff` carries name, email, phone and active state.
+
+  `Service.id` and `Staff.id` are guaranteed to be the values `createBooking`
+  accepts — on Square that means catalog items are flattened into one service
+  **per variation**, since its booking API takes the variation id. Prices are
+  integer minor units with an ISO-4217 currency, omitted rather than guessed
+  when the provider supplies no currency (pass `currency` in Setmore's
+  credentials to populate it).
+
 - **`checkConnection()` on every adapter.** Answers "do these credentials still
   work?" using values you loaded from your own database, and **does not throw**
   when the answer is no — a dead connection is the expected result, returned as
