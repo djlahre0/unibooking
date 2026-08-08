@@ -1,0 +1,22 @@
+# Normalise line endings to LF in the repository AND on checkout, on every
+# platform.
+#
+# Without this, a Windows clone with `core.autocrlf=true` gets CRLF on disk while
+# Prettier's `endOfLine` default expects LF. The result is that
+# `npm run format:check` fails locally on files nobody has touched — and passes
+# in CI on Linux — so `prepublishOnly` is red on a developer machine and green on
+# the build server. `eol=lf` overrides `core.autocrlf`, so this holds regardless
+# of each contributor's git config.
+* text=auto eol=lf
+
+# Binaries must never be normalised — line-ending translation corrupts them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.tgz binary
