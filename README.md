@@ -1193,8 +1193,10 @@ unibooking currently supports the following providers.
 > **Adapter gaps** — the provider supports this, but unibooking does not model it
 > yet:
 >
-> - **Service enumeration** is missing only on Vagaro, whose API is gated behind
->   manual approval — its request shapes could not be confirmed. Google, Outlook
+> - **Service enumeration** is missing only on Vagaro, whose API reference sits
+>   behind a login wall — the auth scheme and endpoint shapes could not be
+>   confirmed, and an enumeration returning ids `createBooking` rejects is worse
+>   than none. Google, Outlook
 >   and Apple/CalDAV are plain calendars with no service or staff concept at all.
 > - **Staff enumeration** is additionally absent on Bookeo and Calendly (neither
 >   models staff in this adapter) and on Wix, whose staff are "resources" behind
