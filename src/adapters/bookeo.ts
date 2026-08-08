@@ -1,4 +1,4 @@
-import type { AvailabilitySlot, Booking } from '../types';
+import type { AvailabilitySlot, Booking, Service } from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
@@ -73,6 +73,17 @@ function parseBookeoError(
   };
 }
 
+/** Bookeo expresses product durations as ISO-8601 (`PT1H30M`). */
+function minutesFromIso8601(v: unknown): number | undefined {
+  if (typeof v !== 'string') return undefined;
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?)?$/.exec(v.trim());
+  if (!m) return undefined;
+  const [, d, h, min, sec] = m;
+  const total =
+    Number(d ?? 0) * 1440 + Number(h ?? 0) * 60 + Number(min ?? 0) + Number(sec ?? 0) / 60;
+  return total > 0 ? total : undefined;
+}
+
 function requireProduct(serviceId: string | undefined): string {
   if (!serviceId) {
     throw new UnibookingError({
@@ -128,13 +139,35 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-    serviceCatalog: false,
+    serviceCatalog: true,
     staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ query: { apiKey: c.apiKey, secretKey: c.secretKey } }),
   parseError: parseBookeoError,
   build: (http) => ({
+    async listServices() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: 'settings/products' });
+      const services = asArray(res?.data, 'bookeo', 'settings.products').map((raw): Service => {
+        const p = asRecord(raw, 'bookeo', 'product');
+        return {
+          // `productId` is exactly what createBooking sends.
+          id: reqString(String(p.productId ?? ''), 'bookeo', 'product.productId'),
+          name: reqString(String(p.name ?? ''), 'bookeo', 'product.name'),
+          ...(p.description ? { description: String(p.description) } : {}),
+          ...(minutesFromIso8601(p.duration) !== undefined
+            ? { durationMinutes: minutesFromIso8601(p.duration)! }
+            : {}),
+          // Bookeo prices live in a `prices` array of tiers keyed by people
+          // category, so there is no single price to report here.
+          active: true,
+          raw: p,
+        };
+      });
+      return { services };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('bookeo', async () => {

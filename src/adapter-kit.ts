@@ -188,6 +188,20 @@ export function asArray(v: unknown, provider: ProviderId, ctx: string): any[] {
   });
 }
 
+/** Decimal price (`"45.00"`, `45.5`) → integer minor units.
+ *
+ *  Several providers return prices as decimal strings or floats. Rounds rather
+ *  than truncates so `"45.005"` cannot silently lose a cent downward, and
+ *  returns undefined for anything unparseable or negative rather than emitting a
+ *  bogus amount. The currency is always the caller's problem — a `Money` without
+ *  one is unusable, so `price` is omitted rather than guessed. */
+export function decimalToMinorUnits(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.round(n * 100);
+}
+
 export function reqString(v: unknown, provider: ProviderId, ctx: string): string {
   if (typeof v === 'string' && v.length > 0) return v;
   throw new UnibookingError({

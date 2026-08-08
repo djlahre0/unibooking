@@ -1,8 +1,9 @@
-import type { AvailabilitySlot, Booking } from '../types';
+import type { AvailabilitySlot, Booking, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
   bookingsWithinRange,
+  decimalToMinorUnits,
   defineAdapter,
   probeConnection,
   reqString,
@@ -16,11 +17,20 @@ import { slotsWithinRange } from '../availability';
  * for multi-account OAuth2 apps, a bearer access token. "Calendars" act as
  * staff/resources; "appointment types" are services.
  */
-export type AcuityCredentials =
-  /** HTTP Basic: your account's user id + API key. */
-  | { userId: string; apiKey: string }
-  /** OAuth2 bearer, for apps acting on behalf of a connected account. */
-  | { accessToken: string };
+export type AcuityCredentials = (
+  | /** HTTP Basic: your account's user id + API key. */
+    { userId: string; apiKey: string }
+    /** OAuth2 bearer, for apps acting on behalf of a connected account. */
+  | { accessToken: string }
+) & {
+  /** ISO-4217 code for the account's currency, e.g. `'USD'`.
+   *
+   *  Acuity returns a bare `price` on appointment types with no currency
+   *  alongside it, and a `Money` without a currency is not usable. Supply this
+   *  and `listServices` fills in `Service.price`; omit it and `price` is left
+   *  undefined rather than guessed, with the raw value still in `raw`. */
+  currency?: string;
+};
 
 const BASE = 'https://acuityscheduling.com/api/v1/';
 
@@ -185,8 +195,8 @@ export const acuity = defineAdapter<AcuityCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   // OAuth2 apps send a bearer token; single-account keys use HTTP Basic.
@@ -198,6 +208,50 @@ export const acuity = defineAdapter<AcuityCredentials>({
   }),
   parseError: parseAcuityError,
   build: (http) => ({
+    async listServices() {
+      const c = await http.resolve();
+      // Acuity returns a bare array, not an envelope, and takes no paging.
+      const res = await http.request(c, { path: 'appointment-types' });
+      const services = asArray(res, 'acuity', 'appointment-types').map((raw): Service => {
+        const t = asRecord(raw, 'acuity', 'appointmentType');
+        const amount = decimalToMinorUnits(t.price);
+        const duration = Number(t.duration);
+        return {
+          id: reqString(String(t.id ?? ''), 'acuity', 'appointmentType.id'),
+          name: reqString(String(t.name ?? ''), 'acuity', 'appointmentType.name'),
+          ...(t.description ? { description: String(t.description) } : {}),
+          ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+          ...(amount !== undefined && c.currency
+            ? { price: { amount, currency: c.currency } }
+            : {}),
+          ...(t.category ? { categoryName: String(t.category) } : {}),
+          // Acuity's own flag; an inactive type cannot be booked.
+          active: t.active !== false,
+          raw: t,
+        };
+      });
+      return { services };
+    },
+
+    async listStaff() {
+      const c = await http.resolve();
+      // Acuity models staff as calendars, and `staffId` IS the calendarID that
+      // createBooking sends — so the id round-trips.
+      const res = await http.request(c, { path: 'calendars' });
+      const staff = asArray(res, 'acuity', 'calendars').map((raw): Staff => {
+        const k = asRecord(raw, 'acuity', 'calendar');
+        return {
+          id: reqString(String(k.id ?? ''), 'acuity', 'calendar.id'),
+          name: reqString(String(k.name ?? ''), 'acuity', 'calendar.name'),
+          ...(k.email ? { email: String(k.email) } : {}),
+          // Calendars carry no active/inactive flag.
+          active: true,
+          raw: k,
+        };
+      });
+      return { staff };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('acuity', async () => {

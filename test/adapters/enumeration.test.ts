@@ -3,6 +3,10 @@ import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } 
 import { setmore } from '../../src/adapters/setmore';
 import { square } from '../../src/adapters/square';
 import { microsoftBookings } from '../../src/adapters/microsoft_bookings';
+import { acuity } from '../../src/adapters/acuity';
+import { zenoti } from '../../src/adapters/zenoti';
+import { phorest } from '../../src/adapters/phorest';
+import { bookeo } from '../../src/adapters/bookeo';
 import { assertCanonicalService, assertCanonicalStaff } from '../conformance';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -350,5 +354,197 @@ describe('enumeration', () => {
         active: true,
       });
     });
+  });
+});
+
+// --- Spec-derived providers ------------------------------------------------
+// These mappings come from published API references, not live captures. See the
+// verification-status note in the README.
+
+describe('enumeration (spec-derived)', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('acuity maps appointment types and calendars', async () => {
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => pathname(p) === '/api/v1/appointment-types', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify([
+          {
+            id: 1,
+            name: 'Gel Manicure',
+            description: 'Gel polish',
+            duration: 45,
+            price: '45.00',
+            category: 'Nails',
+            active: true,
+          },
+          { id: 2, name: 'Retired', duration: 30, price: '10.00', active: false },
+        ]),
+        { headers: JSON_HEADERS },
+      );
+
+    const { services } = await acuity({
+      userId: 'u',
+      apiKey: 'k',
+      currency: 'USD',
+    }).listServices!();
+
+    services.forEach(assertCanonicalService);
+    expect(services[0]).toMatchObject({
+      id: '1',
+      name: 'Gel Manicure',
+      durationMinutes: 45,
+      categoryName: 'Nails',
+      active: true,
+    });
+    expect(services[0]!.price).toEqual({ amount: 4500, currency: 'USD' });
+    // Acuity has a real active flag, so an inactive type is reported, not hidden.
+    expect(services[1]!.active).toBe(false);
+  });
+
+  it('acuity omits price when no currency is configured', async () => {
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => pathname(p) === '/api/v1/appointment-types', method: 'GET' })
+      .reply(200, JSON.stringify([{ id: 1, name: 'X', duration: 30, price: '45.00' }]), {
+        headers: JSON_HEADERS,
+      });
+    const { services } = await acuity({ userId: 'u', apiKey: 'k' }).listServices!();
+    expect(services[0]!.price).toBeUndefined();
+  });
+
+  it('acuity staff are calendars, whose id is what createBooking sends', async () => {
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => pathname(p) === '/api/v1/calendars', method: 'GET' })
+      .reply(200, JSON.stringify([{ id: 77, name: 'Jane', email: 'jane@example.com' }]), {
+        headers: JSON_HEADERS,
+      });
+    const { staff } = await acuity({ userId: 'u', apiKey: 'k' }).listStaff!();
+    assertCanonicalStaff(staff[0]!);
+    // createBooking sends staffId as calendarID, so this must be the calendar id.
+    expect(staff[0]).toMatchObject({ id: '77', name: 'Jane', email: 'jane@example.com' });
+  });
+
+  it('zenoti maps services and therapists for the configured center', async () => {
+    const pool = agent.get('https://api.zenoti.com');
+    pool.intercept({ path: (p) => pathname(p) === '/v1/centers/C1/services', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        services: [
+          {
+            id: 'S1',
+            name: 'Facial',
+            description: 'Deep clean',
+            duration: 60,
+            category: { id: 'CAT', name: 'Skin' },
+            is_active: true,
+          },
+        ],
+      }),
+      { headers: JSON_HEADERS },
+    );
+    pool
+      .intercept({ path: (p) => pathname(p) === '/v1/centers/C1/therapists', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({
+          therapists: [
+            {
+              id: 'T1',
+              personal_info: { first_name: 'Ann', last_name: 'Lee', email: 'ann@example.com' },
+            },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const client = zenoti({ apiKey: 'k', centerId: 'C1' });
+    const { services } = await client.listServices!();
+    const { staff } = await client.listStaff!();
+
+    assertCanonicalService(services[0]!);
+    assertCanonicalStaff(staff[0]!);
+    expect(services[0]).toMatchObject({
+      id: 'S1',
+      name: 'Facial',
+      durationMinutes: 60,
+      categoryName: 'Skin',
+    });
+    expect(staff[0]).toMatchObject({ id: 'T1', name: 'Ann Lee', email: 'ann@example.com' });
+  });
+
+  it('phorest unwraps HAL _embedded for services and staff', async () => {
+    const pool = agent.get('https://platform.phorest.com');
+    const root = '/third-party-api-server/api/business/B1/branch/BR1';
+    pool.intercept({ path: (p) => pathname(p) === root + '/service', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        _embedded: [{ serviceId: 'SV1', name: 'Cut', price: 30.5, duration: 45 }],
+      }),
+      { headers: JSON_HEADERS },
+    );
+    pool.intercept({ path: (p) => pathname(p) === root + '/staff', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        _embedded: [{ staffId: 'ST1', firstName: 'Bo', lastName: 'Ng', archived: false }],
+      }),
+      { headers: JSON_HEADERS },
+    );
+
+    const client = phorest({
+      username: 'global/a@b.com',
+      password: 'p',
+      businessId: 'B1',
+      branchId: 'BR1',
+      currency: 'EUR',
+    });
+    const { services } = await client.listServices!();
+    const { staff } = await client.listStaff!();
+
+    assertCanonicalService(services[0]!);
+    assertCanonicalStaff(staff[0]!);
+    expect(services[0]!.price).toEqual({ amount: 3050, currency: 'EUR' });
+    expect(staff[0]).toMatchObject({ id: 'ST1', name: 'Bo Ng', active: true });
+  });
+
+  it('bookeo maps products and parses ISO-8601 durations', async () => {
+    agent
+      .get('https://api.bookeo.com')
+      .intercept({ path: (p) => pathname(p) === '/v2/settings/products', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({
+          data: [{ productId: 'P1', name: 'Tour', description: 'Walking', duration: 'PT1H30M' }],
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const { services } = await bookeo({ apiKey: 'k', secretKey: 's' }).listServices!();
+    assertCanonicalService(services[0]!);
+    expect(services[0]).toMatchObject({ id: 'P1', name: 'Tour', durationMinutes: 90 });
+    // Bookeo prices are per people-category tiers, so there is no single price.
+    expect(services[0]!.price).toBeUndefined();
+  });
+
+  it('bookeo exposes no staff directory (it has no staff concept here)', () => {
+    const client = bookeo({ apiKey: 'k', secretKey: 's' });
+    expect(client.capabilities.staffDirectory).toBe(false);
+    expect(client.listStaff).toBeUndefined();
   });
 });

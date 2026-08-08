@@ -1,8 +1,9 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
+import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
   bookingsWithinRange,
+  decimalToMinorUnits,
   defineAdapter,
   probeConnection,
   reqString,
@@ -24,6 +25,10 @@ export type PhorestCredentials = {
   password: string;
   businessId: string;
   branchId: string;
+  /** ISO-4217 code for the branch's currency, e.g. `'EUR'`. Phorest returns a
+   *  bare `price` with no currency, so `Service.price` is omitted unless this
+   *  is supplied rather than paired with a guess. */
+  currency?: string;
 };
 
 // Default EU host; US/AUS customers pass options.baseUrl = platform-us.phorest.com/...
@@ -256,13 +261,53 @@ export const phorest = defineAdapter<PhorestCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),
   parseError: parsePhorestError,
   build: (http) => ({
+    async listServices() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: branchPath(c, 'service') });
+      const services = embedded(res).map((raw): Service => {
+        const s = asRecord(raw, 'phorest', 'service');
+        const amount = decimalToMinorUnits(s.price);
+        const duration = Number(s.duration);
+        return {
+          id: reqString(String(s.serviceId ?? ''), 'phorest', 'service.serviceId'),
+          name: reqString(String(s.name ?? ''), 'phorest', 'service.name'),
+          ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+          ...(amount !== undefined && c.currency
+            ? { price: { amount, currency: c.currency } }
+            : {}),
+          ...(s.serviceCategoryId ? { categoryId: String(s.serviceCategoryId) } : {}),
+          active: s.archived !== true,
+          raw: s,
+        };
+      });
+      return { services };
+    },
+
+    async listStaff() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: branchPath(c, 'staff') });
+      const staff = embedded(res).map((raw): Staff => {
+        const s = asRecord(raw, 'phorest', 'staff');
+        const name = [s.firstName, s.lastName].filter(Boolean).join(' ');
+        return {
+          id: reqString(String(s.staffId ?? ''), 'phorest', 'staff.staffId'),
+          name: reqString(name, 'phorest', 'staff.name'),
+          ...(s.email ? { email: String(s.email) } : {}),
+          ...(s.mobile ? { phone: String(s.mobile) } : {}),
+          active: s.archived !== true && s.hideFromOnlineBookings !== true,
+          raw: s,
+        };
+      });
+      return { staff };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('phorest', async () => {

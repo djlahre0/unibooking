@@ -2,8 +2,10 @@ import type {
   AvailabilitySlot,
   Booking,
   BookingStatus,
-  Customer,
   CreateBookingInput,
+  Customer,
+  Service,
+  Staff,
   TimeRange,
 } from '../types';
 import {
@@ -380,13 +382,68 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `apikey ${c.apiKey}` } }),
   parseError: parseZenotiError,
   build: (http) => ({
+    async listServices(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: `centers/${enc(c.centerId)}/services`,
+        query: {
+          ...(query?.limit !== undefined ? { size: query.limit } : {}),
+          ...(query?.pageToken ? { page: query.pageToken } : {}),
+        },
+      });
+      const services = asArray(res?.services, 'zenoti', 'services').map((raw): Service => {
+        const s = asRecord(raw, 'zenoti', 'service');
+        const duration = Number(s.duration);
+        // Zenoti nests the sale price under `price`, with the currency as a
+        // separate numeric code we cannot map to ISO-4217 — so price is left off
+        // rather than paired with a guess.
+        return {
+          id: reqString(String(s.id ?? ''), 'zenoti', 'service.id'),
+          name: reqString(String(s.name ?? ''), 'zenoti', 'service.name'),
+          ...(s.description ? { description: String(s.description) } : {}),
+          ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+          ...(s.category?.id ? { categoryId: String(s.category.id) } : {}),
+          ...(s.category?.name ? { categoryName: String(s.category.name) } : {}),
+          active: s.is_active !== false,
+          raw: s,
+        };
+      });
+      return { services };
+    },
+
+    async listStaff(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: `centers/${enc(c.centerId)}/therapists`,
+        query: {
+          ...(query?.limit !== undefined ? { size: query.limit } : {}),
+          ...(query?.pageToken ? { page: query.pageToken } : {}),
+        },
+      });
+      const staff = asArray(res?.therapists, 'zenoti', 'therapists').map((raw): Staff => {
+        const t = asRecord(raw, 'zenoti', 'therapist');
+        const info = asRecord(t.personal_info ?? {}, 'zenoti', 'therapist.personal_info');
+        const name =
+          [info.first_name, info.last_name].filter(Boolean).join(' ') || String(t.name ?? '');
+        return {
+          id: reqString(String(t.id ?? ''), 'zenoti', 'therapist.id'),
+          name: reqString(name, 'zenoti', 'therapist.name'),
+          ...(info.email ? { email: String(info.email) } : {}),
+          ...(info.mobile_phone?.number ? { phone: String(info.mobile_phone.number) } : {}),
+          active: t.active !== false,
+          raw: t,
+        };
+      });
+      return { staff };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('zenoti', async () => {
