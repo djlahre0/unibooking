@@ -69,6 +69,26 @@
         "default": "./dist/webhooks/*.cjs"
       }
     },
+    "./oauth": {
+      "import": {
+        "types": "./dist/oauth/index.d.ts",
+        "default": "./dist/oauth/index.js"
+      },
+      "require": {
+        "types": "./dist/oauth/index.d.cts",
+        "default": "./dist/oauth/index.cjs"
+      }
+    },
+    "./oauth/*": {
+      "import": {
+        "types": "./dist/oauth/*.d.ts",
+        "default": "./dist/oauth/*.js"
+      },
+      "require": {
+        "types": "./dist/oauth/*.d.cts",
+        "default": "./dist/oauth/*.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

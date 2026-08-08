@@ -6,7 +6,12 @@ export default defineConfig({
   // they import. Shared modules (`adapter-kit.ts`, `time.ts`, `http.ts`, …) are
   // re-exported from `index.ts` rather than given their own subpath; splitting
   // keeps them in shared chunks instead of duplicating them per entry.
-  entry: ['src/index.ts', 'src/adapters/*.ts', 'src/webhooks/*.ts'],
+  entry: [
+    'src/index.ts',
+    'src/adapters/*.ts',
+    'src/webhooks/*.ts',
+    'src/oauth/*.ts',
+  ],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
