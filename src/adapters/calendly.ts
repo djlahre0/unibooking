@@ -1,4 +1,4 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
+import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service } from '../types';
 import {
   asArray,
   asRecord,
@@ -186,13 +186,49 @@ export const calendly = defineAdapter<CalendlyCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-    serviceCatalog: false,
+    serviceCatalog: true,
     staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.token}` } }),
   parseError: parseCalendlyError,
   build: (http) => ({
+    async listServices(query) {
+      const c = await http.resolve();
+      // event_types is scoped to a user or organization, and the token alone
+      // does not say which — so resolve the current user first. One extra
+      // request for the whole list, never one per event type.
+      const me = await http.request(c, { path: 'users/me' });
+      const user = reqString(String(me?.resource?.uri ?? ''), 'calendly', 'users.me.resource.uri');
+      const res = await http.request(c, {
+        path: 'event_types',
+        query: {
+          user,
+          ...(query?.limit !== undefined ? { count: query.limit } : {}),
+          ...(query?.pageToken ? { page_token: query.pageToken } : {}),
+        },
+      });
+      const services = asArray(res?.collection, 'calendly', 'event_types').map((raw): Service => {
+        const t = asRecord(raw, 'calendly', 'event_type');
+        const duration = Number(t.duration);
+        return {
+          // createBooking takes the event type URI as serviceId, so the URI --
+          // not the slug or name -- is what must round-trip.
+          id: reqString(String(t.uri ?? ''), 'calendly', 'event_type.uri'),
+          name: reqString(String(t.name ?? ''), 'calendly', 'event_type.name'),
+          ...(t.description_plain ? { description: String(t.description_plain) } : {}),
+          ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+          active: t.active !== false,
+          raw: t,
+        };
+      });
+      const next = res?.pagination?.next_page_token;
+      return {
+        services,
+        ...(typeof next === 'string' && next ? { nextPageToken: next } : {}),
+      };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('calendly', async () => {

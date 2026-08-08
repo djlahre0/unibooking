@@ -7,6 +7,10 @@ import { acuity } from '../../src/adapters/acuity';
 import { zenoti } from '../../src/adapters/zenoti';
 import { phorest } from '../../src/adapters/phorest';
 import { bookeo } from '../../src/adapters/bookeo';
+import { calendly } from '../../src/adapters/calendly';
+import { mindbody } from '../../src/adapters/mindbody';
+import { boulevard } from '../../src/adapters/boulevard';
+import { wix } from '../../src/adapters/wix';
 import { assertCanonicalService, assertCanonicalStaff } from '../conformance';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -544,6 +548,186 @@ describe('enumeration (spec-derived)', () => {
 
   it('bookeo exposes no staff directory (it has no staff concept here)', () => {
     const client = bookeo({ apiKey: 'k', secretKey: 's' });
+    expect(client.capabilities.staffDirectory).toBe(false);
+    expect(client.listStaff).toBeUndefined();
+  });
+});
+
+describe('enumeration (spec-derived, part 2)', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('calendly resolves the current user, then lists event types by URI', async () => {
+    const pool = agent.get('https://api.calendly.com');
+    pool
+      .intercept({ path: (p) => pathname(p) === '/users/me', method: 'GET' })
+      .reply(200, JSON.stringify({ resource: { uri: 'https://api.calendly.com/users/U1' } }), {
+        headers: JSON_HEADERS,
+      });
+    let sawUser: string | null = null;
+    pool.intercept({ path: (p) => pathname(p) === '/event_types', method: 'GET' }).reply(
+      200,
+      (opts) => {
+        sawUser = new URL('https://x' + String(opts.path)).searchParams.get('user');
+        return JSON.stringify({
+          collection: [
+            {
+              uri: 'https://api.calendly.com/event_types/ET1',
+              name: 'Consult',
+              description_plain: 'A chat',
+              duration: 30,
+              active: true,
+            },
+          ],
+          pagination: { next_page_token: 'NEXT' },
+        });
+      },
+      { headers: JSON_HEADERS },
+    );
+
+    const { services, nextPageToken } = await calendly({ token: 't' }).listServices!();
+
+    // event_types is scoped to a user; the token alone does not say which.
+    expect(sawUser).toBe('https://api.calendly.com/users/U1');
+    assertCanonicalService(services[0]!);
+    // createBooking takes the event type URI as serviceId, so the URI must
+    // round-trip -- not a slug or name.
+    expect(services[0]!.id).toBe('https://api.calendly.com/event_types/ET1');
+    expect(services[0]).toMatchObject({ name: 'Consult', durationMinutes: 30, active: true });
+    expect(nextPageToken).toBe('NEXT');
+  });
+
+  it('calendly exposes no staff directory', () => {
+    const client = calendly({ token: 't' });
+    expect(client.capabilities.staffDirectory).toBe(false);
+    expect(client.listStaff).toBeUndefined();
+  });
+
+  it('mindbody enumerates session types, which is what createBooking takes', async () => {
+    const pool = agent.get('https://api.mindbodyonline.com');
+    pool
+      .intercept({ path: (p) => pathname(p) === '/public/v6/site/sessiontypes', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({
+          SessionTypes: [{ Id: 55, Name: 'Massage', DefaultTimeLength: 60, ProgramId: 3 }],
+        }),
+        { headers: JSON_HEADERS },
+      );
+    pool.intercept({ path: (p) => pathname(p) === '/public/v6/staff/staff', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        StaffMembers: [
+          { Id: 9, FirstName: 'Ann', LastName: 'Lee', Email: 'ann@example.com', isActive: true },
+        ],
+      }),
+      { headers: JSON_HEADERS },
+    );
+
+    const client = mindbody({
+      apiKey: 'k',
+      siteId: '-99',
+      accessToken: 't',
+      timezone: 'America/New_York',
+    });
+    const { services } = await client.listServices!();
+    const { staff } = await client.listStaff!();
+
+    assertCanonicalService(services[0]!);
+    assertCanonicalStaff(staff[0]!);
+    // createBooking sends serviceId as SessionTypeId.
+    expect(services[0]).toMatchObject({ id: '55', name: 'Massage', durationMinutes: 60 });
+    expect(staff[0]).toMatchObject({ id: '9', name: 'Ann Lee', active: true });
+  });
+
+  it('boulevard unwraps Relay edges for services and staff', async () => {
+    const pool = agent.get('https://dashboard.boulevard.io');
+    pool.intercept({ path: (p) => pathname(p) === '/api/2020-01/admin', method: 'POST' }).reply(
+      200,
+      JSON.stringify({
+        data: {
+          services: {
+            edges: [
+              { node: { id: 'SV1', name: 'Blowout', description: 'Wash', defaultDuration: 45 } },
+            ],
+          },
+        },
+      }),
+      { headers: JSON_HEADERS },
+    );
+    pool.intercept({ path: (p) => pathname(p) === '/api/2020-01/admin', method: 'POST' }).reply(
+      200,
+      JSON.stringify({
+        data: {
+          staff: {
+            edges: [{ node: { id: 'ST1', firstName: 'Cy', lastName: 'Ro', email: 'cy@x.com' } }],
+          },
+        },
+      }),
+      { headers: JSON_HEADERS },
+    );
+
+    const client = boulevard({
+      businessId: 'B1',
+      locationId: 'L1',
+      apiKey: 'k',
+      apiSecret: btoa('secret'),
+    });
+    const { services } = await client.listServices!();
+    const { staff } = await client.listStaff!();
+
+    assertCanonicalService(services[0]!);
+    assertCanonicalStaff(staff[0]!);
+    expect(services[0]).toMatchObject({ id: 'SV1', name: 'Blowout', durationMinutes: 45 });
+    expect(staff[0]).toMatchObject({ id: 'ST1', name: 'Cy Ro', email: 'cy@x.com' });
+  });
+
+  it('wix maps services with their fixed price and currency', async () => {
+    agent
+      .get('https://www.wixapis.com')
+      .intercept({ path: (p) => pathname(p) === '/bookings/v2/services', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({
+          services: [
+            {
+              id: 'SVC1',
+              name: 'Facial',
+              description: 'Glow',
+              payment: { fixed: { price: { value: '80.00', currency: 'GBP' } } },
+              category: { id: 'C1', name: 'Skin' },
+              hidden: false,
+            },
+          ],
+          pagingMetadata: { cursors: { next: 'CUR' } },
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const { services, nextPageToken } = await wix({ accessToken: 't' }).listServices!();
+    assertCanonicalService(services[0]!);
+    // Wix supplies its own currency, so price does not need a credential.
+    expect(services[0]!.price).toEqual({ amount: 8000, currency: 'GBP' });
+    expect(services[0]).toMatchObject({ id: 'SVC1', categoryName: 'Skin', active: true });
+    expect(nextPageToken).toBe('CUR');
+  });
+
+  it('wix exposes no staff directory (resource-id shape unconfirmed)', () => {
+    // A directory returning ids createBooking would reject is worse than none:
+    // it fails later, at booking time, as an opaque provider error.
+    const client = wix({ accessToken: 't' });
     expect(client.capabilities.staffDirectory).toBe(false);
     expect(client.listStaff).toBeUndefined();
   });

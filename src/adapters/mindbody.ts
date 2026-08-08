@@ -1,4 +1,4 @@
-import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
+import type { AvailabilitySlot, Booking, BookingStatus, Service, Staff } from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { addMinutes, assertValidRange, formatWithOffset, parseOffsetMinutes } from '../time';
@@ -205,8 +205,8 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -214,6 +214,61 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
   }),
   parseError: parseMindbodyError,
   build: (http) => ({
+    async listServices(query) {
+      const c = await http.resolve();
+      // createBooking sends serviceId as SessionTypeId, so session types -- not
+      // the retail `sale/services` catalog -- are what must be enumerated.
+      const res = await http.request(c, {
+        path: 'site/sessiontypes',
+        query: {
+          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+          ...(query?.pageToken ? { offset: query.pageToken } : {}),
+        },
+      });
+      const services = asArray(res?.SessionTypes, 'mindbody', 'SessionTypes').map(
+        (raw): Service => {
+          const s = asRecord(raw, 'mindbody', 'sessionType');
+          const duration = Number(s.DefaultTimeLength);
+          return {
+            id: reqString(String(s.Id ?? ''), 'mindbody', 'sessionType.Id'),
+            name: reqString(String(s.Name ?? ''), 'mindbody', 'sessionType.Name'),
+            ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+            ...(s.ProgramId !== undefined ? { categoryId: String(s.ProgramId) } : {}),
+            // SessionType carries no price and no active flag; pricing lives in
+            // separate pricing options.
+            active: true,
+            raw: s,
+          };
+        },
+      );
+      return { services };
+    },
+
+    async listStaff(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: 'staff/staff',
+        query: {
+          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+          ...(query?.pageToken ? { offset: query.pageToken } : {}),
+        },
+      });
+      const staff = asArray(res?.StaffMembers, 'mindbody', 'StaffMembers').map((raw): Staff => {
+        const s = asRecord(raw, 'mindbody', 'staffMember');
+        const name = [s.FirstName, s.LastName].filter(Boolean).join(' ') || String(s.Name ?? '');
+        return {
+          id: reqString(String(s.Id ?? ''), 'mindbody', 'staffMember.Id'),
+          name: reqString(name, 'mindbody', 'staffMember.Name'),
+          ...(s.Email ? { email: String(s.Email) } : {}),
+          ...(s.MobilePhone ? { phone: String(s.MobilePhone) } : {}),
+          // Mindbody flags staff as isActive on some endpoints; absent means active.
+          active: s.isActive !== false && s.Active !== false,
+          raw: s,
+        };
+      });
+      return { staff };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('mindbody', async () => {

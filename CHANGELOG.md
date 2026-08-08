@@ -29,8 +29,18 @@ All notable changes to this project are documented here. The format is based on
   adapter imports — bundling an adapter cannot pull secrets-handling code into a
   browser build.
 
-- **`listServices()` and `listStaff()`** on Setmore, Square and Microsoft
-  Bookings, behind the new `serviceCatalog` / `staffDirectory` flags. `Service`
+- **`listServices()` and `listStaff()`** on Setmore, Square, Microsoft Bookings,
+  Acuity, Mindbody, Zenoti, Phorest and Boulevard, plus `listServices()` only on
+  Bookeo, Calendly and Wix. Behind the new `serviceCatalog` / `staffDirectory`
+  flags — check those rather than assuming, since they differ per provider.
+
+  Setmore, Square and Microsoft Bookings are mapped against captured payloads;
+  the rest are **spec-derived with no live tenant**, the same caveat the README's
+  verification-status note carries for every adapter. Vagaro is absent because
+  its API is gated behind manual approval and its request shapes could not be
+  confirmed.
+
+  `Service`
   carries name, description, duration, price, category and active state;
   `Staff` carries name, email, phone and active state.
 

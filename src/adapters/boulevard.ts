@@ -1,4 +1,4 @@
-import type { Booking, BookingStatus, Customer } from '../types';
+import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
@@ -366,8 +366,8 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
-    serviceCatalog: false,
-    staffDirectory: false,
+    serviceCatalog: true,
+    staffDirectory: true,
   },
   baseUrl: BASE,
   auth: async (c) => {
@@ -378,6 +378,64 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     return { headers: { authorization: `Basic ${btoa(`${c.apiKey}:${token}`)}` } };
   },
   build: (http) => ({
+    async listServices() {
+      const c = await http.resolve();
+      // Relay-style connection; Boulevard's admin API pages with first/after but
+      // the canonical query returns the full list for a location.
+      const res = await gql(
+        http,
+        c,
+        `query Services($locationId: ID!) {
+          services(locationId: $locationId) {
+            edges { node { id name description defaultDuration } }
+          }
+        }`,
+        { locationId: c.locationId },
+      );
+      const edges = asArray((res as any)?.services?.edges, 'boulevard', 'services.edges');
+      const services = edges.map((edge: any): Service => {
+        const s = asRecord(edge?.node, 'boulevard', 'service');
+        const duration = Number(s.defaultDuration);
+        return {
+          id: reqString(String(s.id ?? ''), 'boulevard', 'service.id'),
+          name: reqString(String(s.name ?? ''), 'boulevard', 'service.name'),
+          ...(s.description ? { description: String(s.description) } : {}),
+          ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+          active: true,
+          raw: s,
+        };
+      });
+      return { services };
+    },
+
+    async listStaff() {
+      const c = await http.resolve();
+      const res = await gql(
+        http,
+        c,
+        `query Staff($locationId: ID!) {
+          staff(locationId: $locationId) {
+            edges { node { id firstName lastName email mobilePhone } }
+          }
+        }`,
+        { locationId: c.locationId },
+      );
+      const edges = asArray((res as any)?.staff?.edges, 'boulevard', 'staff.edges');
+      const staff = edges.map((edge: any): Staff => {
+        const s = asRecord(edge?.node, 'boulevard', 'staff');
+        const name = [s.firstName, s.lastName].filter(Boolean).join(' ');
+        return {
+          id: reqString(String(s.id ?? ''), 'boulevard', 'staff.id'),
+          name: reqString(name, 'boulevard', 'staff.name'),
+          ...(s.email ? { email: String(s.email) } : {}),
+          ...(s.mobilePhone ? { phone: String(s.mobilePhone) } : {}),
+          active: true,
+          raw: s,
+        };
+      });
+      return { staff };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('boulevard', async () => {

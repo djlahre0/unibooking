@@ -1,7 +1,8 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer } from '../types';
+import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service } from '../types';
 import {
   asArray,
   asRecord,
+  decimalToMinorUnits,
   defineAdapter,
   probeConnection,
   reqString,
@@ -276,13 +277,45 @@ export const wix = defineAdapter<WixCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
-    serviceCatalog: false,
+    serviceCatalog: true,
     staffDirectory: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: c.accessToken } }),
   parseError: parseWixError,
   build: (http) => ({
+    async listServices(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: 'bookings/v2/services',
+        query: {
+          ...(query?.limit !== undefined ? { 'paging.limit': query.limit } : {}),
+          ...(query?.pageToken ? { 'paging.cursor': query.pageToken } : {}),
+        },
+      });
+      const services = asArray(res?.services, 'wix', 'services').map((raw): Service => {
+        const s = asRecord(raw, 'wix', 'service');
+        const money = s.payment?.fixed?.price;
+        const amount = decimalToMinorUnits(money?.value);
+        const currency = typeof money?.currency === 'string' ? money.currency : undefined;
+        return {
+          id: reqString(String(s.id ?? ''), 'wix', 'service.id'),
+          name: reqString(String(s.name ?? ''), 'wix', 'service.name'),
+          ...(s.description ? { description: String(s.description) } : {}),
+          ...(amount !== undefined && currency ? { price: { amount, currency } } : {}),
+          ...(s.category?.id ? { categoryId: String(s.category.id) } : {}),
+          ...(s.category?.name ? { categoryName: String(s.category.name) } : {}),
+          active: s.hidden !== true,
+          raw: s,
+        };
+      });
+      const next = res?.pagingMetadata?.cursors?.next;
+      return {
+        services,
+        ...(typeof next === 'string' && next ? { nextPageToken: next } : {}),
+      };
+    },
+
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('wix', async () => {

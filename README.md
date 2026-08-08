@@ -1075,17 +1075,17 @@ unibooking currently supports the following providers.
 | [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — |
 | [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
 | [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | — | — |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — |
-| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — |
+| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
 | [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — |
 | [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
 | [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
 | [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — |
-| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | — | — |
+| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
 
 > **Note**
@@ -1151,8 +1151,16 @@ unibooking currently supports the following providers.
 > **Adapter gaps** — the provider supports this, but unibooking does not model it
 > yet:
 >
-> - Customer / staff / service *enumeration* on Vagaro, Boulevard and Setmore
->   (bookings still accept `staffId` and `serviceId`).
+> - **Service enumeration** is missing only on Vagaro, whose API is gated behind
+>   manual approval — its request shapes could not be confirmed. Google, Outlook
+>   and Apple/CalDAV are plain calendars with no service or staff concept at all.
+> - **Staff enumeration** is additionally absent on Bookeo and Calendly (neither
+>   models staff in this adapter) and on Wix, whose staff are "resources" behind
+>   a separate API whose id shape could not be confirmed. A directory returning
+>   ids `createBooking` would reject is worse than none — it fails later, at
+>   booking time, as an opaque provider error.
+> - Customer *enumeration* is not modelled anywhere; use
+>   `customers.findOrCreate`.
 > - Bookeo fixed-product booking by `eventId` (pass it via `providerOptions`).
 >
 > **Credential requirements worth knowing before you start:** Vagaro needs a
