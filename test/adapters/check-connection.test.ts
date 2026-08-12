@@ -159,8 +159,10 @@ const PROBES: Probe[] = [
     origin: 'https://dashboard.boulevard.io',
     path: '/api/2020-01/admin',
     method: 'POST',
-    ok: { data: { myBusiness: { id: 'B1', name: 'Glow' } } },
-    account: { id: 'B1', name: 'Glow' },
+    // Reuses the `clients(first:)` field the adapter already depends on, so the
+    // probe cannot break on a schema field invented just for it.
+    ok: { data: { clients: { edges: [{ node: { id: 'CL1' } }] } } },
+    account: { id: 'B1' },
     make: () =>
       boulevard({ businessId: 'B1', locationId: 'L1', apiKey: 'k', apiSecret: btoa('secret') }),
   },

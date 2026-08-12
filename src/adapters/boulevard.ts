@@ -441,19 +441,19 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('boulevard', async () => {
-        const res = await gql(http, c, 'query { myBusiness { id name } }', {});
-        const b = (res as any)?.myBusiness;
-        return {
-          ...(b
-            ? {
-                account: {
-                  ...(b.id ? { id: String(b.id) } : {}),
-                  ...(b.name ? { name: String(b.name) } : {}),
-                },
-              }
-            : {}),
-          raw: res,
-        };
+        // Deliberately reuses the `clients(first:)` field the adapter already
+        // relies on elsewhere, rather than a business/viewer query invented for
+        // the probe. An unknown field is a GraphQL schema error, which would
+        // make checkConnection throw on EVERY call instead of reporting health.
+        // Boulevard exposes no cheap identity query here, so no account is
+        // surfaced — the credentials already name the business and location.
+        const res = await gql(
+          http,
+          c,
+          'query Probe { clients(first: 1) { edges { node { id } } } }',
+          {},
+        );
+        return { account: { id: c.businessId }, raw: res };
       });
     },
     async createBooking(input) {

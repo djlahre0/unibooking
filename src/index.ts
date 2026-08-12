@@ -44,6 +44,8 @@ export {
   defineAdapter,
   unsupported,
   probeConnection,
+  decimalToMinorUnits,
+  minutesFromIso8601Duration,
   asRecord,
   asArray,
   reqString,

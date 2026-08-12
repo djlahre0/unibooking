@@ -1,5 +1,12 @@
 import type { AvailabilitySlot, Booking, Service, Staff } from '../types';
-import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  minutesFromIso8601Duration,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
@@ -75,18 +82,6 @@ function customerInfo(input: { customer?: { name?: string; email?: string; phone
       ...(cu.phone ? { phone: cu.phone } : {}),
     },
   ];
-}
-
-/** Graph expresses durations as ISO-8601 (`PT30M`, `PT1H15M`). Only the
- *  hour/minute/second components can appear on a service duration. */
-function minutesFromIso8601Duration(v: unknown): number | undefined {
-  if (typeof v !== 'string') return undefined;
-  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?)?$/.exec(v.trim());
-  if (!m) return undefined;
-  const [, d, h, min, s] = m;
-  const total =
-    Number(d ?? 0) * 1440 + Number(h ?? 0) * 60 + Number(min ?? 0) + Number(s ?? 0) / 60;
-  return total > 0 ? total : undefined;
 }
 
 function toService(raw: unknown, currency: string | undefined): Service {

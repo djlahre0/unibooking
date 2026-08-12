@@ -3,6 +3,7 @@ import {
   asArray,
   asRecord,
   bookingsWithinRange,
+  decimalToMinorUnits,
   defineAdapter,
   probeConnection,
   reqString,
@@ -343,19 +344,9 @@ async function findOrCreateCustomer(
   return reqString(String(dataOf(created)?.customer?.key ?? ''), 'setmore', 'customer.key');
 }
 
-/** Setmore prices are decimal strings (`"45.00"`) with no currency. Convert to
- *  integer minor units; the currency has to come from credentials. Rounds rather
- *  than truncates so `"45.005"` cannot silently lose a cent downward. */
-function toMinorUnits(cost: unknown): number | undefined {
-  if (cost === null || cost === undefined || cost === '') return undefined;
-  const n = Number(cost);
-  if (!Number.isFinite(n) || n < 0) return undefined;
-  return Math.round(n * 100);
-}
-
 function toService(raw: unknown, categories: Map<string, string>, currency?: string): Service {
   const s = asRecord(raw, 'setmore', 'service');
-  const amount = toMinorUnits(s.cost);
+  const amount = decimalToMinorUnits(s.cost);
   const duration = Number(s.duration);
   const categoryKey = s.category_key ? String(s.category_key) : undefined;
   const categoryName = categoryKey ? categories.get(categoryKey) : undefined;
@@ -630,13 +621,18 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       // extra request for the whole set — never one per service.
       const [servicesRes, categoriesRes] = await Promise.all([
         http.request(c, { path: `${V1}/services` }),
-        http.request(c, { path: `${V1}/services/categories` }),
+        // `categoryName` is decorative. A categories failure (a narrower token,
+        // an outage on that route) must not sink the whole catalog read — the
+        // services still carry `categoryId`, and the raw payload is intact.
+        http.request(c, { path: `${V1}/services/categories` }).catch(() => undefined),
       ]);
       const categories = new Map<string, string>();
-      for (const raw of asArray(dataOf(categoriesRes)?.categories, 'setmore', 'categories')) {
-        const cat = asRecord(raw, 'setmore', 'category');
-        if (cat.key && cat.category_name) {
-          categories.set(String(cat.key), String(cat.category_name));
+      if (categoriesRes !== undefined) {
+        for (const raw of asArray(dataOf(categoriesRes)?.categories, 'setmore', 'categories')) {
+          const cat = asRecord(raw, 'setmore', 'category');
+          if (cat.key && cat.category_name) {
+            categories.set(String(cat.key), String(cat.category_name));
+          }
         }
       }
       const services = asArray(dataOf(servicesRes)?.services, 'setmore', 'services').map((s) =>

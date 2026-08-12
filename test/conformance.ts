@@ -178,6 +178,37 @@ export function runConformance(config: ConformanceConfig): void {
         typeof client.listStaff === 'function',
         'listStaff presence matches capabilities.staffDirectory',
       ).toBe(client.capabilities.staffDirectory);
+
+      // Writes travel as a set: a provider that can create but not update would
+      // need its own flag, and none does.
+      for (const m of ['createService', 'updateService', 'setServiceActive'] as const) {
+        expect(
+          typeof client[m] === 'function',
+          `${m} presence matches capabilities.serviceCatalogWrite`,
+        ).toBe(client.capabilities.serviceCatalogWrite);
+      }
+      for (const m of ['createStaff', 'updateStaff', 'setStaffActive'] as const) {
+        expect(
+          typeof client[m] === 'function',
+          `${m} presence matches capabilities.staffDirectoryWrite`,
+        ).toBe(client.capabilities.staffDirectoryWrite);
+      }
+
+      // Writing implies reading. A catalog you can create into but not list is
+      // not a coherent surface, and would leave the caller unable to discover
+      // the id they just created.
+      if (client.capabilities.serviceCatalogWrite) {
+        expect(client.capabilities.serviceCatalog, 'write implies read').toBe(true);
+      }
+      if (client.capabilities.staffDirectoryWrite) {
+        expect(client.capabilities.staffDirectory, 'write implies read').toBe(true);
+      }
+
+      // No provider may offer a delete: Square has no team-member delete at all
+      // and its catalog delete cascades, so the canonical surface omits it.
+      const surface = client as unknown as Record<string, unknown>;
+      expect(surface.deleteService, 'no canonical deleteService').toBeUndefined();
+      expect(surface.deleteStaff, 'no canonical deleteStaff').toBeUndefined();
     });
 
     it('capability↔method: unsupported availability throws UNSUPPORTED', async () => {

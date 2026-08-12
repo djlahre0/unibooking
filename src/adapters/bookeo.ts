@@ -1,5 +1,12 @@
 import type { AvailabilitySlot, Booking, Service } from '../types';
-import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  minutesFromIso8601Duration,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 
@@ -71,17 +78,6 @@ function parseBookeoError(
     ...(typeof b.message === 'string' ? { message: b.message } : {}),
     ...(typeof code === 'string' || typeof code === 'number' ? { providerCode: String(code) } : {}),
   };
-}
-
-/** Bookeo expresses product durations as ISO-8601 (`PT1H30M`). */
-function minutesFromIso8601(v: unknown): number | undefined {
-  if (typeof v !== 'string') return undefined;
-  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?)?$/.exec(v.trim());
-  if (!m) return undefined;
-  const [, d, h, min, sec] = m;
-  const total =
-    Number(d ?? 0) * 1440 + Number(h ?? 0) * 60 + Number(min ?? 0) + Number(sec ?? 0) / 60;
-  return total > 0 ? total : undefined;
 }
 
 function requireProduct(serviceId: string | undefined): string {
@@ -158,8 +154,8 @@ export const bookeo = defineAdapter<BookeoCredentials>({
           id: reqString(String(p.productId ?? ''), 'bookeo', 'product.productId'),
           name: reqString(String(p.name ?? ''), 'bookeo', 'product.name'),
           ...(p.description ? { description: String(p.description) } : {}),
-          ...(minutesFromIso8601(p.duration) !== undefined
-            ? { durationMinutes: minutesFromIso8601(p.duration)! }
+          ...(minutesFromIso8601Duration(p.duration) !== undefined
+            ? { durationMinutes: minutesFromIso8601Duration(p.duration)! }
             : {}),
           // Bookeo prices live in a `prices` array of tiers keyed by people
           // category, so there is no single price to report here.

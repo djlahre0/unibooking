@@ -732,3 +732,89 @@ describe('enumeration (spec-derived, part 2)', () => {
     expect(client.listStaff).toBeUndefined();
   });
 });
+
+describe('listServices/listStaff limit backstop', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('caps a provider that has no page-size parameter at all', async () => {
+    // Acuity's appointment-types endpoint takes no limit, so before the
+    // backstop a caller asking for 2 got the entire catalogue -- the same
+    // defect ListBookingsQuery.status had.
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => pathname(p) === '/api/v1/appointment-types', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify(
+          Array.from({ length: 5 }, (_, i) => ({ id: i + 1, name: 'S' + (i + 1), duration: 30 })),
+        ),
+        { headers: JSON_HEADERS },
+      );
+
+    const { services } = await acuity({ userId: 'u', apiKey: 'k' }).listServices!({ limit: 2 });
+    expect(services.map((s) => s.id)).toEqual(['1', '2']);
+  });
+
+  it('does NOT truncate a page that carries a cursor', async () => {
+    // Slicing here would strip the items between the cut and the next page:
+    // the caller would page forward with the cursor and never see them.
+    agent
+      .get('https://connect.squareup.com')
+      .intercept({
+        path: (p) => pathname(p) === '/v2/catalog/search-catalog-items',
+        method: 'POST',
+      })
+      .reply(
+        200,
+        JSON.stringify({
+          items: [
+            {
+              type: 'ITEM',
+              id: 'I1',
+              item_data: {
+                name: 'Item',
+                variations: [
+                  { id: 'V1', item_variation_data: { name: 'Regular' } },
+                  { id: 'V2', item_variation_data: { name: 'Deluxe' } },
+                  { id: 'V3', item_variation_data: { name: 'Ultra' } },
+                ],
+              },
+            },
+          ],
+          cursor: 'MORE',
+        }),
+        { headers: JSON_HEADERS },
+      );
+
+    const res = await square({ accessToken: 't', locationId: 'L' }).listServices!({ limit: 1 });
+    expect(res.services).toHaveLength(3);
+    expect(res.nextPageToken).toBe('MORE');
+  });
+
+  it('caps staff the same way', async () => {
+    agent
+      .get('https://acuityscheduling.com')
+      .intercept({ path: (p) => pathname(p) === '/api/v1/calendars', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify(Array.from({ length: 4 }, (_, i) => ({ id: i + 1, name: 'Cal' + (i + 1) }))),
+        { headers: JSON_HEADERS },
+      );
+
+    const { staff } = await acuity({ userId: 'u', apiKey: 'k' }).listStaff!({ limit: 2 });
+    expect(staff.map((s) => s.id)).toEqual(['1', '2']);
+  });
+});

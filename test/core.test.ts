@@ -305,3 +305,73 @@ describe('probeConnection', () => {
     expect('account' in status).toBe(false);
   });
 });
+
+describe('withRetry preserves the whole client surface', () => {
+  // Adding a method to BookingClient and forgetting to forward it through
+  // withRetry silently drops it for every consumer that wraps their client.
+  // The type system does not catch it: the wrapper is built by spreading
+  // conditionals, so a missing entry is just an absent optional.
+  it('forwards every method the wrapped client exposes', () => {
+    const calls: string[] = [];
+    const track =
+      (name: string) =>
+      async (...args: unknown[]) => {
+        calls.push(name);
+        return args.length ? undefined : undefined;
+      };
+
+    const full = {
+      ...fakeClient({}),
+      capabilities: {
+        ...CAPS,
+        serviceCatalog: true,
+        staffDirectory: true,
+        serviceCatalogWrite: true,
+        staffDirectoryWrite: true,
+      },
+      listServices: track('listServices'),
+      listStaff: track('listStaff'),
+      createService: track('createService'),
+      updateService: track('updateService'),
+      setServiceActive: track('setServiceActive'),
+      createStaff: track('createStaff'),
+      updateStaff: track('updateStaff'),
+      setStaffActive: track('setStaffActive'),
+      customers: { findOrCreate: track('findOrCreate') },
+    } as unknown as BookingClient;
+
+    const wrapped = withRetry(full, { sleep: async () => {} });
+
+    const expected = [
+      'createBooking',
+      'getBooking',
+      'updateBooking',
+      'cancelBooking',
+      'listBookings',
+      'searchAvailability',
+      'checkConnection',
+      'listServices',
+      'listStaff',
+      'createService',
+      'updateService',
+      'setServiceActive',
+      'createStaff',
+      'updateStaff',
+      'setStaffActive',
+    ] as const;
+
+    for (const name of expected) {
+      expect(typeof (wrapped as any)[name], name + ' survives withRetry').toBe('function');
+    }
+    expect(typeof wrapped.customers?.findOrCreate).toBe('function');
+  });
+
+  it('drops optional methods the wrapped client does not have', () => {
+    // The mirror image: withRetry must not fabricate a method, or a capability
+    // check against the wrapper would disagree with the adapter.
+    const wrapped = withRetry(fakeClient({}), { sleep: async () => {} });
+    expect(wrapped.listServices).toBeUndefined();
+    expect(wrapped.createService).toBeUndefined();
+    expect(wrapped.setStaffActive).toBeUndefined();
+  });
+});

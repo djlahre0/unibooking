@@ -645,12 +645,16 @@ export const square = defineAdapter<SquareCredentials>({
       const { item } = await readServiceItem(http, c, id);
       const variation = findVariation(item, id);
       const vd = variation.item_variation_data ?? {};
+      // Assert rather than assume: a malformed item would otherwise blow up as a
+      // raw TypeError, breaking the contract that adapters only throw
+      // UnibookingError.
+      const itemData = asRecord(item.item_data, 'square', 'catalog.item_data');
 
       // Partial update: only touch what the caller named. Square's upsert
       // REPLACES the object, so anything dropped here is genuinely erased --
       // which is why this is a read-modify-write rather than a bare PUT.
-      if (input.name !== undefined) item.item_data.name = input.name;
-      if (input.description !== undefined) item.item_data.description = input.description;
+      if (input.name !== undefined) itemData.name = input.name;
+      if (input.description !== undefined) itemData.description = input.description;
       if (input.durationMinutes !== undefined) {
         vd.service_duration = input.durationMinutes * 60_000;
       }
