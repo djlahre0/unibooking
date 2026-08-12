@@ -31,7 +31,8 @@ All notable changes to this project are documented here. The format is based on
 
 - **`listServices()` and `listStaff()`** on Setmore, Square, Microsoft Bookings,
   Acuity, Mindbody, Zenoti, Phorest and Boulevard, plus `listServices()` only on
-  Bookeo, Calendly and Wix. Behind the new `serviceCatalog` / `staffDirectory`
+  Bookeo, Calendly and Wix (Wix gained `listStaff` too). Behind the new
+  `serviceCatalog` / `staffDirectory`
   flags — check those rather than assuming, since they differ per provider.
 
   Setmore, Square and Microsoft Bookings are mapped against captured payloads;
@@ -71,8 +72,10 @@ All notable changes to this project are documented here. The format is based on
   succeeded would duplicate the record. Updates and the active toggles are
   idempotent and are retried.
 
-  Note these need `ITEMS_WRITE` / `EMPLOYEES_WRITE`, which
-  `unibooking/oauth/square` does not request by default.
+  These need `ITEMS_WRITE` / `EMPLOYEES_WRITE`, which
+  `unibooking/oauth/square` does not request by default. Opt in with the
+  exported `SQUARE_WRITE_SCOPES` — decide before merchants connect, since
+  widening scopes later forces every one of them to re-consent.
 
 - **`checkConnection()` on every adapter.** Answers "do these credentials still
   work?" using values you loaded from your own database, and **does not throw**

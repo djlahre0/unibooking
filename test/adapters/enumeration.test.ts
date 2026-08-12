@@ -724,12 +724,53 @@ describe('enumeration (spec-derived, part 2)', () => {
     expect(nextPageToken).toBe('CUR');
   });
 
-  it('wix exposes no staff directory (resource-id shape unconfirmed)', () => {
-    // A directory returning ids createBooking would reject is worse than none:
-    // it fails later, at booking time, as an opaque provider error.
-    const client = wix({ accessToken: 't' });
-    expect(client.capabilities.staffDirectory).toBe(false);
-    expect(client.listStaff).toBeUndefined();
+  it('wix staff id is the resourceId, not the staff member id', async () => {
+    let body: any;
+    agent
+      .get('https://www.wixapis.com')
+      .intercept({
+        path: (p) => pathname(p) === '/bookings/v1/staff-members/query',
+        method: 'POST',
+      })
+      .reply(
+        200,
+        (opts) => {
+          body = JSON.parse(String(opts.body));
+          return JSON.stringify({
+            staffMembers: [
+              {
+                id: 'STAFF_MEMBER_ID',
+                name: 'Jane Doe',
+                email: 'jane@example.com',
+                phone: '+15550100',
+                resourceId: 'RESOURCE_ID',
+                serviceProvider: true,
+              },
+              { id: 'SM2', name: 'Backroom', resourceId: 'RES2', serviceProvider: false },
+            ],
+            pagingMetadata: { cursors: { next: 'CUR' }, hasNext: true },
+          });
+        },
+        { headers: JSON_HEADERS },
+      );
+
+    const { staff, nextPageToken } = await wix({ accessToken: 't' }).listStaff!({ limit: 50 });
+
+    // createBooking sends staffId as `resource: { id }`, and Wix documents
+    // resourceId as identical to resource.id. Using the staff member's own id
+    // would enumerate fine and then fail every booking upstream.
+    expect(staff[0]!.id).toBe('RESOURCE_ID');
+    expect(staff[0]!.id).not.toBe('STAFF_MEMBER_ID');
+    staff.forEach(assertCanonicalStaff);
+    expect(staff[0]).toMatchObject({ name: 'Jane Doe', email: 'jane@example.com', active: true });
+
+    // The endpoint hides non-providers unless a serviceProvider filter is sent;
+    // they must surface as inactive rather than disappear.
+    expect(body.query.filter.serviceProvider).toEqual({ $in: [true, false] });
+    expect(staff[1]!.active).toBe(false);
+
+    expect(body.fields).toEqual(['RESOURCE_DETAILS']);
+    expect(nextPageToken).toBe('CUR');
   });
 });
 

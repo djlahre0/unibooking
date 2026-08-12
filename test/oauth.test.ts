@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { withAutoRefresh, type OAuthClient, type OAuthTokens } from '../src/oauth';
 import { googleOAuth } from '../src/oauth/google';
-import { squareOAuth } from '../src/oauth/square';
+import { squareOAuth, SQUARE_APPOINTMENT_SCOPES, SQUARE_WRITE_SCOPES } from '../src/oauth/square';
 import { acuityOAuth } from '../src/oauth/acuity';
 import { calendlyOAuth } from '../src/oauth/calendly';
 import { outlookOAuth } from '../src/oauth/microsoft';
@@ -345,5 +345,31 @@ describe('withAutoRefresh', () => {
     await (creds as any)();
     await (creds as any)();
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('square oauth scopes', () => {
+  it('does not request write access by default', async () => {
+    // Scopes cannot be widened quietly later -- adding one forces every
+    // already-connected merchant to re-consent. So the default stays read-only
+    // and writes are opted into explicitly.
+    const { url } = await squareOAuth(CONFIG).authorizationUrl();
+    const scope = new URL(url).searchParams.get('scope') ?? '';
+    expect(scope).toContain('APPOINTMENTS_WRITE');
+    expect(scope).not.toContain('ITEMS_WRITE');
+    expect(scope).not.toContain('EMPLOYEES_WRITE');
+    expect(SQUARE_APPOINTMENT_SCOPES).not.toContain('ITEMS_WRITE');
+  });
+
+  it('accepts the write scopes when a consumer opts in', async () => {
+    const { url } = await squareOAuth(CONFIG).authorizationUrl({
+      scopes: [...SQUARE_APPOINTMENT_SCOPES, ...SQUARE_WRITE_SCOPES],
+    });
+    const scope = new URL(url).searchParams.get('scope') ?? '';
+    expect(scope).toContain('ITEMS_WRITE');
+    expect(scope).toContain('EMPLOYEES_WRITE');
+    // The read scopes the adapter needs must survive the override.
+    expect(scope).toContain('ITEMS_READ');
+    expect(scope).toContain('APPOINTMENTS_READ');
   });
 });

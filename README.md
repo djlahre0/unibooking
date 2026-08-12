@@ -740,9 +740,22 @@ resolvable.
 
 > **Scopes.** Square catalog writes need `ITEMS_WRITE` and staff writes need
 > `EMPLOYEES_WRITE`. `unibooking/oauth/square` does **not** request either by
-> default, because this library only reads by default and unused write scopes are
-> a needless escalation. Add them to `scopes` if you use these methods — note
-> that widening scopes forces every connected merchant to re-consent.
+> default — unused write scopes are a needless escalation. Opt in explicitly:
+>
+> ```ts
+> import {
+>     squareOAuth,
+>     SQUARE_APPOINTMENT_SCOPES,
+>     SQUARE_WRITE_SCOPES,
+> } from "unibooking/oauth/square";
+>
+> await squareOAuth(config).authorizationUrl({
+>     scopes: [...SQUARE_APPOINTMENT_SCOPES, ...SQUARE_WRITE_SCOPES],
+> });
+> ```
+>
+> Decide this before merchants connect: widening scopes later forces **every
+> already-connected merchant to re-consent**.
 
 ---
 
@@ -1119,7 +1132,7 @@ unibooking currently supports the following providers.
 | [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
 | [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
 | [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
 | [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
@@ -1199,11 +1212,8 @@ unibooking currently supports the following providers.
 >   confirmed, and an enumeration returning ids `createBooking` rejects is worse
 >   than none. Google, Outlook
 >   and Apple/CalDAV are plain calendars with no service or staff concept at all.
-> - **Staff enumeration** is additionally absent on Bookeo and Calendly (neither
->   models staff in this adapter) and on Wix, whose staff are "resources" behind
->   a separate API whose id shape could not be confirmed. A directory returning
->   ids `createBooking` would reject is worse than none — it fails later, at
->   booking time, as an opaque provider error.
+> - **Staff enumeration** is additionally absent on Bookeo and Calendly — neither
+>   models staff in this adapter.
 > - Customer *enumeration* is not modelled anywhere; use
 >   `customers.findOrCreate`.
 > - Bookeo fixed-product booking by `eventId` (pass it via `providerOptions`).

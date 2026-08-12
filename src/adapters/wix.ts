@@ -1,4 +1,4 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service } from '../types';
+import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
@@ -278,7 +278,7 @@ export const wix = defineAdapter<WixCredentials>({
     idempotency: false,
     customers: true,
     serviceCatalog: true,
-    staffDirectory: false,
+    staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
   },
@@ -286,6 +286,53 @@ export const wix = defineAdapter<WixCredentials>({
   auth: (c) => ({ headers: { authorization: c.accessToken } }),
   parseError: parseWixError,
   build: (http) => ({
+    async listStaff(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        // Note v1, not v2 — the Staff Members API is the documented way in.
+        // Wix auto-manages a resource per staff member and states that
+        // staff-linked resources must NOT be driven through Resources V2.
+        path: 'bookings/v1/staff-members/query',
+        body: {
+          query: {
+            cursorPaging: {
+              ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+              ...(query?.pageToken ? { cursor: query.pageToken } : {}),
+            },
+            // The endpoint returns ONLY service providers unless a
+            // serviceProvider filter is present. Asking for both keeps
+            // non-providers visible as `active: false` instead of vanishing —
+            // past bookings still reference them.
+            filter: { serviceProvider: { $in: [true, false] } },
+          },
+          // Without RESOURCE_DETAILS the resource sub-object is absent; we still
+          // read the top-level `resourceId`, but requesting it keeps `raw`
+          // complete for consumers that need the working-hours schedules.
+          fields: ['RESOURCE_DETAILS'],
+        },
+      });
+      const staff = asArray(res?.staffMembers, 'wix', 'staffMembers').map((raw): Staff => {
+        const s = asRecord(raw, 'wix', 'staffMember');
+        return {
+          // MUST be resourceId: createBooking sends staffId as `resource.id`,
+          // and Wix documents resourceId as identical to resource.id. The
+          // staff member's own `id` is a DIFFERENT value and booking with it
+          // would fail upstream.
+          id: reqString(s.resourceId, 'wix', 'staffMember.resourceId'),
+          name: reqString(s.name, 'wix', 'staffMember.name'),
+          ...(s.email ? { email: String(s.email) } : {}),
+          ...(s.phone ? { phone: String(s.phone) } : {}),
+          // Non-providers never appear in booking flows, which is exactly what
+          // inactive means here.
+          active: s.serviceProvider !== false,
+          raw: s,
+        };
+      });
+      const next = res?.pagingMetadata?.cursors?.next;
+      return { staff, ...(typeof next === 'string' && next ? { nextPageToken: next } : {}) };
+    },
+
     async listServices(query) {
       const c = await http.resolve();
       const res = await http.request(c, {

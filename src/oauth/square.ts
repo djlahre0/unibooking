@@ -21,6 +21,25 @@ export const SQUARE_APPOINTMENT_SCOPES = [
   'MERCHANT_PROFILE_READ',
 ];
 
+/**
+ * The extra scopes the catalog/staff write methods need.
+ *
+ * Deliberately NOT part of the default list. Requesting write access you do not
+ * use is a needless escalation, and scopes cannot be widened quietly later —
+ * adding one forces **every already-connected merchant to re-consent**. So this
+ * is opt-in and explicit:
+ *
+ * ```ts
+ * squareOAuth(config).authorizationUrl({
+ *   scopes: [...SQUARE_APPOINTMENT_SCOPES, ...SQUARE_WRITE_SCOPES],
+ * });
+ * ```
+ *
+ * `ITEMS_WRITE` covers `createService` / `updateService` / `setServiceActive`;
+ * `EMPLOYEES_WRITE` covers the staff equivalents.
+ */
+export const SQUARE_WRITE_SCOPES = ['ITEMS_WRITE', 'EMPLOYEES_WRITE'];
+
 export interface SquareOAuthConfig extends OAuthConfig {
   /** Point at the sandbox host during development. Defaults to production. */
   baseUrl?: string;
