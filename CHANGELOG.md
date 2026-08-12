@@ -40,9 +40,8 @@ All notable changes to this project are documented here. The format is based on
   its API is gated behind manual approval and its request shapes could not be
   confirmed.
 
-  `Service`
-  carries name, description, duration, price, category and active state;
-  `Staff` carries name, email, phone and active state.
+  `Service` carries name, description, duration, price, category and active
+  state; `Staff` carries name, email, phone and active state.
 
   `Service.id` and `Staff.id` are guaranteed to be the values `createBooking`
   accepts — on Square that means catalog items are flattened into one service
@@ -91,11 +90,11 @@ All notable changes to this project are documented here. The format is based on
   ```
 
 - **`Service`, `Staff`, `Money` and `ConnectionStatus` canonical types**, plus
-  the `serviceCatalog` and `staffDirectory` capability flags. The flags are
-  `false` on every adapter in this release — `listServices()` / `listStaff()`
-  land next. They are deliberately **separate** from the existing
+  the `serviceCatalog` / `staffDirectory` capability flags (and their `*Write`
+  counterparts). These are deliberately **separate** from the existing
   `services` / `staff` flags, which say only that a booking can *reference* a
-  service or staff member; several providers have one without the other.
+  service or staff member — several providers have one without the other, so
+  check the flag that matches the call you intend to make.
 - **`probeConnection` is exported** for custom-adapter authors, so a
   hand-written adapter classifies connection failures identically.
 
