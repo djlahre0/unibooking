@@ -13,6 +13,9 @@ export type Op =
   | 'cancelBooking'
   | 'listBookings'
   | 'searchAvailability'
+  | 'checkConnection'
+  | 'listServices'
+  | 'listStaff'
   | 'findOrCreate'
   | 'withRetryList'
   | 'collectAll'
@@ -25,6 +28,9 @@ export const OPS: readonly Op[] = [
   'cancelBooking',
   'listBookings',
   'searchAvailability',
+  'checkConnection',
+  'listServices',
+  'listStaff',
   'findOrCreate',
   'withRetryList',
   'collectAll',
@@ -101,6 +107,38 @@ export async function dispatch(
         range: RANGE(args),
         ...(args.serviceId ? { serviceId: args.serviceId } : {}),
         ...(args.staffId ? { staffId: args.staffId } : {}),
+      });
+
+    case 'checkConnection':
+      // Present on every adapter, so no capability guard. Note this resolves
+      // `{ ok: false }` for dead credentials rather than throwing — only a
+      // transient fault reaches serializeError.
+      return client.checkConnection();
+
+    case 'listServices':
+      if (!client.listServices) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider does not expose a service catalog.',
+        });
+      }
+      return client.listServices({
+        ...(args?.limit ? { limit: Number(args.limit) } : {}),
+        ...(args?.pageToken ? { pageToken: args.pageToken } : {}),
+      });
+
+    case 'listStaff':
+      if (!client.listStaff) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider does not expose a staff directory.',
+        });
+      }
+      return client.listStaff({
+        ...(args?.limit ? { limit: Number(args.limit) } : {}),
+        ...(args?.pageToken ? { pageToken: args.pageToken } : {}),
       });
 
     case 'findOrCreate':

@@ -11,6 +11,9 @@ import {
   callListBookings,
   callSearchAvailability,
   callFindOrCreateCustomer,
+  callCheckConnection,
+  callListServices,
+  callListStaff,
   demoRegistry,
   demoWithRetry,
   demoCollectAll,
@@ -149,6 +152,7 @@ const TABS = [
   { id: 'bookings', label: '📅 Bookings' },
   { id: 'availability', label: '🕐 Availability' },
   { id: 'customers', label: '👤 Customers' },
+  { id: 'catalog', label: '📚 Catalog & Health' },
   { id: 'utilities', label: '🛠 Utilities' },
   { id: 'webhooks', label: '🔔 Webhooks' },
 ];
@@ -177,6 +181,7 @@ export default function Home() {
   const [bookingResult, setBookingResult] = useState<ActionResult | null>(null);
   const [availResult, setAvailResult] = useState<ActionResult | null>(null);
   const [customerResult, setCustomerResult] = useState<ActionResult | null>(null);
+  const [catalogResult, setCatalogResult] = useState<ActionResult | null>(null);
   const [utilResult, setUtilResult] = useState<ActionResult | null>(null);
   const [webhookResult, setWebhookResult] = useState<ActionResult | null>(null);
 
@@ -1038,6 +1043,107 @@ export default function Home() {
           )}
 
           {/* ═══ UTILITIES TAB ═══ */}
+          {activeTab === 'catalog' && (
+            <div className="fade-in">
+              {!selectedProvider ? (
+                <div className="empty-state">
+                  <span className="icon">📚</span>
+                  Select a provider in the Connect tab first
+                </div>
+              ) : (
+                <div className="card">
+                  <div className="card-title">
+                    <span className="icon">📚</span> Catalog &amp; Health — {providerInfo?.label}
+                  </div>
+
+                  <p
+                    style={{
+                      color: 'var(--text-secondary)',
+                      fontSize: '0.82rem',
+                      marginBottom: '1rem',
+                    }}
+                  >
+                    <code>checkConnection()</code> is on every adapter and does{' '}
+                    <strong>not</strong> throw when credentials are dead — it returns{' '}
+                    <code>{'{ ok: false, reason }'}</code>. A network blip or 5xx still throws, so a
+                    transient fault is never mistaken for a revoked integration.
+                  </p>
+                  <p
+                    style={{
+                      color: 'var(--text-secondary)',
+                      fontSize: '0.82rem',
+                      marginBottom: '1rem',
+                    }}
+                  >
+                    <code>listServices()</code> / <code>listStaff()</code> need{' '}
+                    <code>capabilities.serviceCatalog</code> /{' '}
+                    <code>capabilities.staffDirectory</code> — which are <em>not</em> the same as{' '}
+                    <code>services</code> / <code>staff</code>, those only say a booking can
+                    reference one.
+                  </p>
+
+                  <div className="op-row">
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={busy('catalog')}
+                      onClick={() =>
+                        wrap(
+                          'catalog',
+                          () => callCheckConnection(selectedProvider, conn),
+                          setCatalogResult,
+                        )
+                      }
+                    >
+                      ❤️ Check Connection
+                    </button>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      disabled={busy('catalog')}
+                      onClick={() =>
+                        wrap(
+                          'catalog',
+                          () => callListServices(selectedProvider, conn, { limit: 20 }),
+                          setCatalogResult,
+                        )
+                      }
+                    >
+                      🧾 List Services
+                    </button>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      disabled={busy('catalog')}
+                      onClick={() =>
+                        wrap(
+                          'catalog',
+                          () => callListStaff(selectedProvider, conn, { limit: 20 }),
+                          setCatalogResult,
+                        )
+                      }
+                    >
+                      🧑‍🔧 List Staff
+                    </button>
+                  </div>
+
+                  <p
+                    style={{
+                      color: 'var(--text-muted)',
+                      fontSize: '0.78rem',
+                      marginTop: '1rem',
+                    }}
+                  >
+                    Catalog <strong>writes</strong> (<code>createService</code>,{' '}
+                    <code>setStaffActive</code>, …) are supported by the library on Square but are
+                    deliberately not exposed here — this playground talks to real accounts, and a
+                    demo should not mutate a live salon&apos;s catalog.
+                  </p>
+
+                  {catalogResult && (
+                    <ResultBox result={catalogResult} label="catalog result" />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {activeTab === 'utilities' && (
             <div className="fade-in">
               <div className="card" style={{ marginBottom: '1rem' }}>

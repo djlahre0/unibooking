@@ -272,6 +272,26 @@ export function callSearchAvailability(
   return run(providerId, conn, 'searchAvailability', query);
 }
 
+export function callCheckConnection(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'checkConnection', {});
+}
+
+export function callListServices(
+  providerId: string,
+  conn: Connection,
+  query: { limit?: number; pageToken?: string } = {},
+): Promise<ActionResult> {
+  return run(providerId, conn, 'listServices', query);
+}
+
+export function callListStaff(
+  providerId: string,
+  conn: Connection,
+  query: { limit?: number; pageToken?: string } = {},
+): Promise<ActionResult> {
+  return run(providerId, conn, 'listStaff', query);
+}
+
 export function callFindOrCreateCustomer(
   providerId: string,
   conn: Connection,
