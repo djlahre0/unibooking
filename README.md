@@ -577,7 +577,8 @@ try {
 
 `checkConnection()` is present on **every** adapter, with no capability flag to
 consult first — a health check you must ask permission to run is not a health
-check.
+check. (The one exception is the MangoMint stub, which has no API to probe and
+throws `UNSUPPORTED` like its other methods.)
 
 ---
 

@@ -141,6 +141,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`ListServicesQuery.limit` / `ListStaffQuery.limit` were silently ignored**
+  by Acuity, Bookeo, Boulevard, Phorest and Setmore, whose endpoints expose no
+  page-size parameter — a caller asking for ten entries received the entire
+  catalogue. `defineAdapter` now trims the page, the same backstop
+  `ListBookingsQuery.status` already has. Trimming applies only to a terminal
+  page: slicing one that carries a `nextPageToken` would hide the entries
+  between the cut and the next page.
+- **`setmore.listServices` failed entirely when the categories lookup failed.**
+  `categoryName` is decorative, so a narrower token or an outage on that one
+  route no longer costs the caller their services.
 - **`google` sent a percent-encoded calendar id to `freeBusy`**, in both the
   request body and the response lookup key. Every Google calendar id except
   `primary` contains an `@` — the `c_…@group.calendar.google.com` form and the
