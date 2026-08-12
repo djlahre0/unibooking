@@ -249,6 +249,9 @@ describe('AUDIT square', () => {
     await square({ accessToken: 't', locationId: 'L' }).createBooking({
       title: 'Haircut — Jane',
       range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+      providerOptions: { service_variation_version: 1 },
     });
     expect(body.booking.customer_note).toBe('Haircut — Jane');
   });

@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { freeSlots } from '../availability';
@@ -22,8 +22,17 @@ export type GoogleCredentials = {
 
 const BASE = 'https://www.googleapis.com/calendar/v3/';
 
+/** The calendar id exactly as the API expects it inside a JSON body or as a
+ *  response key. */
+function rawCalId(c: GoogleCredentials): string {
+  return c.calendarId ?? 'primary';
+}
+
+/** The same id escaped for a URL path segment. Never use this in a request body:
+ *  freeBusy's `items[]` entry and the `calendars` key it answers with are both
+ *  raw, and every calendar id except `primary` contains an `@`. */
 function calId(c: GoogleCredentials): string {
-  return encodeURIComponent(c.calendarId ?? 'primary');
+  return encodeURIComponent(rawCalId(c));
 }
 
 function point(instant: string, timezone: string | undefined): Record<string, unknown> {
@@ -111,6 +120,33 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
+/** Google echoes the requested calendar id back as the `calendars` key, but it
+ *  normalizes email-form ids to lowercase — so an exact match is not guaranteed
+ *  even when the request carried the id verbatim. Widen the lookup rather than
+ *  reporting a calendar Google actually answered for. */
+function resolveCalendarEntry(calendars: Record<string, any>, id: string): Record<string, any> {
+  if (calendars[id] !== undefined) {
+    return asRecord(calendars[id], 'google', `freeBusy.calendars[${id}]`);
+  }
+  const lower = id.toLowerCase();
+  for (const [key, value] of Object.entries(calendars)) {
+    if (key.toLowerCase() === lower) {
+      return asRecord(value, 'google', `freeBusy.calendars[${key}]`);
+    }
+  }
+  // Exactly one calendar was requested, so a lone entry can only be that one.
+  const keys = Object.keys(calendars);
+  const only = keys.length === 1 ? keys[0] : undefined;
+  if (only !== undefined) {
+    return asRecord(calendars[only], 'google', `freeBusy.calendars[${only}]`);
+  }
+  throw new UnibookingError({
+    provider: 'google',
+    code: 'UPSTREAM',
+    message: `freeBusy returned no entry for calendar "${id}"`,
+  });
+}
+
 function parseGoogleError(
   _status: number,
   body: unknown,
@@ -133,11 +169,29 @@ export const google = defineAdapter<GoogleCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    serviceCatalog: false,
+    staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   parseError: parseGoogleError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('google', async () => {
+        const res = await http.request(c, {
+          path: 'users/me/calendarList',
+          query: { maxResults: 1 },
+        });
+        const first = asArray(res?.items, 'google', 'calendarList.items')[0];
+        return {
+          ...(first?.id ? { account: { id: String(first.id) } } : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'google');
       const c = await http.resolve();
@@ -247,7 +301,7 @@ export const google = defineAdapter<GoogleCredentials>({
       }
       const durationMinutes = query.durationMinutes;
       const c = await http.resolve();
-      const id = calId(c);
+      const id = rawCalId(c);
       const res = await http.request(c, {
         method: 'POST',
         path: 'freeBusy',
@@ -259,10 +313,9 @@ export const google = defineAdapter<GoogleCredentials>({
         },
       });
       // Response: { calendars: { [id]: { busy: [{start,end}], errors?: [...] } } }.
-      const cal = asRecord(
-        asRecord(res?.calendars, 'google', 'freeBusy.calendars')[id],
-        'google',
-        'freeBusy.calendars[calendarId]',
+      const cal = resolveCalendarEntry(
+        asRecord(res?.calendars, 'google', 'freeBusy.calendars'),
+        id,
       );
       const errors = asArray(cal.errors, 'google', 'freeBusy.errors');
       if (errors.length > 0) {

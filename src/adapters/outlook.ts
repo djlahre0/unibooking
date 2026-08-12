@@ -1,5 +1,5 @@
 import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { freeSlots } from '../availability';
@@ -105,12 +105,33 @@ export const outlook = defineAdapter<OutlookCredentials>({
     webhooks: true,
     idempotency: true,
     customers: false,
+    serviceCatalog: false,
+    staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   requestIdHeader: 'request-id',
   parseError: parseGraphError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('outlook', async () => {
+        // Probe the same principal the adapter reads calendars for, so a token
+        // scoped to a different mailbox reports dead rather than falsely healthy.
+        const res = await http.request(c, { path: who(c) });
+        const email = res?.mail ?? res?.userPrincipalName;
+        return {
+          account: {
+            ...(res?.id ? { id: String(res.id) } : {}),
+            ...(res?.displayName ? { name: String(res.displayName) } : {}),
+            ...(email ? { email: String(email) } : {}),
+          },
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'outlook');
       const c = await http.resolve();

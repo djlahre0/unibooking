@@ -3,13 +3,16 @@ import type {
   BookingClient,
   Capabilities,
   ClientOptions,
+  ConnectionStatus,
   CredsInput,
   CustomerOps,
+  ListServicesQuery,
+  ListStaffQuery,
   ProviderCredentials,
   ProviderId,
 } from './types';
 import { createHttp, type AuthFn, type HttpConfig, type HttpContext } from './http';
-import { UnibookingError } from './errors';
+import { UnibookingError, type ErrorCode } from './errors';
 import { sortSlots } from './availability';
 
 /** The method set an adapter implements (everything on BookingClient except the
@@ -21,6 +24,15 @@ export interface AdapterMethods {
   cancelBooking: BookingClient['cancelBooking'];
   listBookings: BookingClient['listBookings'];
   searchAvailability: BookingClient['searchAvailability'];
+  checkConnection: BookingClient['checkConnection'];
+  listServices?: NonNullable<BookingClient['listServices']>;
+  listStaff?: NonNullable<BookingClient['listStaff']>;
+  createService?: NonNullable<BookingClient['createService']>;
+  updateService?: NonNullable<BookingClient['updateService']>;
+  setServiceActive?: NonNullable<BookingClient['setServiceActive']>;
+  createStaff?: NonNullable<BookingClient['createStaff']>;
+  updateStaff?: NonNullable<BookingClient['updateStaff']>;
+  setStaffActive?: NonNullable<BookingClient['setStaffActive']>;
   customers?: CustomerOps;
 }
 
@@ -76,6 +88,39 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       // Chronological order is part of the canonical result, not something each
       // adapter re-derives — see `sortSlots` for why provider order isn't it.
       searchAvailability: async (query) => sortSlots(await m.searchAvailability(query)),
+      checkConnection: m.checkConnection,
+      // `limit` is documented on both queries without caveat, but several
+      // providers expose no page-size parameter at all (Setmore, Acuity,
+      // Phorest, Bookeo, Boulevard) and returned their entire catalog to a
+      // caller who asked for ten. Same backstop, and same reasoning, as the
+      // `status` filter above.
+      //
+      // Truncation is applied ONLY on a terminal page. If the provider handed
+      // back a cursor it is paginating for itself, and slicing there would
+      // silently strip the items between the cut and the next page — the caller
+      // would page forward and never see them.
+      ...(m.listServices
+        ? {
+            listServices: async (query?: ListServicesQuery) => {
+              const result = await m.listServices!(query);
+              return capPage(result, 'services', query?.limit);
+            },
+          }
+        : {}),
+      ...(m.listStaff
+        ? {
+            listStaff: async (query?: ListStaffQuery) => {
+              const result = await m.listStaff!(query);
+              return capPage(result, 'staff', query?.limit);
+            },
+          }
+        : {}),
+      ...(m.createService ? { createService: m.createService } : {}),
+      ...(m.updateService ? { updateService: m.updateService } : {}),
+      ...(m.setServiceActive ? { setServiceActive: m.setServiceActive } : {}),
+      ...(m.createStaff ? { createStaff: m.createStaff } : {}),
+      ...(m.updateStaff ? { updateStaff: m.updateStaff } : {}),
+      ...(m.setStaffActive ? { setStaffActive: m.setStaffActive } : {}),
       ...(m.customers ? { customers: m.customers } : {}),
     };
   };
@@ -113,6 +158,70 @@ export function bookingsWithinRange<T extends { range: { start: string } }>(
   });
 }
 
+/** Codes that mean "these credentials no longer work". Everything else is a
+ *  fault, not a verdict on the connection. */
+const DEAD_CONNECTION_CODES = new Set<ErrorCode>(['AUTH', 'FORBIDDEN', 'NOT_FOUND']);
+
+/**
+ * Run a liveness probe and classify the outcome.
+ *
+ * A dead connection is the expected answer to `checkConnection`, so it is
+ * returned rather than thrown. A network blip, timeout, rate limit or 5xx is
+ * NOT evidence that a salon revoked access — those rethrow, so a consumer
+ * cannot mistake a transient failure for a revoked integration and disconnect
+ * a healthy one.
+ */
+export async function probeConnection(
+  _provider: ProviderId,
+  probe: () => Promise<{ account?: ConnectionStatus['account']; raw: unknown }>,
+): Promise<ConnectionStatus> {
+  try {
+    const { account, raw } = await probe();
+    return { ok: true, ...(account ? { account } : {}), raw };
+  } catch (e) {
+    if (e instanceof UnibookingError && DEAD_CONNECTION_CODES.has(e.code)) {
+      return {
+        ok: false,
+        reason: e.code as NonNullable<ConnectionStatus['reason']>,
+        message: e.message,
+        raw: e,
+      };
+    }
+    throw e;
+  }
+}
+
+/** Apply `limit` to a list page whose provider had no page-size parameter.
+ *
+ *  Only trims a TERMINAL page. When the provider returned a cursor it is paging
+ *  for itself, and slicing there would silently strip the items between the cut
+ *  and the next page — the caller would page forward and never see them. */
+function capPage<K extends string, T>(
+  result: { [P in K]: T[] } & { nextPageToken?: string },
+  key: K,
+  limit: number | undefined,
+): typeof result {
+  if (limit === undefined || limit < 0) return result;
+  if (result.nextPageToken !== undefined) return result;
+  const list = result[key];
+  if (list.length <= limit) return result;
+  return { ...result, [key]: list.slice(0, limit) };
+}
+
+/** Parse an ISO-8601 duration (`PT1H30M`, `PT45M`) to minutes.
+ *
+ *  Graph and Bookeo both express service durations this way. Returns undefined
+ *  for anything unparseable or non-positive rather than a misleading zero. */
+export function minutesFromIso8601Duration(v: unknown): number | undefined {
+  if (typeof v !== 'string') return undefined;
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?)?$/.exec(v.trim());
+  if (!m) return undefined;
+  const [, d, h, min, sec] = m;
+  const total =
+    Number(d ?? 0) * 1440 + Number(h ?? 0) * 60 + Number(min ?? 0) + Number(sec ?? 0) / 60;
+  return total > 0 ? total : undefined;
+}
+
 /** Throw a consistent UNSUPPORTED error (for capabilities a provider lacks). */
 export function unsupported(provider: ProviderId, capability: string): never {
   throw new UnibookingError({
@@ -146,6 +255,20 @@ export function asArray(v: unknown, provider: ProviderId, ctx: string): any[] {
     code: 'UPSTREAM',
     message: `${ctx}: expected an array, got ${typeof v}`,
   });
+}
+
+/** Decimal price (`"45.00"`, `45.5`) → integer minor units.
+ *
+ *  Several providers return prices as decimal strings or floats. Rounds rather
+ *  than truncates so `"45.005"` cannot silently lose a cent downward, and
+ *  returns undefined for anything unparseable or negative rather than emitting a
+ *  bogus amount. The currency is always the caller's problem — a `Money` without
+ *  one is unusable, so `price` is omitted rather than guessed. */
+export function decimalToMinorUnits(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.round(n * 100);
 }
 
 export function reqString(v: unknown, provider: ProviderId, ctx: string): string {

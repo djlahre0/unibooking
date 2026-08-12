@@ -73,7 +73,16 @@ describe('README quick-start walkthrough (mocked Square)', () => {
           availabilities: [
             {
               start_at: '2026-07-20T15:00:00-07:00',
-              appointment_segments: [{ duration_minutes: 45, team_member_id: 'tm_1' }],
+              appointment_segments: [
+                {
+                  duration_minutes: 45,
+                  team_member_id: 'tm_1',
+                  // Square returns the catalog version on every availability
+                  // segment; createBooking requires it back.
+                  service_variation_id: 'svc_1',
+                  service_variation_version: 1621345678900,
+                },
+              ],
             },
           ],
         }),
@@ -134,7 +143,10 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       timeoutMs: 10_000,
     });
 
-    // capabilities — every one true for Square.
+    // capabilities — every one true for Square, including enumeration.
+    // `services`/`staff` and `serviceCatalog`/`staffDirectory` are separate
+    // questions: the first pair says a booking can reference them, the second
+    // that they can be listed. Square happens to support both.
     expect(client.capabilities).toEqual({
       availability: true,
       staff: true,
@@ -142,6 +154,10 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       webhooks: true,
       idempotency: true,
       customers: true,
+      serviceCatalog: true,
+      staffDirectory: true,
+      serviceCatalogWrite: true,
+      staffDirectoryWrite: true,
     });
 
     const serviceId = 'SERVICE_VARIATION_ID';
@@ -165,6 +181,10 @@ describe('README quick-start walkthrough (mocked Square)', () => {
     expect(slot.staffId).toBe('tm_1');
 
     // 3. createBooking
+    // Square pins the catalog version on every booking, and the slot you are
+    // booking already carries it — so read it straight back off `slot.raw`
+    // rather than making a separate catalog call.
+    const segment = (slot.raw as any).appointment_segments[0];
     const booking = await client.createBooking({
       title: 'Haircut — Jane',
       range: { start: slot.start, end: slot.end },
@@ -172,6 +192,7 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       ...(slot.staffId ? { staffId: slot.staffId } : {}),
       customer: { id: customerId },
       idempotencyKey: crypto.randomUUID(),
+      providerOptions: { service_variation_version: segment.service_variation_version },
     });
     expect(booking.id).toBe('bk_1');
     expect(booking.range.end).toBe('2026-07-20T15:45:00-07:00');

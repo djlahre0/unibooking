@@ -6,6 +6,122 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **OAuth connect helpers under `unibooking/oauth`** — **server-only**, and
+  stateless like everything else here: `authorizationUrl()` → `exchangeCode()`
+  → `refresh()` return token data and store nothing. `withAutoRefresh()` bridges
+  stored tokens into `CredsInput`, refreshing just before expiry and handing the
+  new tokens to an `onRefresh` callback for you to persist. It persists *before*
+  returning credentials — a failed write propagates rather than proceeding as
+  though the token were saved.
+
+  Modules: `google`, `microsoft` (`outlookOAuth` + `microsoftBookingsOAuth`),
+  `square`, `acuity`, `calendly`, plus two partials — `setmore` (`refresh` only;
+  no authorization-code flow exists) and `wix` (no `authorizationUrl`; the grant
+  keys on an install-time `instanceId`). Apple/CalDAV, Bookeo, Boulevard,
+  Mindbody, Phorest and Zenoti get no module because they do not use OAuth2.
+  Vagaro is excluded pending confirmation of its grant type.
+
+  Opt into PKCE with `authorizationUrl({ pkce: true })`.
+
+  These take a **client secret**, so they ship as separate entry points that no
+  adapter imports — bundling an adapter cannot pull secrets-handling code into a
+  browser build.
+
+- **`listServices()` and `listStaff()`** on Setmore, Square, Microsoft Bookings,
+  Acuity, Mindbody, Zenoti, Phorest and Boulevard, plus `listServices()` only on
+  Bookeo, Calendly and Wix (Wix gained `listStaff` too). Behind the new
+  `serviceCatalog` / `staffDirectory`
+  flags — check those rather than assuming, since they differ per provider.
+
+  Setmore, Square and Microsoft Bookings are mapped against captured payloads;
+  the rest are **spec-derived with no live tenant**, the same caveat the README's
+  verification-status note carries for every adapter. Vagaro is absent because
+  its API is gated behind manual approval and its request shapes could not be
+  confirmed.
+
+  `Service` carries name, description, duration, price, category and active
+  state; `Staff` carries name, email, phone and active state.
+
+  `Service.id` and `Staff.id` are guaranteed to be the values `createBooking`
+  accepts — on Square that means catalog items are flattened into one service
+  **per variation**, since its booking API takes the variation id. Prices are
+  integer minor units with an ISO-4217 currency, omitted rather than guessed
+  when the provider supplies no currency (pass `currency` in Setmore's
+  credentials to populate it).
+
+- **Catalog writes on Square** — `createService`, `updateService`,
+  `setServiceActive`, `createStaff`, `updateStaff`, `setStaffActive`, behind the
+  new `serviceCatalogWrite` / `staffDirectoryWrite` flags. Square is the only
+  provider with them; most catalogs are read-only to third parties.
+
+  Updates are partial: omitted fields are left alone. On Square that requires a
+  read-modify-write, because its upsert *replaces* the object — anything not
+  sent back is erased.
+
+  **There is deliberately no `deleteService` or `deleteStaff.`** Square has no
+  team-member delete at all (only `status: INACTIVE`), and its catalog delete
+  **cascades** — removing an item removes every variation under it, and
+  `Service.id` *is* a variation id. A canonical `delete` would mean something
+  different, and irreversible, per provider. `setServiceActive(id, false)`
+  expresses the intent without destroying booking history.
+
+  Creates are **not** auto-retried by `withRetry` — neither Square write accepts
+  a caller-supplied idempotency key, so a retry after a create that actually
+  succeeded would duplicate the record. Updates and the active toggles are
+  idempotent and are retried.
+
+  These need `ITEMS_WRITE` / `EMPLOYEES_WRITE`, which
+  `unibooking/oauth/square` does not request by default. Opt in with the
+  exported `SQUARE_WRITE_SCOPES` — decide before merchants connect, since
+  widening scopes later forces every one of them to re-consent.
+
+- **`checkConnection()` on every adapter.** Answers "do these credentials still
+  work?" using values you loaded from your own database, and **does not throw**
+  when the answer is no — a dead connection is the expected result, returned as
+  `{ ok: false, reason }` where `reason` is `AUTH`, `FORBIDDEN` or `NOT_FOUND`.
+  Transient faults (network, timeout, rate limit, 5xx) still **throw**, so a
+  blip cannot be mistaken for a revoked integration and cause a consumer to
+  disconnect a healthy salon. Where the provider exposes it, `account` carries
+  the connected identity (Square reports the location the credentials are bound
+  to, not merely the first one listed).
+
+  ```ts
+  const status = await square(storedCreds).checkConnection();
+  if (!status.ok) await markDisconnected(salonId, status.reason);
+  ```
+
+- **`Service`, `Staff`, `Money` and `ConnectionStatus` canonical types**, plus
+  the `serviceCatalog` / `staffDirectory` capability flags (and their `*Write`
+  counterparts). These are deliberately **separate** from the existing
+  `services` / `staff` flags, which say only that a booking can *reference* a
+  service or staff member — several providers have one without the other, so
+  check the flag that matches the call you intend to make.
+- **`probeConnection` is exported** for custom-adapter authors, so a
+  hand-written adapter classifies connection failures identically.
+
+### Changed
+
+- **BREAKING — `Capabilities` gains two required fields** (`serviceCatalog`,
+  `staffDirectory`) and **`AdapterMethods` gains a required `checkConnection`**.
+  This only affects code that builds a custom adapter with `defineAdapter`;
+  consumers of the built-in adapters are unaffected. To migrate, add both flags
+  (`false` unless you implement enumeration) and a probe:
+
+  ```ts
+  build: (http) => ({
+    // ...existing methods...
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('your_provider', async () => {
+        const res = await http.request(c, { path: 'cheapest/authenticated/read' });
+        return { raw: res };
+      });
+    },
+  }),
+  ```
+
 ### Security
 
 - **Every HMAC webhook verifier threw a `TypeError` instead of returning `false`
@@ -26,6 +142,37 @@ All notable changes to this project are documented here. The format is based on
   stops verifying — this only changes the failure mode.
 
 ### Fixed
+
+- **`ListServicesQuery.limit` / `ListStaffQuery.limit` were silently ignored**
+  by Acuity, Bookeo, Boulevard, Phorest and Setmore, whose endpoints expose no
+  page-size parameter — a caller asking for ten entries received the entire
+  catalogue. `defineAdapter` now trims the page, the same backstop
+  `ListBookingsQuery.status` already has. Trimming applies only to a terminal
+  page: slicing one that carries a `nextPageToken` would hide the entries
+  between the cut and the next page.
+- **`setmore.listServices` failed entirely when the categories lookup failed.**
+  `categoryName` is decorative, so a narrower token or an outage on that one
+  route no longer costs the caller their services.
+- **`google` sent a percent-encoded calendar id to `freeBusy`**, in both the
+  request body and the response lookup key. Every Google calendar id except
+  `primary` contains an `@` — the `c_…@group.calendar.google.com` form and the
+  plain-email form alike — so `searchAvailability` was broken for every real
+  calendar and failed as an opaque `UPSTREAM` about a missing `calendars` entry.
+  The id is now sent raw. The response key is additionally resolved
+  case-insensitively (Google lowercases email-form ids), falling back to a lone
+  entry, and the error now names the calendar that was requested.
+- **`square.createBooking` allowed a request Square always rejects.** Square
+  requires segment `team_member_id`, `service_variation_id` and
+  `service_variation_version`; all three were optional, so omitting one surfaced
+  as an opaque `400 MISSING_REQUIRED_PARAMETER`. They are now checked
+  client-side with an error naming the missing field. Supplying
+  `providerOptions.appointment_segments` still bypasses the check — that escape
+  hatch is unchanged. The README's Square examples were teaching the failing
+  form and now read `service_variation_version` off the availability slot's
+  `raw` segment, which is where Square already returns it.
+- **`setmore`** — corrected a doc comment claiming access tokens last ~7 days.
+  They last 7200 seconds (two hours), so a long-lived process must refresh
+  rather than cache.
 
 - **`ListBookingsQuery.status` was silently ignored by most providers.** The
   field is documented without caveat, but Google, Square, Mindbody, Setmore,

@@ -1,5 +1,12 @@
-import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, Service } from '../types';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  minutesFromIso8601Duration,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 
@@ -128,11 +135,47 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    serviceCatalog: true,
+    staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ query: { apiKey: c.apiKey, secretKey: c.secretKey } }),
   parseError: parseBookeoError,
   build: (http) => ({
+    async listServices() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: 'settings/products' });
+      const services = asArray(res?.data, 'bookeo', 'settings.products').map((raw): Service => {
+        const p = asRecord(raw, 'bookeo', 'product');
+        return {
+          // `productId` is exactly what createBooking sends.
+          id: reqString(String(p.productId ?? ''), 'bookeo', 'product.productId'),
+          name: reqString(String(p.name ?? ''), 'bookeo', 'product.name'),
+          ...(p.description ? { description: String(p.description) } : {}),
+          ...(minutesFromIso8601Duration(p.duration) !== undefined
+            ? { durationMinutes: minutesFromIso8601Duration(p.duration)! }
+            : {}),
+          // Bookeo prices live in a `prices` array of tiers keyed by people
+          // category, so there is no single price to report here.
+          active: true,
+          raw: p,
+        };
+      });
+      return { services };
+    },
+
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('bookeo', async () => {
+        const res = await http.request(c, { path: 'settings/business' });
+        return {
+          ...(res?.name ? { account: { name: String(res.name) } } : {}),
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'bookeo');
       // `participants` is required by the Booking schema and only the caller

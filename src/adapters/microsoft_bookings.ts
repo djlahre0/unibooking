@@ -1,5 +1,12 @@
-import type { AvailabilitySlot, Booking } from '../types';
-import { asArray, asRecord, defineAdapter, reqString } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, Service, Staff } from '../types';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  minutesFromIso8601Duration,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { assertValidRange } from '../time';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
@@ -77,6 +84,39 @@ function customerInfo(input: { customer?: { name?: string; email?: string; phone
   ];
 }
 
+function toService(raw: unknown, currency: string | undefined): Service {
+  const s = asRecord(raw, 'microsoft_bookings', 'service');
+  const duration = minutesFromIso8601Duration(s.defaultDuration);
+  const price = Number(s.defaultPrice);
+  return {
+    id: reqString(s.id, 'microsoft_bookings', 'service.id'),
+    name: reqString(s.displayName, 'microsoft_bookings', 'service.displayName'),
+    ...(typeof s.description === 'string' && s.description ? { description: s.description } : {}),
+    ...(duration !== undefined ? { durationMinutes: duration } : {}),
+    // `defaultPrice` is a decimal amount; Graph puts the currency on the
+    // business, not the service, so it is resolved once by the caller.
+    ...(Number.isFinite(price) && price > 0 && currency
+      ? { price: { amount: Math.round(price * 100), currency } }
+      : {}),
+    // Graph exposes no enabled/disabled flag on bookingService.
+    active: true,
+    raw: s,
+  };
+}
+
+function toStaff(raw: unknown): Staff {
+  const s = asRecord(raw, 'microsoft_bookings', 'staffMember');
+  return {
+    id: reqString(s.id, 'microsoft_bookings', 'staffMember.id'),
+    name: reqString(s.displayName, 'microsoft_bookings', 'staffMember.displayName'),
+    ...(s.emailAddress ? { email: String(s.emailAddress) } : {}),
+    // `isEmailNotificationEnabled` and `role` exist, but neither means
+    // "deactivated" — Graph deletes staff rather than disabling them.
+    active: true,
+    raw: s,
+  };
+}
+
 export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
   id: 'microsoft_bookings',
   capabilities: {
@@ -86,12 +126,30 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    serviceCatalog: true,
+    staffDirectory: true,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
   requestIdHeader: 'request-id',
   parseError: parseGraphError,
   build: (http) => ({
+    async checkConnection() {
+      const c = await http.resolve();
+      return probeConnection('microsoft_bookings', async () => {
+        const res = await http.request(c, { path: base(c) });
+        return {
+          account: {
+            ...(res?.id ? { id: String(res.id) } : {}),
+            ...(res?.displayName ? { name: String(res.displayName) } : {}),
+            ...(res?.email ? { email: String(res.email) } : {}),
+          },
+          raw: res,
+        };
+      });
+    },
     async createBooking(input) {
       assertValidRange(input.range, 'microsoft_bookings');
       const c = await http.resolve();
@@ -263,6 +321,44 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         }
       }
       return out;
+    },
+
+    async listServices(query) {
+      const c = await http.resolve();
+      // Graph puts the currency on the business, not the service. One extra
+      // request for the whole list — never one per service. A failure here must
+      // not sink the whole call, so an unavailable currency simply omits price.
+      const [res, business] = await Promise.all([
+        http.request(c, {
+          path: `${base(c)}/services`,
+          query: {
+            ...(query?.limit !== undefined ? { $top: query.limit } : {}),
+            ...(query?.pageToken ? { $skiptoken: query.pageToken } : {}),
+          },
+        }),
+        http.request(c, { path: base(c) }).catch(() => undefined),
+      ]);
+      const currency =
+        typeof business?.defaultCurrencyIso === 'string' ? business.defaultCurrencyIso : undefined;
+      const services = asArray(res?.value, 'microsoft_bookings', 'services').map((s) =>
+        toService(s, currency),
+      );
+      const next = nextLinkFrom(res);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
+    },
+
+    async listStaff(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: `${base(c)}/staffMembers`,
+        query: {
+          ...(query?.limit !== undefined ? { $top: query.limit } : {}),
+          ...(query?.pageToken ? { $skiptoken: query.pageToken } : {}),
+        },
+      });
+      const staff = asArray(res?.value, 'microsoft_bookings', 'staffMembers').map(toStaff);
+      const next = nextLinkFrom(res);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     customers: {

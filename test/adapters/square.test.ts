@@ -42,6 +42,8 @@ runConformance({
           customer: { id: 'CUST1' },
           staffId: 'tm1',
           serviceId: 'sv1',
+          // Square requires this on every create; omitting it is a 400.
+          providerOptions: { service_variation_version: 1 },
         }),
       check: (b) => {
         // The reference bug set end = start; here end = start + 30 minutes.
@@ -150,6 +152,9 @@ describe('square: customer resolution + version fetch', () => {
       title: 'Cut',
       range: RANGE,
       customer: { email: 'jane@example.com' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+      providerOptions: { service_variation_version: 1 },
     });
 
     expect(b.customer?.id).toBe('CUST_FOUND');
@@ -274,6 +279,77 @@ describe('square: customer resolution + version fetch', () => {
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
+  it('rejects a create Square would 400 on, naming the missing field', async () => {
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    // NOTE: tsconfig sets `exactOptionalPropertyTypes`, so each case builds its
+    // object literally — `{ ...base, staffId: undefined }` does not compile.
+    const common = { title: 'Cut', range: RANGE, customer: { id: 'CUST1' } };
+
+    await expect(
+      client.createBooking({
+        ...common,
+        serviceId: 'sv1',
+        providerOptions: { service_variation_version: 42 },
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('staffId'),
+    });
+
+    await expect(
+      client.createBooking({
+        ...common,
+        staffId: 'tm1',
+        providerOptions: { service_variation_version: 42 },
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('serviceId'),
+    });
+
+    await expect(
+      client.createBooking({ ...common, staffId: 'tm1', serviceId: 'sv1' }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('service_variation_version'),
+    });
+
+    // Nothing was sent — the guard is client-side.
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('skips the guard when the caller supplies appointment_segments wholesale', async () => {
+    const pool = agent.get(ORIGIN);
+    let body: any;
+    pool.intercept({ path: '/v2/bookings', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking() });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    // No staffId, no serviceId, no version — the caller has taken over the
+    // segment, so the guard must not second-guess them.
+    await client.createBooking({
+      title: 'Cut',
+      range: RANGE,
+      customer: { id: 'CUST1' },
+      providerOptions: {
+        appointment_segments: [
+          { team_member_id: 'tmX', service_variation_id: 'svX', service_variation_version: 7 },
+        ],
+      },
+    });
+
+    expect(body.booking.appointment_segments).toEqual([
+      { team_member_id: 'tmX', service_variation_id: 'svX', service_variation_version: 7 },
+    ]);
+    agent.assertNoPendingInterceptors();
+  });
+
   it('rejects a booking with no derivable duration instead of emitting a zero-length range', async () => {
     const pool = agent.get(ORIGIN);
     pool
@@ -314,6 +390,7 @@ describe('square: customer resolution + version fetch', () => {
       customer: { name: 'Jane Doe' },
       staffId: 'tm1',
       serviceId: 'sv1',
+      providerOptions: { service_variation_version: 1 },
     });
 
     expect(b.customer?.id).toBe('CUST_NAMED');

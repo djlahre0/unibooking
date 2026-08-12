@@ -79,6 +79,40 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     cancelBooking: (id, opts) => run(() => client.cancelBooking(id, opts), true),
     listBookings: (query) => run(() => client.listBookings(query), true),
     searchAvailability: (query) => run(() => client.searchAvailability(query), true),
+    // Read-only and safe to retry. Note this retries the transient faults the
+    // probe rethrows (network, 5xx, rate limit); a dead connection is returned,
+    // not thrown, so it is reported on the first attempt rather than retried.
+    checkConnection: () => run(() => client.checkConnection(), true),
+    ...(client.listServices
+      ? { listServices: (query) => run(() => client.listServices!(query), true) }
+      : {}),
+    ...(client.listStaff
+      ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
+      : {}),
+    // Creates are NOT auto-retried: neither provider write takes an idempotency
+    // key from the caller, so a network retry after a create that actually
+    // succeeded would duplicate the service or staff member. Same reasoning as
+    // createBooking without an idempotencyKey, and as customers.findOrCreate.
+    ...(client.createService
+      ? { createService: (input) => run(() => client.createService!(input), false) }
+      : {}),
+    ...(client.createStaff
+      ? { createStaff: (input) => run(() => client.createStaff!(input), false) }
+      : {}),
+    // Updates are idempotent -- the same body applied twice lands the same
+    // state -- so they are safe to retry.
+    ...(client.updateService
+      ? { updateService: (id, input) => run(() => client.updateService!(id, input), true) }
+      : {}),
+    ...(client.setServiceActive
+      ? { setServiceActive: (id, active) => run(() => client.setServiceActive!(id, active), true) }
+      : {}),
+    ...(client.updateStaff
+      ? { updateStaff: (id, input) => run(() => client.updateStaff!(id, input), true) }
+      : {}),
+    ...(client.setStaffActive
+      ? { setStaffActive: (id, active) => run(() => client.setStaffActive!(id, active), true) }
+      : {}),
     ...(client.customers
       ? {
           customers: {

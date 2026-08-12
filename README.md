@@ -328,10 +328,23 @@ const booking = await client.createBooking({
         start: "2026-07-20T09:00:00-07:00",
         end: "2026-07-20T09:45:00-07:00",
     },
+    staffId: "TM_...",
+    serviceId: "SVC_VARIATION_...",
+    // Square pins the catalog version on every booking. `searchAvailability`
+    // hands it to you on each slot — see "Create a Booking" below.
+    providerOptions: { service_variation_version: 1621345678900 },
 });
 
 console.log(booking.id);
 ```
+
+> **Note**
+>
+> Square requires `staffId`, `serviceId` and `service_variation_version` on every
+> create; omitting any is a `400`. unibooking checks them client-side and names
+> the missing one rather than letting the provider answer with
+> `MISSING_REQUIRED_PARAMETER`. Providers with fewer requirements (Google,
+> Outlook, CalDAV) need only `title` and `range`.
 
 Now replace
 
@@ -507,12 +520,242 @@ Example
     customers: true,
     webhooks: true,
     idempotency: true,
+    serviceCatalog: false,
+    staffDirectory: false,
 }
 ```
 
 No more trial-and-error.
 
 Your application knows exactly what the provider supports.
+
+> **Note**
+>
+> `services` and `serviceCatalog` are different questions, and so are `staff`
+> and `staffDirectory`. The first pair asks whether a **booking can reference**
+> a service or staff member; the second asks whether you can **enumerate** them.
+> Plenty of providers have one without the other.
+
+---
+
+# Check a Connection
+
+Salons revoke access, tokens get rotated, and OAuth apps get uninstalled. Every
+adapter exposes `checkConnection()` — pass it the credentials you loaded from
+your own database and it tells you whether they still work.
+
+```ts
+const status = await square(storedCreds).checkConnection();
+
+if (!status.ok) {
+    // status.reason is "AUTH" | "FORBIDDEN" | "NOT_FOUND"
+    await markDisconnected(salonId, status.reason);
+    return;
+}
+
+console.log(status.account); // { id: "LOC1", name: "Manhattan Glow" }
+```
+
+**It does not throw when the connection is dead** — that is the expected answer
+to the question, so it comes back as `ok: false`.
+
+**It does throw on a transient fault.** A network blip, timeout, rate limit or
+5xx is *not* evidence that a salon revoked access. If those were reported as
+`ok: false`, a momentary outage would disconnect every healthy integration you
+have. Only `AUTH`, `FORBIDDEN` and `NOT_FOUND` mean the credentials themselves
+stopped working.
+
+```ts
+try {
+    const status = await client.checkConnection();
+    if (!status.ok) await promptReconnect(salonId);
+} catch (err) {
+    // Transient — leave the integration connected and retry later.
+    logger.warn({ err }, "connection check failed, will retry");
+}
+```
+
+`checkConnection()` is present on **every** adapter, with no capability flag to
+consult first — a health check you must ask permission to run is not a health
+check. (The one exception is the MangoMint stub, which has no API to probe and
+throws `UNSUPPORTED` like its other methods.)
+
+---
+
+# Connect a Provider (OAuth)
+
+> **Server-only.** These helpers take a client secret. Never import
+> `unibooking/oauth` into browser code. No adapter imports it, so bundling an
+> adapter can't pull it in by accident.
+
+unibooking **never stores a token**. The OAuth helpers are pure functions —
+data in, tokens out — and you persist the result.
+
+```ts
+import { googleOAuth } from "unibooking/oauth/google";
+
+const oauth = googleOAuth({
+    clientId: process.env.GOOGLE_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri: "https://app.example.com/google/callback",
+});
+
+// 1. Send the salon owner here. Store `state` and compare it on callback —
+//    we can't verify it for you without keeping state.
+const { url, state } = await oauth.authorizationUrl();
+await db.saveOAuthState(salonId, state);
+redirect(url);
+```
+
+```ts
+// 2. On callback, exchange the code. Nothing is stored by us.
+const tokens = await oauth.exchangeCode(code);
+await db.saveTokens(salonId, tokens);
+// { accessToken, refreshToken?, expiresAt?, scope?, raw }
+```
+
+## Keeping tokens fresh
+
+`withAutoRefresh` turns stored tokens into a credential function that refreshes
+just before expiry and hands you the new tokens to persist.
+
+```ts
+import { withAutoRefresh } from "unibooking/oauth";
+import { google } from "unibooking/adapters/google";
+
+const client = google(
+    withAutoRefresh({
+        oauth,
+        tokens: await db.loadTokens(salonId),
+        onRefresh: (t) => db.saveTokens(salonId, t),
+        toCreds: (t) => ({ accessToken: t.accessToken, calendarId }),
+    }),
+);
+
+await client.listBookings({ range });
+```
+
+`onRefresh` runs **before** the credentials are handed out. If your database
+write throws, the request does not proceed — continuing as though the token were
+saved is how a rotated refresh token gets lost permanently.
+
+## Provider support
+
+OAuth2 coverage is narrower than adapter coverage, because several providers
+don't use OAuth2 at all.
+
+| Provider | Module | Notes |
+|----------|--------|-------|
+| Google | `unibooking/oauth/google` | Forces `access_type=offline` + `prompt=consent` — without both, Google issues **no refresh token** |
+| Outlook | `unibooking/oauth/microsoft` | `outlookOAuth`; forces `offline_access` |
+| Microsoft Bookings | `unibooking/oauth/microsoft` | `microsoftBookingsOAuth` |
+| Square | `unibooking/oauth/square` | Returns `expires_at` as a string, not `expires_in`; `merchant_id` is in `raw` |
+| Acuity | `unibooking/oauth/acuity` | Token endpoint is form-encoded and rejects JSON |
+| Calendly | `unibooking/oauth/calendly` | Codes expire in 10 minutes; PKCE recommended |
+| Setmore | `unibooking/oauth/setmore` | **`refresh` only** — no authorization-code flow exists. The owner pastes a long-lived refresh token |
+| Wix | `unibooking/oauth/wix` | **No `authorizationUrl`** — the grant keys on an `instanceId` from app installation |
+
+**Apple/CalDAV, Bookeo, Boulevard, Mindbody, Phorest and Zenoti have no module**
+— they authenticate with app passwords, API keys, HTTP Basic or signed tokens.
+For those, "connect" is just collecting credentials, and `checkConnection()`
+validates them. **Vagaro is excluded** pending confirmation of its grant type.
+
+## PKCE
+
+Opt in with `pkce: true`; store the returned `codeVerifier` beside `state` and
+pass it back on exchange. Providers that don't support PKCE ignore the extra
+parameters, so enabling it is never a breaking choice.
+
+```ts
+const { url, state, codeVerifier } = await oauth.authorizationUrl({ pkce: true });
+// ...later
+const tokens = await oauth.exchangeCode(code, { codeVerifier });
+```
+
+---
+
+# List Services and Staff
+
+Import a salon's catalog and team. Gated by `serviceCatalog` and
+`staffDirectory` — which are **not** the same as `services` and `staff` (those
+only say a booking can reference them).
+
+```ts
+if (client.capabilities.serviceCatalog) {
+    const { services } = await client.listServices!();
+    // { id, name, description?, durationMinutes?, price?, categoryName?, active, raw }
+}
+
+if (client.capabilities.staffDirectory) {
+    const { staff } = await client.listStaff!();
+    // { id, name, email?, phone?, active, raw }
+}
+```
+
+`price` is `{ amount, currency }` in **integer minor units** (`4500` = $45.00),
+and is omitted rather than guessed when the provider gives no currency — Setmore
+returns a bare `cost`, so pass `currency` in its credentials to populate it.
+
+`Service.id` and `Staff.id` are always the values `createBooking` accepts as
+`serviceId` / `staffId`. On Square that means each catalog item is flattened into
+one service **per variation**, because its booking API takes the variation id.
+
+Both results paginate like `listBookings`, so `listAll` works on them.
+
+## Writing to the catalog
+
+Gated by `serviceCatalogWrite` / `staffDirectoryWrite`. **Square only** — most
+providers' catalogs are read-only to third parties.
+
+```ts
+const service = await client.createService!({
+    name: "Gel Manicure",
+    description: "Gel polish with standard prep",
+    durationMinutes: 45,
+    price: { amount: 4500, currency: "USD" },
+});
+
+await client.updateService!(service.id, { price: { amount: 5000, currency: "USD" } });
+
+// Retire it without destroying it or its booking history.
+await client.setServiceActive!(service.id, false);
+```
+
+Updates are **partial** — omitted fields are left alone. On Square that means a
+read-modify-write internally, because its upsert *replaces* the object: anything
+not sent back is genuinely erased.
+
+### There is no `deleteService` or `deleteStaff`
+
+Deliberate, not an oversight. Deletion isn't portable here:
+
+- Square has **no team-member delete at all** — only `status: INACTIVE`.
+- Square's catalog delete **cascades**: removing an item removes every variation
+  under it, and `Service.id` *is* a variation id.
+
+A canonical `delete` would therefore mean something different, and something
+irreversible, on each provider. `setServiceActive(id, false)` expresses what
+callers actually want — make it unbookable, keep the history, keep past bookings
+resolvable.
+
+> **Scopes.** Square catalog writes need `ITEMS_WRITE` and staff writes need
+> `EMPLOYEES_WRITE`. `unibooking/oauth/square` does **not** request either by
+> default — unused write scopes are a needless escalation. Opt in explicitly:
+>
+> ```ts
+> import {
+>     squareOAuth,
+>     SQUARE_APPOINTMENT_SCOPES,
+>     SQUARE_WRITE_SCOPES,
+> } from "unibooking/oauth/square";
+>
+> await squareOAuth(config).authorizationUrl({
+>     scopes: [...SQUARE_APPOINTMENT_SCOPES, ...SQUARE_WRITE_SCOPES],
+> });
+> ```
+>
+> Decide this before merchants connect: widening scopes later forces **every
+> already-connected merchant to re-consent**.
 
 ---
 
@@ -595,6 +838,37 @@ const booking = await client.createBooking({
     },
 
     idempotencyKey: crypto.randomUUID(),
+});
+```
+
+On Square, the slot you are booking already carries the catalog version the
+create needs, so read it straight back off `slot.raw` instead of making a
+separate catalog call:
+
+```ts
+const segment = (slot.raw as any).appointment_segments[0];
+
+const booking = await client.createBooking({
+    title: "Haircut",
+
+    serviceId,
+
+    staffId: slot.staffId,
+
+    customer: {
+        id: customerId,
+    },
+
+    range: {
+        start: slot.start,
+        end: slot.end,
+    },
+
+    idempotencyKey: crypto.randomUUID(),
+
+    providerOptions: {
+        service_variation_version: segment.service_variation_version,
+    },
 });
 ```
 
@@ -851,24 +1125,24 @@ Asia/Kolkata
 
 unibooking currently supports the following providers.
 
-| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks |
-|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|
-| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ |
-| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — |
-| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ |
-| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — |
-| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ |
-| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
+| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW |
+|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|
+| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
+| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
+| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — |
+| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — |
+| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
 
 > **Note**
 >
@@ -933,8 +1207,15 @@ unibooking currently supports the following providers.
 > **Adapter gaps** — the provider supports this, but unibooking does not model it
 > yet:
 >
-> - Customer / staff / service *enumeration* on Vagaro, Boulevard and Setmore
->   (bookings still accept `staffId` and `serviceId`).
+> - **Service enumeration** is missing only on Vagaro, whose API reference sits
+>   behind a login wall — the auth scheme and endpoint shapes could not be
+>   confirmed, and an enumeration returning ids `createBooking` rejects is worse
+>   than none. Google, Outlook
+>   and Apple/CalDAV are plain calendars with no service or staff concept at all.
+> - **Staff enumeration** is additionally absent on Bookeo and Calendly — neither
+>   models staff in this adapter.
+> - Customer *enumeration* is not modelled anywhere; use
+>   `customers.findOrCreate`.
 > - Bookeo fixed-product booking by `eventId` (pass it via `providerOptions`).
 >
 > **Credential requirements worth knowing before you start:** Vagaro needs a

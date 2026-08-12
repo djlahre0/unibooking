@@ -49,13 +49,19 @@ const ROWS: Array<[string, { id: ProviderId; capabilities: Capabilities }]> = [
   ['Boulevard', boulevard],
 ];
 
-// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks |
+// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory |
+// Enumeration columns are appended rather than inserted so the existing indices
+// stay put — a shifted index here silently checks the wrong column.
 const COLUMNS: Array<[keyof Capabilities, number]> = [
   ['availability', 4],
   ['customers', 5],
   ['staff', 6],
   ['services', 7],
   ['webhooks', 8],
+  ['serviceCatalog', 9],
+  ['staffDirectory', 10],
+  ['serviceCatalogWrite', 11],
+  ['staffDirectoryWrite', 12],
 ];
 
 const YES = '✅';
