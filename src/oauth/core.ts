@@ -68,6 +68,9 @@ export interface OAuthConfig {
   redirectUri: string;
   /** Inject a custom fetch (testing, proxies, non-global-fetch runtimes). */
   fetch?: typeof fetch;
+  /** Injectable clock, so `expiresAt` is deterministic in tests. Mirrors
+   *  `ClientOptions.now` on the adapter side. */
+  now?: () => number;
 }
 
 // --- primitives -------------------------------------------------------------

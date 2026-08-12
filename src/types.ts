@@ -207,6 +207,10 @@ export interface Staff {
 }
 
 export interface ListServicesQuery {
+  /** Maximum entries to return. Forwarded to providers that support a page
+   *  size; for the several that do not, the page is trimmed locally instead —
+   *  but only when it is the LAST page, since trimming a page that carries a
+   *  `nextPageToken` would hide the entries between the cut and the next page. */
   limit?: number;
   /** Opaque, provider-defined. Pass the previous result's `nextPageToken`. */
   pageToken?: string;
@@ -218,6 +222,7 @@ export interface ListServicesResult {
 }
 
 export interface ListStaffQuery {
+  /** Same semantics as `ListServicesQuery.limit`. */
   limit?: number;
   pageToken?: string;
 }

@@ -93,7 +93,7 @@ describe('oauth: token exchange', () => {
       expires_in: 3600,
       scope: 'a b',
     });
-    const oauth = googleOAuth({ ...CONFIG, fetch: fn, now: () => 1_000_000 } as any);
+    const oauth = googleOAuth({ ...CONFIG, fetch: fn, now: () => 1_000_000 });
     const t = await oauth.exchangeCode('the-code');
 
     expect(t.accessToken).toBe('at');
