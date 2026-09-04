@@ -4,6 +4,85 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Square catalog writes were broken outright.** `createService`,
+  `updateService` and `setServiceActive` read the upsert reply from `object`,
+  but Square's `UpsertCatalogObject` answers with `catalog_object` (only
+  `RetrieveCatalogObject` uses `object`). Every catalog write therefore threw
+  `UPSTREAM: catalog.object: expected an object, got undefined` *after* the
+  write had already succeeded upstream — so the service really was created or
+  edited, and the caller got an error and no id for it.
+
+  Caught by running the adapter against a live Square account. The unit tests
+  had mocked the upsert with the retrieve's envelope, so they passed against a
+  shape Square never returns; they now use the real one.
+
+- **Square `createService` produced services that could never be booked.**
+  Square's `team_member_ids` — the staff who perform a service — lives on the
+  catalog VARIATION, but `providerOptions` was spread onto the ITEM, so there was
+  no way to set it short of replacing the whole `variations` array. A service
+  created without it is accepted by the catalog and then rejected by every
+  availability search with "Search did not find a team member who performs the
+  selected service variation".
+
+  `team_member_ids` is now pulled out of `providerOptions` and routed to the
+  variation on both `createService` and `updateService` — the same treatment
+  `service_variation_version` already gets in `createBooking`.
+
+- **Square `Service.active` ignored `available_for_booking`.** It was derived
+  from `is_deleted` alone, while `setServiceActive` writes
+  `available_for_booking` — so the method contradicted itself:
+  `setServiceActive(id, false)` returned a Service still reporting
+  `active: true`, and `listServices` reported unbookable services as active.
+  Both now agree. A variation that omits the flag is unaffected.
+
+- **Square `customers.findOrCreate` could duplicate a customer.** Square's
+  customer search index is eventually consistent — a record created now is not
+  findable via `customers/search` for a second or two (measured live: a miss at
+  0.9s, a hit at 2.3s). Two calls for the same person inside that window both
+  missed the lookup and both created, leaving duplicate customers attached to
+  different bookings.
+
+  The create now carries an idempotency key derived from the identity being
+  deduped on (email, else phone), so Square collapses the repeat server-side
+  where the race actually is. Verified live: three *concurrent* `findOrCreate`
+  calls for one email now return a single customer id, which the previous
+  lookup-then-create could not do at all. A name-only customer deliberately
+  keeps a random key — "John Smith" is not an identity, and collapsing two
+  walk-ins of that name would attach a booking to the wrong person.
+
+### Changed
+
+- **Square now reports Appointments *plan* limits as `UNSUPPORTED` rather than
+  `AUTH`/`FORBIDDEN`.** Two Square failures are about the seller's subscription,
+  not their credentials, and both were observed live:
+
+  - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
+    Bookings call, when the seller has no Appointments subscription.
+  - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
+    on booking creates/updates/cancels, when the seller is on the **free**
+    Appointments plan. Availability search and booking reads still work.
+
+  Read literally those became `AUTH` and `FORBIDDEN` — two of the three codes
+  this library treats as "these credentials no longer work" — so a merchant on
+  the wrong plan would have a healthy integration torn down and be sent through
+  a re-auth that could not possibly fix it. Both now report `UNSUPPORTED`, with
+  a message naming the cause and the remedy. A genuinely bad or revoked token is
+  untouched and still reports `AUTH`.
+
+- `HttpConfig.parseError` may now return a canonical `code` to override the one
+  the HTTP status implies, for the cases where a provider's status is actively
+  misleading. Additive and optional — omitting it keeps the status-derived
+  default, so no other adapter changes behaviour.
+
+### Added
+
+- `sha256Hex()` in the crypto helpers — for deriving stable, bounded-length keys
+  from arbitrary input, not for signing.
+
 ## [0.4.0] - 2026-08-12
 
 ### Added

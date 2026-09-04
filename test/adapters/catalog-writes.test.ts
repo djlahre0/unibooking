@@ -54,6 +54,24 @@ function item(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * UpsertCatalogObject's reply envelope — verified against live Square.
+ *
+ * Note this is NOT the RetrieveCatalogObject envelope: the retrieve returns
+ * `{ object }`, the upsert returns `{ catalog_object, id_mappings }`. Mocking
+ * the upsert with the retrieve's field is exactly how a broken write passed its
+ * tests, so the two shapes are kept deliberately distinct here.
+ */
+function upsertReply(overrides: Record<string, unknown> = {}) {
+  return {
+    catalog_object: item(overrides),
+    id_mappings: [
+      { client_object_id: '#service', object_id: 'ITEM_1' },
+      { client_object_id: '#variation', object_id: 'VAR_1' },
+    ],
+  };
+}
+
 function client() {
   return square({ accessToken: 't', locationId: 'LOC1' });
 }
@@ -97,7 +115,7 @@ describe('square catalog writes', () => {
         200,
         (opts) => {
           body = JSON.parse(String(opts.body));
-          return JSON.stringify({ object: item() });
+          return JSON.stringify(upsertReply());
         },
         { headers: JSON_HEADERS },
       );
@@ -135,7 +153,7 @@ describe('square catalog writes', () => {
         200,
         (opts) => {
           body = JSON.parse(String(opts.body));
-          return JSON.stringify({ object: item() });
+          return JSON.stringify(upsertReply());
         },
         { headers: JSON_HEADERS },
       );
@@ -154,7 +172,7 @@ describe('square catalog writes', () => {
       200,
       (opts) => {
         body = JSON.parse(String(opts.body));
-        return JSON.stringify({ object: item() });
+        return JSON.stringify(upsertReply());
       },
       { headers: JSON_HEADERS },
     );
@@ -180,7 +198,7 @@ describe('square catalog writes', () => {
       200,
       (opts) => {
         body = JSON.parse(String(opts.body));
-        return JSON.stringify({ object: item() });
+        return JSON.stringify(upsertReply());
       },
       { headers: JSON_HEADERS },
     );
@@ -205,7 +223,7 @@ describe('square catalog writes', () => {
       200,
       (opts) => {
         body = JSON.parse(String(opts.body));
-        return JSON.stringify({ object: item() });
+        return JSON.stringify(upsertReply());
       },
       { headers: JSON_HEADERS },
     );
@@ -219,6 +237,50 @@ describe('square catalog writes', () => {
     expect(vars).toHaveLength(2);
     expect(vars[1].item_variation_data.available_for_booking).toBe(true);
     expect(body.object.item_data.name).toBe('Gel Nails');
+  });
+
+  /**
+   * `Service.active` must reflect `available_for_booking`, because that is the
+   * exact field `setServiceActive` writes. Deriving `active` only from
+   * `is_deleted` made the method contradict itself against live Square:
+   * `setServiceActive(id, false)` returned a Service still claiming
+   * `active: true`, and `listServices` reported unbookable services as active.
+   */
+  it('setServiceActive(false) returns a service that reports itself inactive', async () => {
+    const pool = mockReads();
+    // Echo the saved object back, the way Square does -- otherwise the mock
+    // asserts nothing about what was actually written.
+    pool.intercept({ path: (p) => pathname(p) === '/v2/catalog/object', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const sent = JSON.parse(String(opts.body)).object;
+        return JSON.stringify({ catalog_object: sent, id_mappings: [] });
+      },
+      { headers: JSON_HEADERS },
+    );
+
+    const service = await client().setServiceActive!('VAR_1', false);
+
+    expect(service.id).toBe('VAR_1');
+    expect(service.active).toBe(false);
+  });
+
+  it('listServices reports an unbookable variation as inactive', async () => {
+    const unbookable = item();
+    unbookable.item_data.variations[0]!.item_variation_data.available_for_booking = false;
+    agent
+      .get(ORIGIN)
+      .intercept({
+        path: (p) => pathname(p) === '/v2/catalog/search-catalog-items',
+        method: 'POST',
+      })
+      .reply(200, JSON.stringify({ items: [unbookable] }), { headers: JSON_HEADERS });
+
+    const { services } = await client().listServices!();
+
+    // VAR_1 is switched off, VAR_2 is not -- the flag is per-variation.
+    expect(services.find((s) => s.id === 'VAR_1')!.active).toBe(false);
+    expect(services.find((s) => s.id === 'VAR_2')!.active).toBe(true);
   });
 
   it('updateService rejects an id that is not a service variation', async () => {

@@ -1,6 +1,7 @@
 import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
-import { UnibookingError } from '../errors';
+import { sha256Hex } from '../crypto';
+import { UnibookingError, type ErrorCode } from '../errors';
 import type { HttpContext } from '../http';
 import { assertValidRange, endFromDuration } from '../time';
 
@@ -102,25 +103,132 @@ function toBooking(raw: unknown): Booking {
   };
 }
 
+/**
+ * Two Square failures are about the seller's **Appointments plan**, not their
+ * credentials — both observed live:
+ *
+ * - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
+ *   Bookings call, when the seller has no Appointments subscription at all.
+ * - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
+ *   on createBooking/updateBooking/cancelBooking, when the seller is on the
+ *   **Free** plan. Reads (availability search, listBookings) still succeed;
+ *   Square gates only booking writes behind a paid plan.
+ *
+ * In both cases the token is perfectly valid — the catalog, team and customer
+ * endpoints keep working on the very same credentials, and on the Free plan even
+ * the booking *reads* do.
+ *
+ * Taken at face value those become `AUTH` and `FORBIDDEN`, which are two of the
+ * three codes this library defines as "these credentials no longer work" (see
+ * `probeConnection`). A consumer watching for them would tear down a healthy
+ * integration and force a re-auth that cannot possibly fix it, because nothing
+ * was ever wrong with the grant. The remedy is a plan change by the merchant.
+ *
+ * `UNSUPPORTED` is what these actually are: the account cannot do this
+ * operation. It is also excluded from the dead-connection codes, so it can't be
+ * mistaken for a revoked grant.
+ */
+function planLimitation(status: number, errors: any[]): { remedy: string } | undefined {
+  const detail = (e: any) => String(e?.detail ?? '');
+  if (
+    status === 401 &&
+    errors.some(
+      (e) => e?.code === 'UNAUTHORIZED' && /not onboarded to appointments/i.test(detail(e)),
+    )
+  ) {
+    return {
+      remedy:
+        'this Square account has no Appointments subscription, so the Bookings API is unavailable to it. The credentials themselves are valid (catalog, team and customer calls still work). Enable Square Appointments for the merchant at squareup.com/appointments.',
+    };
+  }
+  if (
+    status === 403 &&
+    errors.some((e) => /subscription does not support write operations/i.test(detail(e)))
+  ) {
+    return {
+      remedy:
+        "this Square account's Appointments plan is read-only for the Bookings API — the free plan allows availability and booking reads but not creates, updates or cancels. The credentials are valid; the merchant needs a paid Appointments plan (Plus or Premium) to write bookings.",
+    };
+  }
+  return undefined;
+}
+
 function parseSquareError(
-  _status: number,
+  status: number,
   body: unknown,
-): { providerCode?: string; message?: string } {
+): { providerCode?: string; message?: string; code?: ErrorCode } {
   const errors = (body as any)?.errors;
   if (!Array.isArray(errors) || errors.length === 0) return {};
   const message = errors
     .map((e: any) => e.detail ?? e.code)
     .filter(Boolean)
     .join('; ');
+  const plan = planLimitation(status, errors);
   return {
-    ...(message ? { message } : {}),
+    ...(message ? { message: plan ? `${message} — ${plan.remedy}` : message } : {}),
     ...(errors[0]?.code ? { providerCode: errors[0].code } : {}),
+    // Narrow on purpose: if Square ever reworded these, the match fails and the
+    // status-derived AUTH/FORBIDDEN stands, which is exactly today's behaviour.
+    ...(plan ? { code: 'UNSUPPORTED' as ErrorCode } : {}),
   };
 }
 
 function splitName(name: string): { given_name: string; family_name?: string } {
   const [given, ...rest] = name.trim().split(/\s+/);
   return { given_name: given ?? name, ...(rest.length ? { family_name: rest.join(' ') } : {}) };
+}
+
+/**
+ * The identity a customer is deduped on, as both a search filter and a stable
+ * key. Deriving both from one expression keeps them provably in step — they are
+ * two halves of the same dedup decision.
+ *
+ * Email wins over phone so a customer who supplies both is matched on the
+ * stronger identifier; a customer with neither cannot be deduped at all.
+ */
+function customerDedupe(
+  customer: Customer,
+): { key: string; filter: Record<string, unknown> } | undefined {
+  if (customer.email) {
+    const email = customer.email.trim().toLowerCase();
+    return { key: `email:${email}`, filter: { email_address: { exact: customer.email } } };
+  }
+  if (customer.phone) {
+    const phone = customer.phone.trim();
+    return { key: `phone:${phone}`, filter: { phone_number: { exact: customer.phone } } };
+  }
+  return undefined;
+}
+
+/**
+ * A CreateCustomer idempotency key derived from the customer's identity.
+ *
+ * Square's customer search index is **eventually consistent** — a record
+ * created now is not findable by `customers/search` for a second or two
+ * (measured: a miss at 0.9s, a hit at 2.3s against live Square). So the
+ * search-then-create below has a real race: two calls for the same person close
+ * together both miss the index and both create, leaving duplicate customers
+ * attached to different bookings.
+ *
+ * A key derived from the identity closes it. Square collapses a repeat create
+ * carrying a key it has already seen and returns the original customer, so the
+ * duplicate is prevented server-side, where the race actually lives, rather
+ * than by a client-side re-check that would still be racing.
+ *
+ * These keys expire upstream after 24 hours — by which time the search index
+ * has long since caught up and the lookup path handles the dedup instead. The
+ * two mechanisms cover each other's window.
+ *
+ * Only used when there IS an identity to key on. A name-only customer keeps a
+ * random key: "John Smith" is not an identity, and collapsing two distinct
+ * walk-ins of that name into one record would attach a booking to the wrong
+ * person — a worse failure than the duplicate this avoids.
+ */
+async function customerCreateKey(dedupeKey: string | undefined): Promise<string> {
+  if (dedupeKey === undefined) return globalThis.crypto.randomUUID();
+  // Hashed to bound the length (Square rejects keys over 126 chars) and to keep
+  // a raw email out of the request's idempotency field.
+  return `ub-cust-${(await sha256Hex(dedupeKey)).slice(0, 32)}`;
 }
 
 /** Resolve a canonical customer to a Square customer id, creating one if needed. */
@@ -130,18 +238,12 @@ async function findOrCreateCustomer(
   customer: Customer,
 ): Promise<string> {
   if (customer.id) return customer.id;
-  // Dedup by email, else by phone, so a phone-only customer isn't duplicated on
-  // every call.
-  const filter = customer.email
-    ? { email_address: { exact: customer.email } }
-    : customer.phone
-      ? { phone_number: { exact: customer.phone } }
-      : undefined;
-  if (filter) {
+  const dedupe = customerDedupe(customer);
+  if (dedupe) {
     const search = await http.request(c, {
       method: 'POST',
       path: 'customers/search',
-      body: { query: { filter }, limit: 1 },
+      body: { query: { filter: dedupe.filter }, limit: 1 },
     });
     const found = Array.isArray(search?.customers) ? search.customers[0] : undefined;
     if (found?.id) return found.id;
@@ -150,7 +252,7 @@ async function findOrCreateCustomer(
     method: 'POST',
     path: 'customers',
     body: {
-      idempotency_key: globalThis.crypto.randomUUID(),
+      idempotency_key: await customerCreateKey(dedupe?.key),
       ...(customer.name ? splitName(customer.name) : {}),
       ...(customer.email ? { email_address: customer.email } : {}),
       ...(customer.phone ? { phone_number: customer.phone } : {}),
@@ -208,7 +310,14 @@ function findVariation(item: Record<string, any>, variationId: string): Record<s
   return found;
 }
 
-/** Upsert an ITEM and map the named variation back to a canonical Service. */
+/** Upsert an ITEM and map the named variation back to a canonical Service.
+ *
+ * The reply envelope is `catalog_object`, NOT the `object` that
+ * RetrieveCatalogObject answers with. Reading `object` here made every catalog
+ * write fail against live Square with "expected an object, got undefined", even
+ * though the write itself had already succeeded upstream — so the caller both
+ * saw an error and had no id for the service Square had just created.
+ */
 async function upsertItem(
   http: HttpContext<SquareCredentials>,
   c: SquareCredentials,
@@ -220,8 +329,11 @@ async function upsertItem(
     path: 'catalog/object',
     body: { idempotency_key: globalThis.crypto.randomUUID(), object: item },
   });
-  const saved = asRecord(res?.object, 'square', 'catalog.object');
+  const saved = asRecord(res?.catalog_object, 'square', 'catalog.catalog_object');
   const services = itemToServices(saved);
+  // On a create the caller has no variation id yet — the '#variation'
+  // placeholder they sent is not what comes back — so fall through to the sole
+  // variation of the item just written.
   const match = variationId ? services.find((s) => s.id === variationId) : services[0];
   if (!match) {
     throw new UnibookingError({
@@ -274,7 +386,13 @@ function itemToServices(raw: unknown): Service[] {
           ...(duration !== undefined ? { durationMinutes: duration } : {}),
           ...(Number.isFinite(amount) && currency ? { price: { amount, currency } } : {}),
           ...(typeof data.category_id === 'string' ? { categoryId: data.category_id } : {}),
-          active: !deleted && variation.is_deleted !== true,
+          // `available_for_booking` has to count here: it is the exact field
+          // `setServiceActive` writes, so leaving it out made that method
+          // contradict itself -- `setServiceActive(id, false)` came back
+          // reporting `active: true`, and `listServices` showed unbookable
+          // services as active. Compared against `false` rather than truth-
+          // tested so a variation that simply omits the flag is unaffected.
+          active: !deleted && variation.is_deleted !== true && vd.available_for_booking !== false,
           // The owning item stays reachable for consumers that need to regroup.
           raw: { item: obj, variation },
         },
@@ -598,6 +716,17 @@ export const square = defineAdapter<SquareCredentials>({
 
     async createService(input) {
       const c = await http.resolve();
+      // `team_member_ids` lists the staff who perform a service, and it lives on
+      // the VARIATION while the rest of providerOptions merges onto the ITEM. So
+      // it is pulled out and routed separately -- exactly as
+      // `service_variation_version` is in createBooking.
+      //
+      // It matters more than it looks: a service with nobody assigned is
+      // accepted by the catalog and then rejected by every availability search
+      // with "did not find a team member who performs the selected service
+      // variation", so the service exists but can never be booked. Square's own
+      // onboarding assigns staff to every seeded service for this reason.
+      const { team_member_ids, ...itemOptions } = input.providerOptions ?? {};
       // A bookable Square service is an ITEM whose product_type is
       // APPOINTMENTS_SERVICE, carrying at least one variation. Both objects need
       // client-side placeholder ids prefixed with '#'; Square swaps them for
@@ -631,11 +760,12 @@ export const square = defineAdapter<SquareCredentials>({
                 ...(input.durationMinutes !== undefined
                   ? { service_duration: input.durationMinutes * 60_000 }
                   : {}),
+                ...(team_member_ids !== undefined ? { team_member_ids } : {}),
               },
             },
           ],
         },
-        ...input.providerOptions,
+        ...itemOptions,
       };
       return upsertItem(http, c, item, undefined);
     },
@@ -662,8 +792,12 @@ export const square = defineAdapter<SquareCredentials>({
         vd.pricing_type = 'FIXED_PRICING';
         vd.price_money = { amount: input.price.amount, currency: input.price.currency };
       }
+      // Reassigning staff has to reach the variation, not the item -- same
+      // routing as createService.
+      const { team_member_ids, ...itemOptions } = input.providerOptions ?? {};
+      if (team_member_ids !== undefined) vd.team_member_ids = team_member_ids;
       variation.item_variation_data = vd;
-      Object.assign(item, input.providerOptions ?? {});
+      Object.assign(item, itemOptions);
       return upsertItem(http, c, item, id);
     },
 

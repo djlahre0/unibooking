@@ -419,4 +419,168 @@ describe('square: customer resolution + version fetch', () => {
     expect(searchBody.query.filter.phone_number).toBeTruthy();
     agent.assertNoPendingInterceptors(); // no POST /customers create happened
   });
+
+  /**
+   * Square's customer search index is eventually consistent: a customer created
+   * now is not findable for a second or two (measured against live Square — a
+   * miss at 0.9s, a hit at 2.3s). So two findOrCreate calls for the same person
+   * in quick succession both miss the index and both reach the create.
+   *
+   * The create must therefore carry an idempotency key derived from the
+   * identity, so Square collapses the second create instead of making a
+   * duplicate customer.
+   */
+  it('findOrCreate derives a stable idempotency key so a lagging search index cannot duplicate a customer', async () => {
+    const pool = agent.get(ORIGIN);
+    const keys: string[] = [];
+    // Both calls miss: this is exactly the index-lag window.
+    for (let i = 0; i < 2; i++) {
+      pool
+        .intercept({ path: '/v2/customers/search', method: 'POST' })
+        .reply(200, JSON.stringify({ customers: [] }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      pool.intercept({ path: '/v2/customers', method: 'POST' }).reply(
+        200,
+        (opts) => {
+          keys.push(JSON.parse(String(opts.body)).idempotency_key);
+          return JSON.stringify({ customer: { id: 'CUST_1' } });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.customers!.findOrCreate({ name: 'Jane Doe', email: 'Jane@Example.com' });
+    await client.customers!.findOrCreate({ name: 'Jane Doe', email: 'jane@example.com' });
+
+    expect(keys).toHaveLength(2);
+    // Same identity → same key, so Square returns the original customer rather
+    // than creating a second one. Casing must not defeat it.
+    expect(keys[0]).toBe(keys[1]);
+    // Bounded length: Square rejects an idempotency key over 126 characters,
+    // and an email is unbounded.
+    expect(keys[0]!.length).toBeLessThanOrEqual(126);
+    // The raw email must not ride along in the key.
+    expect(keys[0]).not.toContain('example.com');
+  });
+
+  it('findOrCreate keys a phone-only customer on the phone, and distinctly from an email', async () => {
+    const pool = agent.get(ORIGIN);
+    const keys: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      pool
+        .intercept({ path: '/v2/customers/search', method: 'POST' })
+        .reply(200, JSON.stringify({ customers: [] }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      pool.intercept({ path: '/v2/customers', method: 'POST' }).reply(
+        200,
+        (opts) => {
+          keys.push(JSON.parse(String(opts.body)).idempotency_key);
+          return JSON.stringify({ customer: { id: 'CUST_1' } });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.customers!.findOrCreate({ phone: '+441134960000' });
+    await client.customers!.findOrCreate({ email: '+441134960000' });
+
+    // Two different people who happen to share a literal string must not
+    // collapse onto one key.
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  /**
+   * Verbatim body from live Square (both a sandbox test account and a real
+   * production seller) on every Bookings call when the merchant has no
+   * Appointments subscription.
+   */
+  const NOT_ONBOARDED = {
+    errors: [
+      {
+        category: 'AUTHENTICATION_ERROR',
+        code: 'UNAUTHORIZED',
+        detail: 'Merchant not onboarded to Appointments',
+      },
+    ],
+  };
+
+  it('classifies "not onboarded to Appointments" as UNSUPPORTED, not AUTH', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
+      .reply(401, JSON.stringify(NOT_ONBOARDED), {
+        headers: { 'content-type': 'application/json' },
+      })
+      .times(1);
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    const err = await client
+      .listBookings({ range: { start: START, end: '2026-07-21T22:00:00Z' } })
+      .catch((e) => e);
+
+    // AUTH is the code consumers watch for to tear down a connection and force
+    // a re-auth. The token here is valid -- re-authing would not fix anything,
+    // and the merchant's healthy integration would be disconnected for a
+    // subscription they simply never bought.
+    expect(err.code).toBe('UNSUPPORTED');
+    expect(err.httpStatus).toBe(401);
+    expect(err.providerCode).toBe('UNAUTHORIZED');
+    // The remedy has to be in the message; the code alone doesn't say what to do.
+    expect(err.message).toMatch(/Appointments/);
+  });
+
+  it('leaves a genuine 401 as AUTH', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/v2/bookings'), method: 'GET' })
+      .reply(
+        401,
+        JSON.stringify({
+          errors: [
+            {
+              category: 'AUTHENTICATION_ERROR',
+              code: 'UNAUTHORIZED',
+              detail: 'This request could not be authorized.',
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const client = square({ accessToken: 'bad', locationId: 'LOC1' });
+    const err = await client
+      .listBookings({ range: { start: START, end: '2026-07-21T22:00:00Z' } })
+      .catch((e) => e);
+
+    // A revoked or bogus token must still read as AUTH so the re-auth path fires.
+    expect(err.code).toBe('AUTH');
+  });
+
+  it('findOrCreate does NOT key a name-only customer on the name', async () => {
+    const pool = agent.get(ORIGIN);
+    const keys: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      pool.intercept({ path: '/v2/customers', method: 'POST' }).reply(
+        200,
+        (opts) => {
+          keys.push(JSON.parse(String(opts.body)).idempotency_key);
+          return JSON.stringify({ customer: { id: 'CUST_1' } });
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.customers!.findOrCreate({ name: 'John Smith' });
+    await client.customers!.findOrCreate({ name: 'John Smith' });
+
+    // A name is not an identity. Collapsing two distinct walk-ins named "John
+    // Smith" into one record would attach a booking to the wrong person, which
+    // is worse than the duplicate a stable key would avoid.
+    expect(keys[0]).not.toBe(keys[1]);
+  });
 });

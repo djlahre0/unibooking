@@ -1,5 +1,5 @@
 import type { ClientOptions, CredsInput, ProviderId } from './types';
-import { UnibookingError, codeForStatus } from './errors';
+import { UnibookingError, codeForStatus, type ErrorCode } from './errors';
 
 export type QueryValue = string | number | boolean | undefined | null;
 
@@ -35,8 +35,15 @@ export interface HttpConfig<TCreds> {
   options?: ClientOptions | undefined;
   /** Response header carrying a request/correlation id, if the provider sets one. */
   requestIdHeader?: string;
-  /** Pull a provider-specific error code/message out of a parsed error body. */
-  parseError?: (status: number, body: unknown) => { providerCode?: string; message?: string };
+  /** Pull a provider-specific error code/message out of a parsed error body.
+   *
+   *  May also return a canonical `code` to OVERRIDE the one the HTTP status
+   *  would imply — for the cases where a provider's status is actively
+   *  misleading. Omit it to keep the status-derived default. */
+  parseError?: (
+    status: number,
+    body: unknown,
+  ) => { providerCode?: string; message?: string; code?: ErrorCode };
 }
 
 /**
@@ -179,7 +186,7 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
         res.status === 429 ? parseRetryAfter(res.headers.get('retry-after'), now) : undefined;
       throw new UnibookingError({
         provider: config.provider,
-        code: codeForStatus(res.status),
+        code: extra?.code ?? codeForStatus(res.status),
         message: extra?.message ?? `HTTP ${res.status}: ${truncate(rawText)}`,
         httpStatus: res.status,
         ...(extra?.providerCode !== undefined ? { providerCode: extra.providerCode } : {}),

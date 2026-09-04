@@ -46,6 +46,14 @@ function base64UrlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
   return base64ToBytes(b64 + pad);
 }
 
+/** SHA-256 of a string, lowercase hex. Not a signature — used to derive stable,
+ *  bounded-length keys from arbitrary input (e.g. a deterministic idempotency
+ *  key from a customer's email). */
+export async function sha256Hex(message: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(message));
+  return toHex(new Uint8Array(digest));
+}
+
 export async function hmacSha256Base64(key: string, message: string): Promise<string> {
   const enc = new TextEncoder();
   const cryptoKey = await crypto.subtle.importKey(

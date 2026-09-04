@@ -1174,6 +1174,29 @@ unibooking currently supports the following providers.
 >   an appointment type, and can only reassign staff as part of a reschedule.
 > - Square's availability search window must be at least 24 hours and at most 31
 >   days; its list window is also capped at 31 days.
+> - Square's **Bookings API requires the merchant to have a Square Appointments
+>   subscription**, and **booking writes additionally require a paid plan**. With
+>   no subscription every booking and availability call answers `401 UNAUTHORIZED
+>   — "Merchant not onboarded to Appointments"`; on the free plan, reads work but
+>   `createBooking`/`updateBooking`/`cancelBooking` answer `403 — "Merchant
+>   subscription does not support write operations."` In both cases the token is
+>   perfectly valid and catalog/staff/customer calls keep working, so both are
+>   surfaced as `UNSUPPORTED` (not `AUTH`/`FORBIDDEN`) — they cannot be mistaken
+>   for a revoked grant and trigger a pointless re-auth. Sandbox test accounts
+>   need Appointments switched on too, via the Sandbox Seller Dashboard.
+> - Square services are only bookable if staff are assigned to them. `Service.id`
+>   is a catalog *variation*, and the staff who perform it live on that variation
+>   as `team_member_ids` — so pass it through `providerOptions` when creating one,
+>   or availability search will reject it with "did not find a team member who
+>   performs the selected service variation":
+>
+>   ```ts
+>   await client.createService({
+>     name: "Gel Nails",
+>     durationMinutes: 45,
+>     providerOptions: { team_member_ids: ["TM_123"] },
+>   });
+>   ```
 > - Acuity has no list cursor — `max` only caps the count (default 100), so
 >   narrow the range or raise `limit` on a busy calendar.
 > - Apple/CalDAV deletes a whole resource, so cancelling a recurring booking
