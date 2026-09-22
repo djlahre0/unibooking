@@ -20,11 +20,15 @@ import { verifyBoulevardSignature } from 'unibooking/webhooks/boulevard';
 import { verifyVagaroToken } from 'unibooking/webhooks/vagaro';
 import { verifyWixWebhook } from 'unibooking/webhooks/wix';
 
-import { ADAPTERS, isDirect } from './providers';
+import { ADAPTERS, isDirect, isLocal } from './providers';
 import { type Op } from './dispatch';
 import { serializeError, type ActionResult, type Connection } from './result';
 import { runDirect } from './transport-direct';
 import { runProxy } from './transport-proxy';
+import { runLocal } from './transport-local';
+import { runSession } from './transport-session';
+import { CAPABILITIES as SAMPLE_CAPABILITIES } from './sample/client';
+import { SAMPLE_ID } from './sample/types';
 import { assertSafeBaseUrl } from './environments';
 
 export type { ActionResult, Connection } from './result';
@@ -43,6 +47,14 @@ async function run(
   op: Op,
   args: unknown,
 ): Promise<ActionResult> {
+  // A local provider has no host, so there is nothing for assertSafeBaseUrl to
+  // check -- and it must never reach the proxy allowlist either.
+  if (isLocal(provider)) return runLocal(op, args);
+  // Signed in via My Calendar (Google/Outlook only): the session transport
+  // ignores creds/baseUrl entirely -- the sealed cookie supplies the token
+  // server-side -- so this must be checked before the baseUrl guard below,
+  // which exists only for the pasted-credential transports.
+  if (conn.signedIn) return runSession(op, args);
   if (conn.baseUrl) {
     try {
       assertSafeBaseUrl(provider, conn.baseUrl);
@@ -62,6 +74,13 @@ async function run(
    Pure operations — no network, run client-side for every provider.
    ═══════════════════════════════════════════════════════════ */
 export async function getCapabilities(providerId: string): Promise<ActionResult> {
+  // The sample client is deliberately not in ADAPTERS (it is not a library
+  // adapter), so it needs its own branch here instead of the map lookup below.
+  // Reads CAPABILITIES/SAMPLE_ID directly rather than constructing a whole
+  // client just to read two static fields off it.
+  if (isLocal(providerId)) {
+    return { ok: true, data: { id: SAMPLE_ID, capabilities: SAMPLE_CAPABILITIES } };
+  }
   if (!Object.hasOwn(ADAPTERS, providerId)) {
     return { ok: false, error: { message: `Unknown provider: ${providerId}` } };
   }
@@ -267,7 +286,16 @@ export function callListBookings(
 export function callSearchAvailability(
   providerId: string,
   conn: Connection,
-  query: { start: string; end: string; timezone?: string; serviceId?: string; staffId?: string },
+  query: {
+    start: string;
+    end: string;
+    timezone?: string;
+    serviceId?: string;
+    staffId?: string;
+    /** Required by Google, whose freeBusy returns busy intervals that have to
+     *  be sized into slots. Harmless elsewhere. */
+    durationMinutes?: number;
+  },
 ): Promise<ActionResult> {
   return run(providerId, conn, 'searchAvailability', query);
 }

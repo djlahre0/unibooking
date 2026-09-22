@@ -19,6 +19,24 @@ function reply(body: ActionResult, status = 200): Response {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // 0. Same-origin only. This route carries no ambient authority — credentials
+  // arrive in the body, never from a cookie — so this is not classic CSRF.
+  // What it stops is any other site using this deployment as a relay to the 9
+  // allowlisted provider hosts, spending its rate budget and putting its IP
+  // behind someone else's traffic. `req.url` is this app's own configured
+  // origin, not a client-supplied Host (see lib/calendar/http.ts), so it
+  // cannot be forged; APP_URL overrides it when a reverse proxy terminates a
+  // different public origin. Browsers send `Origin` on every POST, including
+  // same-origin ones, so a missing header is refused too — matching the My
+  // Calendar routes' `sameOrigin`.
+  const expected = new URL(process.env.APP_URL || req.url).origin;
+  if (req.headers.get('origin') !== expected) {
+    return reply(
+      { ok: false, error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } },
+      403,
+    );
+  }
+
   // 1. Rate limit (cost control, not security).
   const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0]!.trim() || 'unknown';
   if (!allow(ip)) {

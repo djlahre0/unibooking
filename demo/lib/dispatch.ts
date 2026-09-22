@@ -102,12 +102,21 @@ export async function dispatch(
         ...(args.pageToken ? { pageToken: args.pageToken } : {}),
       });
 
-    case 'searchAvailability':
+    case 'searchAvailability': {
+      // Google's freeBusy returns busy intervals, not bookable slots, so its
+      // adapter needs a positive duration to size each one and rejects the
+      // query without it. Coerced and bounds-checked here because a blank form
+      // field arrives as '' (Number('') === 0), and passing 0 on would trip
+      // the adapter's own guard with a more confusing message than sending
+      // nothing at all.
+      const duration = Number(args.durationMinutes);
       return client.searchAvailability({
         range: RANGE(args),
         ...(args.serviceId ? { serviceId: args.serviceId } : {}),
         ...(args.staffId ? { staffId: args.staffId } : {}),
+        ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
       });
+    }
 
     case 'checkConnection':
       // Present on every adapter, so no capability guard. Note this resolves

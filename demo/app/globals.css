@@ -1,36 +1,127 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
+/* ═══════════════════════════════════════════════════════════
+   Design tokens — appointment-book aesthetic: paper, ink, hairline
+   rules, times down the left edge. Not a glass dashboard. See
+   .superpowers/sdd/2026-09-20-sample-provider/design-system.md.
+
+   Status colours map to meaning, not decoration: pine = confirmed and
+   healthy, amber = server-routed and pending, rose = error and
+   cancelled, ink-faint = completed and inactive.
+   ═══════════════════════════════════════════════════════════ */
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-card: rgba(20, 20, 35, 0.7);
-  --bg-card-hover: rgba(28, 28, 50, 0.8);
-  --bg-glass: rgba(255, 255, 255, 0.03);
-  --border: rgba(255, 255, 255, 0.06);
-  --border-active: rgba(139, 92, 246, 0.4);
-  --text-primary: #e8e8f0;
-  --text-secondary: #8888a0;
-  --text-muted: #55556a;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --accent-glow: rgba(139, 92, 246, 0.15);
-  --success: #34d399;
-  --success-bg: rgba(52, 211, 153, 0.1);
-  --error: #f87171;
-  --error-bg: rgba(248, 113, 113, 0.1);
-  --warning: #fbbf24;
-  --warning-bg: rgba(251, 191, 36, 0.1);
-  --info: #60a5fa;
-  --info-bg: rgba(96, 165, 250, 0.1);
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-lg: 16px;
-  --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
+  --paper: #f2f4f3; /* ground: cool grey-green, deliberately NOT cream */
+  --surface: #ffffff; /* raised working areas */
+  --ink: #12211f; /* primary text: green-black, not a tinted grey */
+  --ink-soft: #4a5c58; /* secondary text */
+  /* Darkened from #7d8d89, which measured 3.15:1 on paper — below WCAG AA.
+     Placeholders are text and need 4.5:1 like any other. This is 4.53:1 on
+     paper and 5.00:1 on white. */
+  --ink-faint: #62736e; /* tertiary, placeholders */
+  --rule: #d3dad7; /* hairlines — the main structural device */
+  --pine: #0f5c4a; /* accent: fountain-pen ink on an appointment book */
+  --pine-wash: #e3ece8; /* accent tint for selected rows */
+  --amber: #a65a28; /* "routes through your server" */
+  --amber-wash: #f6ece3;
+  --indigo: #4c5a8a; /* "runs on this device" */
+  --indigo-wash: #e8eaf2;
+  --rose: #a3323c; /* errors only */
+  --rose-wash: #f7e7e8;
+
+  /* Type scale, 15px base (Elements of Typographic Style's modular scale). */
+  --t-xs: 12px;
+  --t-xs-lh: 1.5;
+  --t-sm: 13px;
+  --t-sm-lh: 1.55;
+  --t-base: 15px;
+  --t-base-lh: 1.6;
+  --t-md: 17px;
+  --t-md-lh: 1.45;
+  --t-lg: 21px;
+  --t-lg-lh: 1.3;
+  --t-xl: 28px;
+  --t-xl-lh: 1.2;
+
+  /* Radius is meaningful: 4px on inputs/badges, 8px on panels, never on
+     full-bleed sections. One radius everywhere is a tell. */
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 8px;
   --transition: 150ms ease;
+
+  /* ── Legacy aliases ──
+     Everything below this line in the file (result-box, cal-*, feature-item,
+     info-panel, badges, …) belongs to components this redesign task does not
+     own (ResultBox, ConnectPanel's credential flow, the tab bodies) and is
+     restyled by a following task. Those files reference the *old* variable
+     names, so the token layer carries them forward onto the new palette
+     instead of leaving dangling custom properties — no purple, no glow, no
+     hardcoded dark-mode-only colours reach those files by way of this swap. */
+  --bg-primary: var(--paper);
+  --bg-secondary: var(--surface);
+  --bg-card: var(--surface);
+  --bg-card-hover: var(--surface);
+  --bg-glass: var(--paper);
+  --border: var(--rule);
+  --border-active: var(--pine);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-soft);
+  --text-muted: var(--ink-faint);
+  --accent: var(--pine);
+  --accent-hover: var(--pine);
+  --accent-glow: var(--pine-wash);
+  --success: var(--pine);
+  --success-bg: var(--pine-wash);
+  --error: var(--rose);
+  --error-bg: var(--rose-wash);
+  --warning: var(--amber);
+  --warning-bg: var(--amber-wash);
+  --info: var(--indigo);
+  --info-bg: var(--indigo-wash);
+  --shadow: none;
+  --shadow-lg: none;
 }
 
-*, *::before, *::after {
+/* Dark theme follows the OS, with a manual override via [data-theme]. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #0e1614;
+    --surface: #14201d;
+    --ink: #e4ebe8;
+    --ink-soft: #9fb0ab;
+    --ink-faint: #7b8d88;
+    --rule: #24322e;
+    --pine: #3e9c83;
+    --pine-wash: #142a24;
+    --amber: #d08a50;
+    --amber-wash: #2a2019;
+    --indigo: #8494c6;
+    --indigo-wash: #1a1f2e;
+    --rose: #e0757e;
+    --rose-wash: #2b1a1c;
+  }
+}
+
+:root[data-theme='dark'] {
+  --paper: #0e1614;
+  --surface: #14201d;
+  --ink: #e4ebe8;
+  --ink-soft: #9fb0ab;
+  --ink-faint: #7b8d88;
+  --rule: #24322e;
+  --pine: #3e9c83;
+  --pine-wash: #142a24;
+  --amber: #d08a50;
+  --amber-wash: #2a2019;
+  --indigo: #8494c6;
+  --indigo-wash: #1a1f2e;
+  --rose: #e0757e;
+  --rose-wash: #2b1a1c;
+}
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -40,33 +131,73 @@ html {
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  scrollbar-color: var(--ink-faint) transparent;
+  scrollbar-width: thin;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: var(--bg-primary);
-  background-image: 
-    radial-gradient(circle at 15% 20%, rgba(139, 92, 246, 0.06), transparent 30%),
-    radial-gradient(circle at 85% 60%, rgba(96, 165, 250, 0.06), transparent 30%);
-  background-attachment: fixed;
-  color: var(--text-primary);
-  line-height: 1.6;
+  font-family:
+    'Familjen Grotesk',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--t-base);
+  line-height: var(--t-base-lh);
   min-height: 100vh;
-  overflow: hidden; /* Prevent full page scroll on desktop */
+  /* The page must scroll on a phone: never set overflow (or overflow-y)
+     hidden here. overflow-x is a safety net against the 375px-wide
+     horizontal-scroll bug, not a re-introduction of that regression. */
+  overflow-x: hidden;
+}
+
+/* Visible focus ring on every interactive element, in --pine, per the
+   accessibility floor. outline (not box-shadow) so it applies uniformly to
+   buttons, links, inputs, selects and the tab/rail controls without each
+   component needing its own focus styling. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='tab']:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
 /* ─── Scrollbar ─── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ink-faint);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-soft);
+}
 
 /* ─── Layout ─── */
 .app-container {
   max-width: 1440px;
   margin: 0 auto;
   padding: 1.5rem 2rem 0;
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
@@ -78,42 +209,49 @@ body {
   gap: 1.5rem;
   margin-bottom: 1.5rem;
   padding: 0 0 1rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
 }
 
 .app-header h1 {
-  font-size: 1.6rem;
+  font-size: var(--t-xl);
+  line-height: var(--t-xl-lh);
   font-weight: 700;
-  background: linear-gradient(135deg, var(--accent), #c084fc, #818cf8);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.03em;
+  color: var(--ink);
+  letter-spacing: -0.01em;
   margin: 0;
   white-space: nowrap;
 }
 
 .app-header p {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
   margin: 0;
   text-align: right;
   max-width: 600px;
 }
 
-/* ─── Sidebar Layout ─── */
+/* ─── Provider select (mobile provider picker, < 900px) ─── */
+.provider-select-bar {
+  display: none;
+  margin-bottom: 1rem;
+}
+
+/* ─── Sidebar / rail layout ─── */
 .main-layout {
   display: flex;
-  gap: 1.5rem;
-  align-items: stretch;
+  gap: 2rem;
+  align-items: flex-start;
   flex: 1;
-  overflow: hidden;
   padding-bottom: 2rem;
 }
 
-.sidebar {
+.sidebar,
+.provider-rail {
   width: 220px;
   flex-shrink: 0;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -121,76 +259,133 @@ body {
 .content-area {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
-  padding-right: 8px;
 }
 
-/* ─── Tabs ─── */
-.tabs {
+/* ─── Provider rail groups ─── */
+.rail-group + .rail-group {
+  margin-top: 1.5rem;
+}
+
+.rail-heading {
+  font-size: var(--t-sm);
+  line-height: var(--t-sm-lh);
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin: 0 0 0.5rem;
+  /* Sentence case, never tracked-out caps -- the heading text is the
+     explanation (why this provider runs where it does), so it reads as
+     prose, not as a dashboard eyebrow label. */
+}
+
+.rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius);
-  padding: 8px;
-  border: 1px solid var(--border);
+  gap: 2px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.5rem;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition);
+}
+
+.rail-item:hover {
+  background: var(--surface);
+}
+
+.rail-item.selected {
+  background: var(--pine-wash);
+  border-color: var(--pine);
+  color: var(--pine);
+  font-weight: 600;
+}
+
+.rail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rail-dot-indigo {
+  background: var(--indigo);
+}
+
+.rail-dot-pine {
+  background: var(--pine);
+}
+
+.rail-dot-amber {
+  background: var(--amber);
+}
+
+/* ─── Tabs (horizontal strip, top of the content column) ─── */
+.tabs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0;
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
 }
 
 .tab {
-  width: 100%;
-  padding: 0.85rem 1rem;
+  padding: 0.6rem 0.1rem;
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  color: var(--ink-soft);
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: var(--t-sm);
   font-weight: 500;
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition);
   white-space: nowrap;
   text-align: left;
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  transition: color var(--transition);
 }
 
 .tab:hover {
-  color: var(--text-primary);
-  background: var(--bg-glass);
+  color: var(--ink);
 }
 
 .tab.active {
-  background: linear-gradient(180deg, var(--accent), #7c3aed);
-  color: white;
-  box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
-  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  color: var(--ink);
+  border-bottom-color: var(--pine);
+  font-weight: 600;
 }
 
 /* ─── Cards / Panels ─── */
 .card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
   padding: 1.5rem;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  transition: all 0.3s ease;
-}
-
-.card:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(139, 92, 246, 0.05);
-  transform: translateY(-2px);
 }
 
 .card-title {
-  font-size: 1rem;
+  font-size: var(--t-md);
+  line-height: var(--t-md-lh);
   font-weight: 600;
   margin-bottom: 1rem;
-  color: var(--text-primary);
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -207,12 +402,10 @@ body {
 
 .form-label {
   display: block;
-  font-size: 0.78rem;
+  font-size: var(--t-xs);
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--ink-soft);
   margin-bottom: 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .form-input,
@@ -220,34 +413,35 @@ body {
 .form-textarea {
   width: 100%;
   padding: 0.6rem 0.8rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  color: var(--text-primary);
+  color: var(--ink);
   font-family: inherit;
-  font-size: 0.87rem;
-  transition: all var(--transition);
+  font-size: var(--t-base);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition);
   outline: none;
 }
 
 .form-input:focus,
 .form-select:focus,
 .form-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15);
-  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px var(--pine-wash);
   outline: none;
 }
 
 .form-input::placeholder,
 .form-textarea::placeholder {
-  color: var(--text-muted);
+  color: var(--ink-faint);
 }
 
 .form-select {
   cursor: pointer;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238888a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%237d8d89' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.8rem center;
   padding-right: 2rem;
@@ -256,8 +450,8 @@ body {
 .form-textarea {
   min-height: 100px;
   resize: vertical;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.8rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: var(--t-sm);
   line-height: 1.5;
 }
 
@@ -267,58 +461,54 @@ body {
   align-items: center;
   gap: 0.4rem;
   padding: 0.55rem 1.1rem;
-  border: none;
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
   font-family: inherit;
-  font-size: 0.82rem;
+  font-size: var(--t-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition);
+  transition:
+    background-color var(--transition),
+    border-color var(--transition),
+    filter var(--transition);
   text-decoration: none;
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--accent), #7c3aed);
-  color: white;
-  box-shadow: 0 2px 10px rgba(139, 92, 246, 0.2);
+  background: var(--pine);
+  border-color: var(--pine);
+  color: var(--paper);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--accent-hover), #8b5cf6);
-  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.35);
-  transform: translateY(-2px);
+  filter: brightness(1.1);
 }
 
 .btn-primary:active {
-  transform: translateY(1px);
-  box-shadow: 0 2px 5px rgba(139, 92, 246, 0.2);
+  filter: brightness(0.95);
 }
 
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  filter: none;
 }
 
 .btn-secondary {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
 }
 
 .btn-secondary:hover {
-  border-color: var(--text-muted);
-  background: var(--bg-card-hover);
+  border-color: var(--ink-faint);
 }
 
 .btn-sm {
   padding: 0.4rem 0.8rem;
-  font-size: 0.78rem;
+  font-size: var(--t-xs);
 }
 
 /* ─── Capabilities Grid ─── */
@@ -334,84 +524,229 @@ body {
   gap: 0.5rem;
   padding: 0.55rem 0.75rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: var(--t-sm);
   font-weight: 500;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
+  border: 1px solid var(--rule);
+  background: var(--surface);
 }
 
 .cap-badge.supported {
-  border-color: rgba(52, 211, 153, 0.25);
-  background: var(--success-bg);
-  color: var(--success);
+  border-color: var(--pine);
+  background: var(--pine-wash);
+  color: var(--pine);
 }
 
 .cap-badge.unsupported {
-  border-color: rgba(248, 113, 113, 0.15);
-  background: var(--error-bg);
-  color: var(--error);
-  opacity: 0.6;
+  border-color: var(--rule);
+  background: var(--paper);
+  color: var(--ink-faint);
 }
 
-/* ─── Result Display ─── */
-.result-box {
+/* ─── Result panel (ResultBox) ───
+   The design system calls this the second place (after the provider rail)
+   worth spending boldness on: a schedule/table rendering of the canonical
+   list shapes, with raw JSON collapsed behind a disclosure rather than
+   dumped as the primary view. */
+.rb-panel {
   margin-top: 1rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
-.result-header {
+.rb-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0.8rem;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--t-xs);
 }
 
-.result-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 0.72rem;
+.rb-label {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.rb-outcome {
   font-weight: 600;
-  padding: 0.15rem 0.5rem;
+  padding: 0.15rem 0.55rem;
   border-radius: 20px;
 }
 
-.result-status.success {
-  background: var(--success-bg);
-  color: var(--success);
+.rb-outcome-ok {
+  background: var(--pine-wash);
+  color: var(--pine);
 }
 
-.result-status.error {
-  background: var(--error-bg);
-  color: var(--error);
+.rb-outcome-error {
+  background: var(--rose-wash);
+  color: var(--rose);
 }
 
-.result-body {
-  padding: 0.8rem;
+.rb-timing {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.rb-copy {
+  margin-left: auto;
+}
+
+.rb-body {
+  padding: 0.9rem;
+}
+
+.rb-plain {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
   max-height: 350px;
   overflow: auto;
 }
 
-.result-body pre {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
+/* ─── Schedule (bookings), grouped by day ─── */
+.rb-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.rb-day-label {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.35rem;
+  margin: 0 0 0.4rem;
+}
+
+/* ─── Shared table (schedule rows, services, staff, availability slots) ─── */
+.rb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+
+.rb-table th,
+.rb-table td {
+  text-align: left;
+  padding: 0.4rem 0.7rem 0.4rem 0;
+  vertical-align: baseline;
+}
+
+.rb-table th {
+  color: var(--ink-faint);
+  font-weight: 500;
+  font-size: var(--t-xs);
+  border-bottom: 1px solid var(--rule);
+}
+
+.rb-mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.rb-empty {
+  color: var(--ink-faint);
+  font-size: var(--t-sm);
+}
+
+.rb-more {
+  margin-top: 0.8rem;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+}
+
+/* ─── Status / active badges: pine = confirmed & active, amber = pending
+   & retryable, rose = cancelled/declined/no-show, ink-faint = completed,
+   inactive or unknown -- see design-system.md's colour section. ─── */
+.rb-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  padding: 0.1rem 0.55rem;
+  border-radius: 20px;
+}
+
+.rb-status-pine {
+  background: var(--pine-wash);
+  color: var(--pine);
+}
+
+.rb-status-amber {
+  background: var(--amber-wash);
+  color: var(--amber);
+}
+
+.rb-status-rose {
+  background: var(--rose-wash);
+  color: var(--rose);
+}
+
+.rb-status-inkfaint {
+  background: var(--paper);
+  color: var(--ink-faint);
+  border: 1px solid var(--rule);
+}
+
+/* ─── Error view ─── */
+.rb-error-top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.rb-error-code {
+  font-size: var(--t-sm);
+  color: var(--rose);
+}
+
+.rb-error-message {
+  font-size: var(--t-base);
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* ─── Raw JSON disclosure -- collapsed by default (no `open` attribute) ─── */
+.rb-raw {
+  border-top: 1px solid var(--rule);
+}
+
+.rb-raw summary {
+  cursor: pointer;
+  padding: 0.55rem 0.9rem;
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.rb-raw pre {
+  margin: 0;
+  padding: 0 0.9rem 0.9rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: var(--t-sm);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--text-primary);
+  color: var(--ink);
+  max-height: 350px;
+  overflow: auto;
 }
 
-/* ─── Provider Selector ─── */
+/* ─── Provider Selector (ConnectPanel's own chip grid) ─── */
 .provider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -421,29 +756,30 @@ body {
 
 .provider-chip {
   padding: 0.5rem 0.7rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 0.78rem;
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition);
+  transition:
+    border-color var(--transition),
+    color var(--transition),
+    background-color var(--transition);
   text-align: center;
   font-family: inherit;
 }
 
 .provider-chip:hover {
-  border-color: var(--text-muted);
-  color: var(--text-primary);
-  background: var(--bg-card-hover);
+  border-color: var(--ink-faint);
+  color: var(--ink);
 }
 
 .provider-chip.selected {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-glow);
-  box-shadow: 0 0 0 1px var(--border-active);
+  border-color: var(--pine);
+  color: var(--pine);
+  background: var(--pine-wash);
 }
 
 /* ─── Credentials Form ─── */
@@ -453,14 +789,100 @@ body {
   gap: 0.8rem;
 }
 
+/* ─── Field help line: "where this value comes from", under every
+   credential field's label (ConnectPanel's guided connect flow). ─── */
+.field-help {
+  font-size: var(--t-xs);
+  line-height: var(--t-xs-lh);
+  color: var(--ink-faint);
+  margin: 0.35rem 0 0;
+}
+
+.field-help a {
+  color: var(--pine);
+}
+
+/* ─── Guided connect steps: numbering is justified here because connecting
+   genuinely IS a sequence -- get the token, enter the ids, run a call.
+   Numbers come from a CSS counter tied to <li> order, not a hardcoded
+   digit, so the list can never drift out of sync with its own markup. ─── */
+.connect-steps {
+  list-style: none;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  counter-reset: connect-step;
+}
+
+.connect-step {
+  counter-increment: connect-step;
+  display: flex;
+  gap: 0.9rem;
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.connect-step:first-child {
+  border-top: none;
+  padding-top: 0.2rem;
+}
+
+.connect-step::before {
+  content: counter(connect-step);
+  flex-shrink: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  border: 1px solid var(--pine);
+  color: var(--pine);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.connect-step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.connect-step-title {
+  font-size: var(--t-md);
+  line-height: var(--t-md-lh);
+  font-weight: 600;
+  margin: 0 0 0.7rem;
+  color: var(--ink);
+}
+
+/* ─── "Advanced" disclosure in the guided connect flow: fields with a working
+   default (e.g. Google's calendarId) plus the Environment control, collapsed
+   by default so step 2 shows only what must actually be filled in. Mirrors
+   .rb-raw's disclosure treatment (ResultBox's "Raw JSON") for visual
+   consistency between the two collapsed sections in this app. ─── */
+.connect-advanced {
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--rule);
+}
+
+.connect-advanced summary {
+  cursor: pointer;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.connect-advanced > *:not(summary) {
+  margin-top: 0.8rem;
+}
+
 /* ─── Section Title ─── */
 .section-title {
-  font-size: 0.82rem;
+  font-size: var(--t-sm);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--ink-soft);
   margin-bottom: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 /* ─── Two Column Layout ─── */
@@ -470,41 +892,76 @@ body {
   gap: 1rem;
 }
 
-@media (max-width: 768px) {
-  body { overflow: auto; }
-  .app-container { height: auto; display: block; padding: 1rem 1rem 2rem; }
-  .two-col { grid-template-columns: 1fr; }
-  .main-layout { flex-direction: column; overflow: visible; padding-bottom: 0; }
-  .sidebar { width: 100%; overflow-y: visible; padding-right: 0; }
-  .content-area { overflow-y: visible; padding-right: 0; }
-  .tabs { flex-direction: row; overflow-x: auto; padding: 4px; margin-bottom: 1.5rem; }
-  .tab { width: auto; flex: 1; text-align: center; padding: 0.8rem; }
-  .app-header { flex-direction: column; text-align: center; gap: 0.5rem; padding-bottom: 1rem; }
-  .app-header h1 { font-size: 1.8rem; white-space: normal; }
-  .app-header p { text-align: center; font-size: 0.8rem; }
-  .provider-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
-  .form-input, .form-select, .form-textarea { font-size: 16px; } /* Prevents iOS auto-zoom */
+@media (max-width: 900px) {
+  .app-container {
+    padding: 1rem 16px 2rem;
+  }
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+  .main-layout {
+    flex-direction: column;
+  }
+  .sidebar,
+  .provider-rail {
+    display: none;
+  }
+  .provider-select-bar {
+    display: block;
+  }
+  .tabs {
+    flex-wrap: nowrap;
+  }
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    gap: 0.5rem;
+    padding-bottom: 1rem;
+  }
+  .app-header p {
+    text-align: left;
+  }
+  .provider-grid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  }
+  .form-input,
+  .form-select,
+  .form-textarea {
+    font-size: 16px;
+  } /* Prevents iOS auto-zoom */
 }
 
-/* ─── Animations ─── */
+/* ─── Motion: only answers an action (a result appearing, a section
+   expanding) — never a page-load fade-and-slide. Kept short, and disabled
+   entirely under prefers-reduced-motion above. ─── */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .fade-in {
-  animation: fadeIn 0.3s ease forwards;
+  animation: fadeIn 0.15s ease forwards;
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .loading {
   animation: pulse 1.5s ease-in-out infinite;
-  color: var(--text-muted);
-  font-size: 0.85rem;
+  color: var(--ink-faint);
+  font-size: var(--t-sm);
   text-align: center;
   padding: 1.5rem;
 }
@@ -516,24 +973,24 @@ body {
   gap: 0.3rem;
   padding: 0.2rem 0.55rem;
   border-radius: 20px;
-  font-size: 0.7rem;
+  font-size: var(--t-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .info-badge.accent {
-  background: var(--accent-glow);
-  color: var(--accent);
+  background: var(--pine-wash);
+  color: var(--pine);
 }
 
 .info-badge.success {
-  background: var(--success-bg);
-  color: var(--success);
+  background: var(--pine-wash);
+  color: var(--pine);
 }
 
 .info-badge.warn {
-  background: var(--warning-bg);
-  color: var(--warning);
+  background: var(--amber-wash);
+  color: var(--amber);
 }
 
 /* ─── Operation Buttons Row ─── */
@@ -555,8 +1012,8 @@ body {
 .empty-state {
   text-align: center;
   padding: 3rem 1.5rem;
-  color: var(--text-muted);
-  font-size: 0.9rem;
+  color: var(--ink-faint);
+  font-size: var(--t-base);
 }
 
 .empty-state .icon {
@@ -567,33 +1024,34 @@ body {
 
 /* ─── Utility: Info Panel ─── */
 .info-panel {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--paper);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: 1rem;
   margin-bottom: 1rem;
 }
 
 .info-panel h4 {
-  font-size: 0.82rem;
+  font-size: var(--t-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ink);
   margin-bottom: 0.4rem;
 }
 
-.info-panel p, .info-panel code {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+.info-panel p,
+.info-panel code {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
   line-height: 1.5;
 }
 
 .info-panel code {
-  font-family: 'JetBrains Mono', monospace;
-  background: rgba(139, 92, 246, 0.1);
+  font-family: 'IBM Plex Mono', monospace;
+  background: var(--pine-wash);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
-  color: var(--accent);
-  font-size: 0.75rem;
+  color: var(--pine);
+  font-size: var(--t-xs);
 }
 
 /* ─── Connected status bar ─── */
@@ -602,23 +1060,22 @@ body {
   align-items: center;
   gap: 0.6rem;
   padding: 0.6rem 1rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   margin-bottom: 1rem;
-  font-size: 0.8rem;
+  font-size: var(--t-sm);
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-muted);
+  background: var(--ink-faint);
 }
 
 .status-dot.connected {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
+  background: var(--pine);
 }
 
 /* ─── Feature section list ─── */
@@ -632,8 +1089,8 @@ body {
   align-items: flex-start;
   gap: 0.6rem;
   padding: 0.8rem;
-  background: var(--bg-glass);
-  border: 1px solid var(--border);
+  background: var(--paper);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
 }
 
@@ -644,22 +1101,346 @@ body {
 }
 
 .feature-item h4 {
-  font-size: 0.82rem;
+  font-size: var(--t-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ink);
   margin-bottom: 0.15rem;
 }
 
 .feature-item p {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
 }
 
 .feature-item code {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
-  background: rgba(139, 92, 246, 0.1);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: var(--t-xs);
+  background: var(--pine-wash);
   padding: 0.1rem 0.3rem;
   border-radius: 3px;
-  color: var(--accent);
+  color: var(--pine);
+}
+
+/* ─── My Calendar ─── */
+.cal-muted {
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.cal-list {
+  padding-left: 1.2rem;
+}
+
+.cal-muted a {
+  color: var(--pine);
+}
+
+.cal-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--pine);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.cal-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 1rem;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}
+
+.cal-banner.error {
+  background: var(--rose-wash);
+  color: var(--rose);
+  border: 1px solid var(--rose);
+}
+
+.cal-banner.success {
+  background: var(--pine-wash);
+  color: var(--pine);
+  border: 1px solid var(--pine);
+}
+
+.cal-banner-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* Wraps the banner text plus, on a redirect_uri_mismatch failure, the
+   CopyField showing the exact URL to register -- flex: 1 so it fills the
+   space next to the fixed-width close button. */
+.cal-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.cal-banner-body .form-group {
+  margin: 0.6rem 0 0;
+}
+
+.cal-banner-body .form-label,
+.cal-banner-body .field-help {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.cal-connect-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.cal-connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.cal-connect-card.disabled {
+  opacity: 0.55;
+}
+
+.cal-connect-card .btn {
+  margin-top: auto;
+}
+
+.cal-connect-head {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cal-connect-btn {
+  text-align: center;
+  text-decoration: none;
+}
+
+.cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.cal-account {
+  font-weight: 600;
+  font-size: var(--t-base);
+  word-break: break-all;
+}
+
+.cal-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.cal-sidebar,
+.cal-main {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.cal-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.cal-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-item:hover {
+  background: var(--paper);
+}
+
+.cal-item.selected {
+  border-color: var(--pine);
+  background: var(--pine-wash);
+}
+
+.cal-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.cal-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cal-range {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin-left: 0.4rem;
+}
+
+.cal-select {
+  width: auto;
+  padding: 0.35rem 0.6rem;
+}
+
+.cal-tz {
+  max-width: 320px;
+  margin-top: 0.8rem;
+}
+
+.agenda-day {
+  margin-top: 1rem;
+}
+
+.agenda-day-label {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.35rem;
+  margin: 0 0 0.3rem;
+}
+
+.agenda-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.5rem;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agenda-row:hover {
+  background: var(--paper);
+}
+
+.agenda-time {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  min-width: 7.5rem;
+}
+
+.agenda-title {
+  font-weight: 500;
+}
+
+.agenda-location {
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+}
+
+.cal-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.45rem 1rem;
+  font-size: var(--t-sm);
+  margin: 0 0 1rem;
+}
+
+.cal-fields dt {
+  color: var(--ink-faint);
+}
+
+.cal-fields dd {
+  margin: 0;
+}
+
+.cal-description {
+  white-space: pre-wrap;
+}
+
+.cal-danger:not(:disabled):hover {
+  border-color: var(--rose);
+  color: var(--rose);
+}
+
+.cal-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--t-sm);
+  margin: 0.2rem 0 0.9rem;
+  cursor: pointer;
+}
+
+@media (max-width: 800px) {
+  .cal-layout {
+    grid-template-columns: 1fr;
+  }
+  .cal-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Theme switch in the header. The tokens it drives already exist above; this
+   only lays the three buttons out. `margin-left:auto` pushes it to the far
+   end of the header row on wide screens and it simply wraps on narrow ones,
+   so it stays reachable at 375px — unlike the provider rail, which is hidden
+   below 900px. */
+.theme-toggle {
+  display: flex;
+  gap: 0.3rem;
+  margin-left: auto;
+  flex-wrap: wrap;
 }

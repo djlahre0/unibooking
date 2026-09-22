@@ -40,6 +40,20 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* Applies the saved theme BEFORE first paint. Without this, a visitor
+            who chose Light while their OS is dark sees a dark flash on every
+            load, because React only reaches ThemeToggle after hydration.
+            Inlined and synchronous by necessity; wrapped in try/catch because
+            reading localStorage throws outright when site data is blocked, and
+            a colour preference is never worth breaking the page over. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var s=localStorage.getItem('unibooking:demo:ui:v1');if(s){var t=JSON.parse(s).theme;if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}}catch(e){}",
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

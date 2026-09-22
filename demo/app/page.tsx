@@ -1,28 +1,19 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useSyncExternalStore } from 'react';
+import { type ActionResult, getCapabilities } from '../lib/call';
 import {
-  type ActionResult,
-  getCapabilities,
-  callCreateBooking,
-  callGetBooking,
-  callUpdateBooking,
-  callCancelBooking,
-  callListBookings,
-  callSearchAvailability,
-  callFindOrCreateCustomer,
-  callCheckConnection,
-  callListServices,
-  callListStaff,
-  demoRegistry,
-  demoWithRetry,
-  demoCollectAll,
-  demoListAll,
-  demoErrorHelpers,
-  verifyWebhook,
-} from '../lib/call';
-import { PROVIDER_META as PROVIDERS } from '../lib/providers';
+  PROVIDER_META as PROVIDERS,
+  isLocal,
+  LOCAL_PROVIDERS,
+  DIRECT_PROVIDERS,
+  PROXY_PROVIDERS,
+} from '../lib/providers';
 import { ENVIRONMENTS } from '../lib/environments';
+import { resetSample } from '../lib/sample/store';
+import { todayIn, shiftDate } from '../lib/calendar/agenda';
+import { getStatus } from '../lib/calendar/api';
+import type { CalendarStatus } from '../lib/calendar/types';
 import {
   loadState,
   saveProvider,
@@ -31,184 +22,315 @@ import {
   storageAvailable,
   setRemember as persistRemember,
 } from '../lib/cred-storage';
+import {
+  patchUiState,
+  loadUiState,
+  resultForStorage,
+  isTooLarge,
+  type UiState,
+} from '../lib/ui-state';
+import { useUiState } from '../lib/use-ui-state';
 import ConnectPanel from './ConnectPanel';
+import ThemeToggle from './ThemeToggle';
 import EnvironmentControl from './EnvironmentControl';
 import PersistenceControls from './PersistenceControls';
-import ResultBox from './ResultBox';
-
-/* ═══════════════════════════════════════════════════════════
-   Webhook field metadata per provider
-   ═══════════════════════════════════════════════════════════ */
-const WEBHOOK_PROVIDERS: Record<
-  string,
-  {
-    label: string;
-    fields: { key: string; label: string; placeholder: string; multiline?: boolean }[];
-  }
-> = {
-  square: {
-    label: 'Square',
-    fields: [
-      { key: 'signatureKey', label: 'Signature Key', placeholder: 'Webhook signature key' },
-      { key: 'notificationUrl', label: 'Notification URL', placeholder: 'https://...' },
-      { key: 'body', label: 'Raw Body', placeholder: '{"event_type":"..."}', multiline: true },
-      {
-        key: 'signature',
-        label: 'Signature Header',
-        placeholder: 'x-square-hmacsha256-signature value',
-      },
-    ],
-  },
-  acuity: {
-    label: 'Acuity',
-    fields: [
-      { key: 'apiKey', label: 'API Key', placeholder: 'Your API key (HMAC secret)' },
-      { key: 'body', label: 'Raw Body', placeholder: '{"id":123,...}', multiline: true },
-      { key: 'signature', label: 'Signature', placeholder: 'X-Acuity-Signature value' },
-    ],
-  },
-  calendly: {
-    label: 'Calendly',
-    fields: [
-      { key: 'signingKey', label: 'Signing Key', placeholder: 'Webhook signing key' },
-      { key: 'body', label: 'Raw Body', placeholder: '{"event":"..."}', multiline: true },
-      { key: 'signatureHeader', label: 'Signature Header', placeholder: 't=...,v1=...' },
-    ],
-  },
-  google: {
-    label: 'Google Calendar',
-    fields: [
-      { key: 'expectedToken', label: 'Expected Token', placeholder: 'Token you set on the watch' },
-      { key: 'channelToken', label: 'Channel Token', placeholder: 'X-Goog-Channel-Token value' },
-    ],
-  },
-  mindbody: {
-    label: 'Mindbody',
-    fields: [
-      { key: 'signatureKey', label: 'Signature Key', placeholder: 'Webhook signature key' },
-      { key: 'body', label: 'Raw Body', placeholder: '{"event":...}', multiline: true },
-      { key: 'signature', label: 'Signature', placeholder: 'X-Mindbody-Signature value' },
-    ],
-  },
-  outlook: {
-    label: 'Outlook / Graph',
-    fields: [
-      { key: 'mode', label: 'Mode', placeholder: 'validation | clientState' },
-      {
-        key: 'queryString',
-        label: 'Query String (validation)',
-        placeholder: 'validationToken=abc',
-      },
-      {
-        key: 'payload',
-        label: 'Payload JSON (clientState)',
-        placeholder: '{"value":[...]}',
-        multiline: true,
-      },
-      {
-        key: 'expectedClientState',
-        label: 'Expected Client State',
-        placeholder: 'your-client-state',
-      },
-    ],
-  },
-  boulevard: {
-    label: 'Boulevard',
-    fields: [
-      { key: 'signingSecret', label: 'Signing Secret', placeholder: 'Webhook signing secret' },
-      { key: 'salt', label: 'Salt Header', placeholder: 'x-blvd-hmac-salt value' },
-      { key: 'body', label: 'Raw Body', placeholder: '{"event":...}', multiline: true },
-      { key: 'signature', label: 'Signature Header', placeholder: 'x-blvd-hmac-sha256 value' },
-    ],
-  },
-  vagaro: {
-    label: 'Vagaro',
-    fields: [
-      { key: 'received', label: 'Received Token', placeholder: 'X-Vagaro-Signature value' },
-      {
-        key: 'expected',
-        label: 'Expected Token',
-        placeholder: 'Your configured verification token',
-      },
-    ],
-  },
-  wix: {
-    label: 'Wix',
-    fields: [
-      { key: 'jwt', label: 'JWT (raw body)', placeholder: 'eyJ...', multiline: true },
-      {
-        key: 'publicKey',
-        label: 'Public Key (PEM)',
-        placeholder: '-----BEGIN PUBLIC KEY-----\n...',
-        multiline: true,
-      },
-    ],
-  },
-};
+import CalendarTab from './calendar/CalendarTab';
+import CapabilitiesTab from './tabs/CapabilitiesTab';
+import BookingsTab from './tabs/BookingsTab';
+import AvailabilityTab from './tabs/AvailabilityTab';
+import CustomersTab from './tabs/CustomersTab';
+import CatalogTab from './tabs/CatalogTab';
+import UtilitiesTab from './tabs/UtilitiesTab';
+import WebhooksTab from './tabs/WebhooksTab';
 
 const TABS = [
-  { id: 'connect', label: '🔌 Connect' },
-  { id: 'capabilities', label: '⚡ Capabilities' },
-  { id: 'bookings', label: '📅 Bookings' },
-  { id: 'availability', label: '🕐 Availability' },
-  { id: 'customers', label: '👤 Customers' },
-  { id: 'catalog', label: '📚 Catalog & Health' },
-  { id: 'utilities', label: '🛠 Utilities' },
-  { id: 'webhooks', label: '🔔 Webhooks' },
+  { id: 'calendar', label: 'My Calendar' },
+  { id: 'connect', label: 'Connect' },
+  { id: 'capabilities', label: 'Capabilities' },
+  { id: 'bookings', label: 'Bookings' },
+  { id: 'availability', label: 'Availability' },
+  { id: 'customers', label: 'Customers' },
+  { id: 'catalog', label: 'Catalog & Health' },
+  { id: 'utilities', label: 'Utilities' },
+  { id: 'webhooks', label: 'Webhooks' },
 ];
+
+/* ═══════════════════════════════════════════════════════════
+   Provider rail
+
+   The library's central claim is that most providers refuse browser calls,
+   which is why unibooking has to run server-side for them. The rail argues
+   that case with information architecture instead of a banner: providers are
+   grouped by how they actually run, read straight from lib/providers.ts so
+   this list can never drift from the transport split the demo actually uses.
+   ═══════════════════════════════════════════════════════════ */
+/** Shared empty object, so `creds` keeps a stable identity across renders. */
+const EMPTY_CREDS: Record<string, string> = {};
+
+/** Result slots, keyed exactly as `wrap`'s `section` argument, so the stored
+ *  results and the elapsed-time map can never drift apart. */
+const RESULT_KEYS = ['caps', 'booking', 'avail', 'customer', 'catalog', 'util', 'webhook'];
+
+/**
+ * A stored result, back as an ActionResult. A payload too large to save comes
+ * back as a plain error whose message says so — ResultBox already renders
+ * `error.message`, so nothing there needs to know about this. Parse failures
+ * yield null rather than throwing: a hand-edited localStorage must never
+ * white-screen the page.
+ */
+function savedResult(state: UiState, key: string): ActionResult | null {
+  const entry = state.results[key];
+  if (!entry) return null;
+  if (isTooLarge(entry)) {
+    return {
+      ok: false,
+      error: {
+        code: 'NOT_SAVED',
+        message: 'This result was too large to save (over 64 KB). Run it again to see it.',
+      },
+    };
+  }
+  try {
+    return JSON.parse(entry.json) as ActionResult;
+  } catch {
+    return null;
+  }
+}
+
+const PROVIDER_GROUPS: { heading: string; ids: string[]; dot: 'indigo' | 'pine' | 'amber' }[] = [
+  { heading: 'Runs on this device', ids: [...LOCAL_PROVIDERS], dot: 'indigo' },
+  { heading: 'Runs in your browser', ids: [...DIRECT_PROVIDERS], dot: 'pine' },
+  { heading: 'Runs via your server', ids: [...PROXY_PROVIDERS], dot: 'amber' },
+];
+
+/* ═══════════════════════════════════════════════════════════
+   Mount-time client state
+
+   localStorage and the URL do not exist during the server render, so reading
+   them in a `useState` initializer would make the first client render disagree
+   with the server HTML. `useSyncExternalStore` takes a separate server
+   snapshot: hydration matches the HTML, then React immediately re-renders with
+   the real values. https://react.dev/reference/react/useSyncExternalStore
+   ═══════════════════════════════════════════════════════════ */
+type MountState = { storageOk: boolean; remember: boolean };
+
+const SERVER_MOUNT_STATE: MountState = { storageOk: true, remember: false };
+
+// Cached module-side, because `getSnapshot` must return a referentially stable
+// value or React re-renders forever.
+let clientMountState: MountState | null = null;
+
+function readMountState(): MountState {
+  clientMountState ??= {
+    storageOk: storageAvailable(),
+    remember: loadState().remember,
+  };
+  return clientMountState;
+}
+
+// These are read once at mount and never change underneath us; later edits go
+// through the override state in the component below.
+const neverChanges = () => () => {};
+const readServerMountState = () => SERVER_MOUNT_STATE;
 
 /* ═══════════════════════════════════════════════════════════
    Main Page
    ═══════════════════════════════════════════════════════════ */
 export default function Home() {
-  const [activeTab, setActiveTab] = useState('connect');
-  const [selectedProvider, setSelectedProvider] = useState('');
-  const [creds, setCreds] = useState<Record<string, string>>({});
-  const [env, setEnv] = useState('prod');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [remember, setRemember_] = useState(false);
-  const [storageOk, setStorageOk] = useState(true);
+  const mounted = useSyncExternalStore(neverChanges, readMountState, readServerMountState);
+
+  // What the visitor was last doing. Never holds a credential — those stay in
+  // cred-storage behind its opt-in toggle. See lib/ui-state.ts.
+  const ui = useUiState();
+  const activeTab = ui.activeTab;
+  const setActiveTab = useCallback((tab: string) => {
+    patchUiState({ activeTab: tab });
+  }, []);
+
+  // `?? mounted.x` keeps the mount-time value until the user changes it.
+  const [rememberOverride, setRemember_] = useState<boolean | null>(null);
+  const remember = rememberOverride ?? mounted.remember;
+  const storageOk = mounted.storageOk;
+
+  const selectedProvider = ui.selectedProvider;
+  const env = ui.env;
+  const baseUrl = ui.baseUrl;
+  // Credentials live in cred-storage (opt-in) and NEVER in the UI store. They
+  // are DERIVED per provider rather than held in one flat state object: the
+  // selected provider is restored from the store after mount, and a flat
+  // `creds` would be momentarily blank for a provider that has a saved entry
+  // — which the debounced save effect below reads as "every field is empty"
+  // and answers with clearProvider(), silently deleting what the visitor
+  // asked to be remembered. Deriving also avoids a setState-in-effect
+  // cascade. `credEdits` holds only what has been typed this session.
+  const [credEdits, setCredEdits] = useState<Record<string, Record<string, string>>>({});
+  const creds = useMemo(
+    () =>
+      credEdits[selectedProvider] ??
+      loadState().providers[selectedProvider]?.creds ??
+      EMPTY_CREDS,
+    [credEdits, selectedProvider],
+  );
   const [loadingSection, setLoadingSection] = useState('');
   const busy = (s: string) => loadingSection === s;
 
+  // Whether the visitor is signed in via My Calendar, and to which providers
+  // this deployment even offers it -- fetched once here (not by call.ts on
+  // every call) so ConnectPanel can lead with a sign-in button and, below,
+  // `conn.signedIn` can route the explorer tabs to the session transport
+  // instead of the pasted-credential one, for exactly that one connected
+  // provider.
+  const [calendarStatus, setCalendarStatus] = useState<CalendarStatus | null>(null);
+  const refreshCalendarStatus = useCallback(() => {
+    void getStatus().then((res) => {
+      if (res.ok) setCalendarStatus(res.data as CalendarStatus);
+    });
+  }, []);
   useEffect(() => {
-    setStorageOk(storageAvailable());
-    setRemember_(loadState().remember);
+    refreshCalendarStatus();
+  }, [refreshCalendarStatus]);
+
+  // The calendar OAuth callback lands on /?tab=calendar, and that must win
+  // over whatever tab was persisted — otherwise a returning visitor is bounced
+  // away from the calendar they just connected. Adopting it INTO the store
+  // (rather than holding it as a separate source of truth) also means a later
+  // reload stays put, after CalendarTab strips the query string.
+  // Read in an effect, never during render: `window` does not exist on the
+  // server, so reading it while rendering would break hydration.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'calendar') {
+      patchUiState({ activeTab: 'calendar' });
+    }
   }, []);
 
-  // Results
-  const [capsResult, setCapsResult] = useState<ActionResult | null>(null);
-  const [bookingResult, setBookingResult] = useState<ActionResult | null>(null);
-  const [availResult, setAvailResult] = useState<ActionResult | null>(null);
-  const [customerResult, setCustomerResult] = useState<ActionResult | null>(null);
-  const [catalogResult, setCatalogResult] = useState<ActionResult | null>(null);
-  const [utilResult, setUtilResult] = useState<ActionResult | null>(null);
-  const [webhookResult, setWebhookResult] = useState<ActionResult | null>(null);
 
-  // Form states
-  const [bookingOp, setBookingOp] = useState('create');
-  const [webhookProvider, setWebhookProvider] = useState('square');
-  const [webhookFields, setWebhookFields] = useState<Record<string, string>>({});
+  /* Results — derived from the store, overridden by this session's live calls.
+     Derived rather than held in `useState` + adopted in an effect for the same
+     reason as `creds` above: the store's real values only arrive on the render
+     AFTER hydration, and adopting them with setState in an effect is both a
+     cascading render and an eslint error. `resultEdits` wins whenever a key is
+     present in it, including when its value is deliberately null. */
+  const [resultEdits, setResultEdits] = useState<Record<string, ActionResult | null>>({});
+  const savedResults = useMemo(() => {
+    const out: Record<string, ActionResult | null> = {};
+    for (const key of RESULT_KEYS) out[key] = savedResult(ui, key);
+    return out;
+  }, [ui]);
+  const resultOf = (key: string): ActionResult | null =>
+    key in resultEdits ? resultEdits[key] : (savedResults[key] ?? null);
+
+  // One writer for all seven, so a new tab cannot forget to persist.
+  const setResult = useCallback((key: string, r: ActionResult | null) => {
+    setResultEdits((prev) => ({ ...prev, [key]: r }));
+    const results = { ...loadUiState().results };
+    if (r === null) delete results[key];
+    else results[key] = resultForStorage(JSON.stringify(r));
+    patchUiState({ results });
+  }, []);
+
+  const capsResult = resultOf('caps');
+  const bookingResult = resultOf('booking');
+  const availResult = resultOf('avail');
+  const customerResult = resultOf('customer');
+  const catalogResult = resultOf('catalog');
+  const utilResult = resultOf('util');
+  const webhookResult = resultOf('webhook');
+
+  const setCapsResult = useCallback((r: ActionResult | null) => setResult('caps', r), [setResult]);
+  const setBookingResult = useCallback(
+    (r: ActionResult | null) => setResult('booking', r),
+    [setResult],
+  );
+  const setAvailResult = useCallback(
+    (r: ActionResult | null) => setResult('avail', r),
+    [setResult],
+  );
+  const setCustomerResult = useCallback(
+    (r: ActionResult | null) => setResult('customer', r),
+    [setResult],
+  );
+  const setCatalogResult = useCallback(
+    (r: ActionResult | null) => setResult('catalog', r),
+    [setResult],
+  );
+  const setUtilResult = useCallback((r: ActionResult | null) => setResult('util', r), [setResult]);
+  const setWebhookResult = useCallback(
+    (r: ActionResult | null) => setResult('webhook', r),
+    [setResult],
+  );
+
+  /** Wipes every result, in state and in storage, in ONE store write. */
+  const clearAllResults = useCallback(() => {
+    setResultEdits(Object.fromEntries(RESULT_KEYS.map((k) => [k, null])));
+    patchUiState({ results: {} });
+  }, []);
+
+  // How long each section's last call took, keyed the same as `wrap`'s
+  // `section` argument. Kept separate from the ActionResult states above --
+  // ResultBox takes it as its own prop rather than a field on ActionResult,
+  // because that type is also produced by the server proxy route and by
+  // serializeError, neither of which knows the browser-side wall-clock time.
+  const [elapsedMs, setElapsedMs] = useState<Record<string, number>>({});
 
   const updateCred = useCallback(
-    (key: string, value: string) => setCreds((prev) => ({ ...prev, [key]: value })),
-    [],
+    (key: string, value: string) =>
+      setCredEdits((prev) => ({
+        ...prev,
+        [selectedProvider]: {
+          // Seed from storage on the first keystroke so editing one field does
+          // not drop the others that were restored alongside it.
+          ...(prev[selectedProvider] ?? loadState().providers[selectedProvider]?.creds ?? {}),
+          [key]: value,
+        },
+      })),
+    [selectedProvider],
   );
 
   const wrap = useCallback(
     async (section: string, fn: () => Promise<ActionResult>, setter: (r: ActionResult) => void) => {
       setLoadingSection(section);
+      const startedAt = performance.now();
       try {
         const result = await fn();
         setter(result);
       } catch (e) {
         setter({ ok: false, error: { message: String(e) } });
       } finally {
+        setElapsedMs((prev) => ({ ...prev, [section]: performance.now() - startedAt }));
         setLoadingSection('');
       }
     },
     [],
   );
+
+  // Default window for List Bookings / withRetry / collectAll / listAll: the
+  // sample seed anchors to today and spans today-7 to today+21 (seed.ts), so a
+  // hardcoded past week returned nothing on the first click -- and a real
+  // provider is no better off defaulting to a fixed date that recedes further
+  // into the past every day. Computed once per mount, not per render, so it
+  // never clobbers a value the visitor has typed in; every call site reads
+  // the same object so they can't drift apart. 'UTC' (not the visitor's own
+  // zone) keeps this identical between the server-rendered `defaultValue` and
+  // the client's hydration pass -- the server has no access to the browser's
+  // timezone, and getting that wrong would fail hydration instead of just
+  // being off by a few hours, which is harmless for a default this wide.
+  const defaultRange = useMemo(() => {
+    const today = todayIn('UTC');
+    const tomorrow = shiftDate(today, 1);
+    return {
+      // The wide window, for List Bookings / withRetry / collectAll / listAll.
+      start: `${shiftDate(today, -7)}T00:00:00Z`,
+      end: `${shiftDate(today, 21)}T00:00:00Z`,
+      // A single upcoming day, for Search Availability. Tomorrow rather than
+      // today so a visitor arriving late in the day still sees a full day of
+      // slots instead of a mostly-elapsed one.
+      dayStart: `${tomorrow}T00:00:00Z`,
+      dayEnd: `${shiftDate(today, 2)}T00:00:00Z`,
+      // A concrete 45-minute slot tomorrow, for Create Booking.
+      slotStart: `${tomorrow}T10:00:00Z`,
+      slotEnd: `${tomorrow}T10:45:00Z`,
+    };
+  }, []);
 
   const providerInfo = selectedProvider ? PROVIDERS[selectedProvider] : null;
   const conn = useMemo(() => {
@@ -221,8 +343,18 @@ export default function Home() {
     // explicit host. That's correct (the table's `prod` is contractually equal
     // to the adapter's default, enforced by environments-drift.test.ts) but
     // non-obvious, hence this note.
-    return { creds, baseUrl: !baseUrl || baseUrl === prod ? undefined : baseUrl };
-  }, [creds, baseUrl, selectedProvider]);
+    //
+    // signedIn: true only for the one provider (google or outlook) the
+    // visitor is actually connected to via My Calendar right now -- never for
+    // any other provider, even another OAuth one, since only one session
+    // cookie exists at a time. call.ts's run() checks this before anything
+    // else and, when true, ignores creds/baseUrl entirely in favour of the
+    // sealed session cookie.
+    const signedIn =
+      (selectedProvider === 'google' || selectedProvider === 'outlook') &&
+      calendarStatus?.connection?.provider === selectedProvider;
+    return { creds, baseUrl: !baseUrl || baseUrl === prod ? undefined : baseUrl, signedIn };
+  }, [creds, baseUrl, selectedProvider, calendarStatus]);
 
   useEffect(() => {
     if (!remember || !selectedProvider) return;
@@ -240,6 +372,51 @@ export default function Home() {
     }, 300);
     return () => clearTimeout(t);
   }, [remember, selectedProvider, creds, env, baseUrl]);
+
+  // Shared by every provider picker in the shell (rail, mobile <select>, and
+  // ConnectPanel's own chip grid) so switching providers behaves identically
+  // no matter which control triggered it.
+  const selectProvider = useCallback(
+    (id: string) => {
+      // Re-selecting the already-selected provider is a no-op, not a switch —
+      // running the reset below would blank creds the user just typed
+      // (Remember off means nothing was saved yet to reload from).
+      if (id === selectedProvider) return;
+      // Flush a pending save for the OUTGOING provider before switching —
+      // otherwise the debounce effect's cleanup just clearTimeout()s it and
+      // credentials typed within the last ~300ms are silently lost. Capture
+      // the outgoing values now, before any setter below changes them.
+      const outgoingProvider = selectedProvider;
+      const outgoingCreds = creds;
+      const outgoingEnv = env;
+      const outgoingBaseUrl = baseUrl;
+      if (
+        remember &&
+        outgoingProvider &&
+        Object.values(outgoingCreds).some((v) => v.trim() !== '')
+      ) {
+        saveProvider(outgoingProvider, {
+          creds: outgoingCreds,
+          env: outgoingEnv,
+          baseUrl: outgoingBaseUrl,
+        });
+      }
+      const saved = loadState().providers[id];
+      // No creds reset needed: `creds` derives from credEdits[id] falling back
+      // to this provider's own saved entry, so switching already shows the
+      // right values — and any edits typed for the incoming provider earlier
+      // in this session are preserved rather than silently dropped.
+      patchUiState({
+        selectedProvider: id,
+        env: saved?.env ?? 'prod',
+        baseUrl: saved?.baseUrl ?? ENVIRONMENTS[id]?.prod ?? '',
+      });
+      // A result from the previous provider must never be shown under the new
+      // one. Cleared in a single store write rather than seven.
+      clearAllResults();
+    },
+    [selectedProvider, creds, env, baseUrl, remember, clearAllResults],
+  );
 
   return (
     <div className="app-container">
@@ -286,6 +463,7 @@ export default function Home() {
               </svg>
             </a>
           </div>
+          <ThemeToggle />
         </div>
         <p>Unified CRUD for 16 booking &amp; calendar providers. Interactive API explorer.</p>
       </header>
@@ -309,33 +487,55 @@ export default function Home() {
         )}
       </div>
 
+      {/* ─── Provider select (< 900px only; the rail below is hidden there) ─── */}
+      <div className="provider-select-bar">
+        <label className="form-label" htmlFor="provider-select-mobile">
+          Provider
+        </label>
+        <select
+          id="provider-select-mobile"
+          className="form-select"
+          value={selectedProvider}
+          onChange={(e) => e.target.value && selectProvider(e.target.value)}
+        >
+          <option value="">Choose a provider…</option>
+          {PROVIDER_GROUPS.map((group) => (
+            <optgroup key={group.heading} label={group.heading}>
+              {group.ids.map((id) => (
+                <option key={id} value={id}>
+                  {PROVIDERS[id]?.label ?? id}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+
       <div className="main-layout">
-        <aside className="sidebar">
-          {/* ─── Tabs ─── */}
-          <nav className="tabs" role="tablist" aria-label="API Explorer">
-            {TABS.map((t, i) => (
-              <button
-                key={t.id}
-                id={`tab-${t.id}`}
-                role="tab"
-                aria-selected={activeTab === t.id}
-                tabIndex={activeTab === t.id ? 0 : -1}
-                className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(t.id)}
-                onKeyDown={(e) => {
-                  let idx = i;
-                  if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
-                  else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
-                  else return;
-                  e.preventDefault();
-                  setActiveTab(TABS[idx].id);
-                  document.getElementById(`tab-${TABS[idx].id}`)?.focus();
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </nav>
+        {/* ─── Provider rail (>= 900px); grouped by how each provider actually
+            runs, read from lib/providers.ts so this can't drift from the
+            transport split the demo relies on. ─── */}
+        <aside className="provider-rail" aria-label="Providers">
+          {PROVIDER_GROUPS.map((group) => (
+            <div className="rail-group" key={group.heading}>
+              <h2 className="rail-heading">{group.heading}</h2>
+              <ul className="rail-list">
+                {group.ids.map((id) => (
+                  <li key={id}>
+                    <button
+                      type="button"
+                      className={`rail-item ${selectedProvider === id ? 'selected' : ''}`}
+                      aria-pressed={selectedProvider === id}
+                      onClick={() => selectProvider(id)}
+                    >
+                      <span className={`rail-dot rail-dot-${group.dot}`} aria-hidden="true" />
+                      {PROVIDERS[id]?.label ?? id}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
           <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', padding: '0 0.5rem' }}>
             <a
               href="https://github.com/djlahre0/unibooking"
@@ -385,46 +585,40 @@ export default function Home() {
         </aside>
 
         <main className="content-area">
+          {/* ─── Tab strip ─── */}
+          <nav className="tabs" role="tablist" aria-label="Sections">
+            {TABS.map((t, i) => (
+              <button
+                key={t.id}
+                id={`tab-${t.id}`}
+                role="tab"
+                aria-selected={activeTab === t.id}
+                tabIndex={activeTab === t.id ? 0 : -1}
+                className={`tab ${activeTab === t.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(t.id)}
+                onKeyDown={(e) => {
+                  let idx = i;
+                  if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
+                  else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
+                  else return;
+                  e.preventDefault();
+                  setActiveTab(TABS[idx].id);
+                  document.getElementById(`tab-${TABS[idx].id}`)?.focus();
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+
           {/* ═══ CONNECT TAB ═══ */}
+          {activeTab === 'calendar' && <CalendarTab />}
+
           {activeTab === 'connect' && (
             <ConnectPanel
+              onOpenCalendar={() => setActiveTab('calendar')}
               selectedProvider={selectedProvider}
-              onSelectProvider={(id) => {
-                // Re-clicking the already-selected chip is a no-op click, not a switch —
-                // running the reset below would blank creds the user just typed (Remember
-                // off means nothing was saved yet to reload from).
-                if (id === selectedProvider) return;
-                // Flush a pending save for the OUTGOING provider before switching —
-                // otherwise the debounce effect's cleanup just clearTimeout()s it and
-                // credentials typed within the last ~300ms are silently lost. Capture
-                // the outgoing values now, before any setter below changes them.
-                const outgoingProvider = selectedProvider;
-                const outgoingCreds = creds;
-                const outgoingEnv = env;
-                const outgoingBaseUrl = baseUrl;
-                if (
-                  remember &&
-                  outgoingProvider &&
-                  Object.values(outgoingCreds).some((v) => v.trim() !== '')
-                ) {
-                  saveProvider(outgoingProvider, {
-                    creds: outgoingCreds,
-                    env: outgoingEnv,
-                    baseUrl: outgoingBaseUrl,
-                  });
-                }
-                setSelectedProvider(id);
-                const saved = loadState().providers[id];
-                setCreds(saved?.creds ?? {});
-                setEnv(saved?.env ?? 'prod');
-                setBaseUrl(saved?.baseUrl ?? ENVIRONMENTS[id]?.prod ?? '');
-                setCapsResult(null);
-                setBookingResult(null);
-                setAvailResult(null);
-                setCustomerResult(null);
-                setUtilResult(null);
-                setWebhookResult(null);
-              }}
+              onSelectProvider={selectProvider}
               creds={creds}
               onCredChange={updateCred}
               capsResult={capsResult}
@@ -432,16 +626,45 @@ export default function Home() {
                 wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)
               }
               busy={busy('caps')}
+              capsElapsedMs={elapsedMs.caps}
+              calendarStatus={calendarStatus}
+              onDisconnected={refreshCalendarStatus}
+              onCalendarConfigChanged={refreshCalendarStatus}
+              // ENVIRONMENTS has no entry for the local provider -- it has no
+              // host. Passed as advancedChildren (not children) so it sits
+              // behind ConnectPanel's "Advanced" disclosure alongside any of
+              // the provider's own advanced fields, instead of always being
+              // shown open -- most visitors never need to touch it.
+              advancedChildren={
+                !isLocal(selectedProvider) ? (
+                  <EnvironmentControl
+                    provider={selectedProvider}
+                    env={env}
+                    baseUrl={baseUrl}
+                    onChange={(nextEnv, nextUrl) => {
+                      patchUiState({ env: nextEnv, baseUrl: nextUrl });
+                    }}
+                  />
+                ) : null
+              }
+              onResetSample={() => {
+                if (
+                  confirm(
+                    'Restore the sample data to its starting state? Your changes to it are lost.',
+                  )
+                ) {
+                  resetSample();
+                  // The dataset just changed under any result currently on screen
+                  // (bookings, availability, catalog, customers) -- clear them so
+                  // a stale response is never shown as if it still reflects
+                  // what's in storage.
+                  setBookingResult(null);
+                  setAvailResult(null);
+                  setCatalogResult(null);
+                  setCustomerResult(null);
+                }
+              }}
             >
-              <EnvironmentControl
-                provider={selectedProvider}
-                env={env}
-                baseUrl={baseUrl}
-                onChange={(nextEnv, nextUrl) => {
-                  setEnv(nextEnv);
-                  setBaseUrl(nextUrl);
-                }}
-              />
               <PersistenceControls
                 remember={remember}
                 available={storageOk}
@@ -452,17 +675,28 @@ export default function Home() {
                 }}
                 onClearProvider={() => {
                   clearProvider(selectedProvider);
-                  setCreds({});
-                  setEnv('prod');
-                  setBaseUrl(ENVIRONMENTS[selectedProvider]?.prod ?? '');
+                  // Drop this provider's edits so `creds` falls back to the
+                  // entry just removed from storage, i.e. to empty.
+                  setCredEdits((prev) => {
+                    const next = { ...prev };
+                    delete next[selectedProvider];
+                    return next;
+                  });
+                  patchUiState({
+                    env: 'prod',
+                    baseUrl: ENVIRONMENTS[selectedProvider]?.prod ?? '',
+                  });
                 }}
+                // PersistenceControls owns the confirmation now, because it
+                // clears the UI state and the sample data alongside these
+                // credentials — one prompt naming all three, not two prompts.
                 onClearAll={() => {
-                  if (confirm('Clear saved credentials for every provider on this device?')) {
-                    clearAll();
-                    setCreds({});
-                    setEnv('prod');
-                    setBaseUrl(ENVIRONMENTS[selectedProvider]?.prod ?? '');
-                  }
+                  clearAll();
+                  setCredEdits({});
+                  patchUiState({
+                    env: 'prod',
+                    baseUrl: ENVIRONMENTS[selectedProvider]?.prod ?? '',
+                  });
                 }}
               />
             </ConnectPanel>
@@ -470,900 +704,96 @@ export default function Home() {
 
           {/* ═══ CAPABILITIES TAB ═══ */}
           {activeTab === 'capabilities' && (
-            <div className="fade-in">
-              {!selectedProvider ? (
-                <div className="empty-state">
-                  <span className="icon">⚡</span>
-                  Select a provider in the Connect tab first
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="card-title">
-                    <span className="icon">⚡</span> Capabilities — {providerInfo?.label}
-                  </div>
-                  <p
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      marginBottom: '1rem',
-                    }}
-                  >
-                    <code>client.capabilities</code> — typed object that tells you what this
-                    provider supports, before you call any method.
-                  </p>
-                  {!capsResult && (
-                    <button
-                      className="btn btn-primary"
-                      onClick={() =>
-                        wrap('caps', () => getCapabilities(selectedProvider), setCapsResult)
-                      }
-                      disabled={busy('caps')}
-                    >
-                      {busy('caps') ? '...' : 'Load Capabilities'}
-                    </button>
-                  )}
-                  {capsResult?.ok && capsResult.data ? (
-                    <div className="caps-grid">
-                      {Object.entries(
-                        ((capsResult.data as Record<string, unknown>)?.capabilities ??
-                          {}) as Record<string, boolean>,
-                      ).map(([key, val]) => (
-                        <div key={key} className={`cap-badge ${val ? 'supported' : 'unsupported'}`}>
-                          {val ? '✓' : '✗'} {key}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <ResultBox result={capsResult} label="Raw Response" />
-                </div>
-              )}
-            </div>
+            <CapabilitiesTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              capsResult={capsResult}
+              setCapsResult={setCapsResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.caps}
+            />
           )}
 
           {/* ═══ BOOKINGS TAB ═══ */}
           {activeTab === 'bookings' && (
-            <div className="fade-in">
-              {!selectedProvider ? (
-                <div className="empty-state">
-                  <span className="icon">📅</span>
-                  Select a provider in the Connect tab first
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="card-title">
-                    <span className="icon">📅</span> Booking CRUD — {providerInfo?.label}
-                  </div>
-
-                  <div className="op-row">
-                    {['create', 'get', 'update', 'cancel', 'list'].map((op) => (
-                      <button
-                        key={op}
-                        className={`btn btn-sm ${bookingOp === op ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => {
-                          setBookingOp(op);
-                          setBookingResult(null);
-                        }}
-                      >
-                        {op === 'create' && '➕ '}
-                        {op === 'get' && '🔍 '}
-                        {op === 'update' && '✏️ '}
-                        {op === 'cancel' && '🗑 '}
-                        {op === 'list' && '📋 '}
-                        {op.charAt(0).toUpperCase() + op.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Create Booking */}
-                  {bookingOp === 'create' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const fd = new FormData(e.currentTarget);
-                        wrap(
-                          'booking',
-                          () =>
-                            callCreateBooking(selectedProvider, conn, {
-                              title: fd.get('title') as string,
-                              start: fd.get('start') as string,
-                              end: fd.get('end') as string,
-                              serviceId: (fd.get('serviceId') as string) || undefined,
-                              staffId: (fd.get('staffId') as string) || undefined,
-                              customerName: (fd.get('customerName') as string) || undefined,
-                              customerEmail: (fd.get('customerEmail') as string) || undefined,
-                              idempotencyKey: (fd.get('idempotencyKey') as string) || undefined,
-                            }),
-                          setBookingResult,
-                        );
-                      }}
-                    >
-                      <div className="two-col">
-                        <div className="form-group">
-                          <label className="form-label">Title</label>
-                          <input
-                            name="title"
-                            className="form-input"
-                            placeholder="Haircut — Jane"
-                            defaultValue="Demo Booking"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Service ID</label>
-                          <input name="serviceId" className="form-input" placeholder="Optional" />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Start (RFC3339)</label>
-                          <input
-                            name="start"
-                            className="form-input"
-                            placeholder="2026-07-20T10:00:00-07:00"
-                            defaultValue="2026-07-20T10:00:00-07:00"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">End (RFC3339)</label>
-                          <input
-                            name="end"
-                            className="form-input"
-                            placeholder="2026-07-20T10:45:00-07:00"
-                            defaultValue="2026-07-20T10:45:00-07:00"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Staff ID</label>
-                          <input name="staffId" className="form-input" placeholder="Optional" />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Idempotency Key</label>
-                          <input
-                            name="idempotencyKey"
-                            className="form-input"
-                            placeholder="Optional UUID"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Customer Name</label>
-                          <input
-                            name="customerName"
-                            className="form-input"
-                            placeholder="Jane Doe"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Customer Email</label>
-                          <input
-                            name="customerEmail"
-                            className="form-input"
-                            placeholder="jane@example.com"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        className="btn btn-primary"
-                        type="submit"
-                        disabled={busy('booking')}
-                        style={{ marginTop: '1rem' }}
-                      >
-                        {busy('booking') ? '...' : '➕ Create Booking'}
-                      </button>
-                    </form>
-                  )}
-
-                  {/* Get Booking */}
-                  {bookingOp === 'get' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const fd = new FormData(e.currentTarget);
-                        wrap(
-                          'booking',
-                          () =>
-                            callGetBooking(selectedProvider, conn, fd.get('bookingId') as string),
-                          setBookingResult,
-                        );
-                      }}
-                    >
-                      <div className="form-group">
-                        <label className="form-label">Booking ID</label>
-                        <input
-                          name="bookingId"
-                          className="form-input"
-                          placeholder="Enter booking ID"
-                          required
-                        />
-                      </div>
-                      <button className="btn btn-primary" type="submit" disabled={busy('booking')}>
-                        {busy('booking') ? '...' : '🔍 Get Booking'}
-                      </button>
-                    </form>
-                  )}
-
-                  {/* Update Booking */}
-                  {bookingOp === 'update' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const fd = new FormData(e.currentTarget);
-                        wrap(
-                          'booking',
-                          () =>
-                            callUpdateBooking(
-                              selectedProvider,
-                              conn,
-                              fd.get('bookingId') as string,
-                              {
-                                title: (fd.get('title') as string) || undefined,
-                                start: (fd.get('start') as string) || undefined,
-                                end: (fd.get('end') as string) || undefined,
-                                staffId: (fd.get('staffId') as string) || undefined,
-                                serviceId: (fd.get('serviceId') as string) || undefined,
-                              },
-                            ),
-                          setBookingResult,
-                        );
-                      }}
-                    >
-                      <div className="two-col">
-                        <div className="form-group">
-                          <label className="form-label">Booking ID</label>
-                          <input
-                            name="bookingId"
-                            className="form-input"
-                            placeholder="ID to update"
-                            required
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">New Title</label>
-                          <input name="title" className="form-input" placeholder="Optional" />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">New Start</label>
-                          <input
-                            name="start"
-                            className="form-input"
-                            placeholder="Optional RFC3339"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">New End</label>
-                          <input name="end" className="form-input" placeholder="Optional RFC3339" />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">New Staff ID</label>
-                          <input name="staffId" className="form-input" placeholder="Optional" />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">New Service ID</label>
-                          <input name="serviceId" className="form-input" placeholder="Optional" />
-                        </div>
-                      </div>
-                      <button
-                        className="btn btn-primary"
-                        type="submit"
-                        disabled={busy('booking')}
-                        style={{ marginTop: '1rem' }}
-                      >
-                        {busy('booking') ? '...' : '✏️ Update Booking'}
-                      </button>
-                    </form>
-                  )}
-
-                  {/* Cancel Booking */}
-                  {bookingOp === 'cancel' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const fd = new FormData(e.currentTarget);
-                        wrap(
-                          'booking',
-                          () =>
-                            callCancelBooking(
-                              selectedProvider,
-                              conn,
-                              fd.get('bookingId') as string,
-                              (fd.get('reason') as string) || undefined,
-                            ),
-                          setBookingResult,
-                        );
-                      }}
-                    >
-                      <div className="two-col">
-                        <div className="form-group">
-                          <label className="form-label">Booking ID</label>
-                          <input
-                            name="bookingId"
-                            className="form-input"
-                            placeholder="ID to cancel"
-                            required
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Reason</label>
-                          <input
-                            name="reason"
-                            className="form-input"
-                            placeholder="Optional cancellation reason"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        className="btn btn-primary"
-                        type="submit"
-                        disabled={busy('booking')}
-                        style={{ marginTop: '1rem' }}
-                      >
-                        {busy('booking') ? '...' : '🗑 Cancel Booking'}
-                      </button>
-                    </form>
-                  )}
-
-                  {/* List Bookings */}
-                  {bookingOp === 'list' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const fd = new FormData(e.currentTarget);
-                        wrap(
-                          'booking',
-                          () =>
-                            callListBookings(selectedProvider, conn, {
-                              start: fd.get('start') as string,
-                              end: fd.get('end') as string,
-                              limit: (fd.get('limit') as string)
-                                ? Number(fd.get('limit'))
-                                : undefined,
-                              pageToken: (fd.get('pageToken') as string) || undefined,
-                            }),
-                          setBookingResult,
-                        );
-                      }}
-                    >
-                      <div className="two-col">
-                        <div className="form-group">
-                          <label className="form-label">Start (RFC3339)</label>
-                          <input
-                            name="start"
-                            className="form-input"
-                            defaultValue="2026-07-20T00:00:00-07:00"
-                            required
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">End (RFC3339)</label>
-                          <input
-                            name="end"
-                            className="form-input"
-                            defaultValue="2026-07-27T00:00:00-07:00"
-                            required
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Limit</label>
-                          <input
-                            name="limit"
-                            className="form-input"
-                            placeholder="Optional page size"
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Page Token</label>
-                          <input
-                            name="pageToken"
-                            className="form-input"
-                            placeholder="Optional (from prev response)"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        className="btn btn-primary"
-                        type="submit"
-                        disabled={busy('booking')}
-                        style={{ marginTop: '1rem' }}
-                      >
-                        {busy('booking') ? '...' : '📋 List Bookings'}
-                      </button>
-                    </form>
-                  )}
-
-                  <ResultBox result={bookingResult} label={`${bookingOp} result`} />
-                </div>
-              )}
-            </div>
+            <BookingsTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              defaultRange={defaultRange}
+              bookingResult={bookingResult}
+              setBookingResult={setBookingResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.booking}
+            />
           )}
 
           {/* ═══ AVAILABILITY TAB ═══ */}
           {activeTab === 'availability' && (
-            <div className="fade-in">
-              {!selectedProvider ? (
-                <div className="empty-state">
-                  <span className="icon">🕐</span>
-                  Select a provider in the Connect tab first
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="card-title">
-                    <span className="icon">🕐</span> Search Availability — {providerInfo?.label}
-                  </div>
-                  <p
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      marginBottom: '1rem',
-                    }}
-                  >
-                    <code>client.searchAvailability(query)</code> — only works when{' '}
-                    <code>capabilities.availability</code> is <code>true</code>
-                  </p>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const fd = new FormData(e.currentTarget);
-                      wrap(
-                        'avail',
-                        () =>
-                          callSearchAvailability(selectedProvider, conn, {
-                            start: fd.get('start') as string,
-                            end: fd.get('end') as string,
-                            timezone: (fd.get('timezone') as string) || undefined,
-                            serviceId: (fd.get('serviceId') as string) || undefined,
-                            staffId: (fd.get('staffId') as string) || undefined,
-                          }),
-                        setAvailResult,
-                      );
-                    }}
-                  >
-                    <div className="two-col">
-                      <div className="form-group">
-                        <label className="form-label">Start (RFC3339)</label>
-                        <input
-                          name="start"
-                          className="form-input"
-                          defaultValue="2026-07-20T00:00:00-07:00"
-                          required
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">End (RFC3339)</label>
-                        <input
-                          name="end"
-                          className="form-input"
-                          defaultValue="2026-07-21T00:00:00-07:00"
-                          required
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Service ID</label>
-                        <input name="serviceId" className="form-input" placeholder="Optional" />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Staff ID</label>
-                        <input name="staffId" className="form-input" placeholder="Optional" />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Timezone (IANA)</label>
-                        <input
-                          name="timezone"
-                          className="form-input"
-                          placeholder="Required by Setmore and Wix"
-                        />
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-primary"
-                      type="submit"
-                      disabled={busy('avail')}
-                      style={{ marginTop: '1rem' }}
-                    >
-                      {busy('avail') ? '...' : '🔍 Search Slots'}
-                    </button>
-                  </form>
-                  <ResultBox result={availResult} label="Availability" />
-                </div>
-              )}
-            </div>
+            <AvailabilityTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              defaultRange={defaultRange}
+              availResult={availResult}
+              setAvailResult={setAvailResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.avail}
+            />
           )}
 
           {/* ═══ CUSTOMERS TAB ═══ */}
           {activeTab === 'customers' && (
-            <div className="fade-in">
-              {!selectedProvider ? (
-                <div className="empty-state">
-                  <span className="icon">👤</span>
-                  Select a provider in the Connect tab first
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="card-title">
-                    <span className="icon">👤</span> Customer Management — {providerInfo?.label}
-                  </div>
-                  <p
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      marginBottom: '1rem',
-                    }}
-                  >
-                    <code>client.customers?.findOrCreate(customer)</code> — only when{' '}
-                    <code>capabilities.customers</code> is <code>true</code>
-                  </p>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const fd = new FormData(e.currentTarget);
-                      wrap(
-                        'customer',
-                        () =>
-                          callFindOrCreateCustomer(selectedProvider, conn, {
-                            name: (fd.get('name') as string) || undefined,
-                            email: (fd.get('email') as string) || undefined,
-                            phone: (fd.get('phone') as string) || undefined,
-                          }),
-                        setCustomerResult,
-                      );
-                    }}
-                  >
-                    <div className="two-col">
-                      <div className="form-group">
-                        <label className="form-label">Name</label>
-                        <input
-                          name="name"
-                          className="form-input"
-                          placeholder="Jane Doe"
-                          defaultValue="Jane Doe"
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Email</label>
-                        <input
-                          name="email"
-                          className="form-input"
-                          placeholder="jane@example.com"
-                          defaultValue="jane@example.com"
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Phone</label>
-                        <input name="phone" className="form-input" placeholder="+1555..." />
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-primary"
-                      type="submit"
-                      disabled={busy('customer')}
-                      style={{ marginTop: '1rem' }}
-                    >
-                      {busy('customer') ? '...' : '👤 Find or Create'}
-                    </button>
-                  </form>
-                  <ResultBox result={customerResult} label="Customer" />
-                </div>
-              )}
-            </div>
+            <CustomersTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              customerResult={customerResult}
+              setCustomerResult={setCustomerResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.customer}
+            />
           )}
 
           {/* ═══ UTILITIES TAB ═══ */}
           {activeTab === 'catalog' && (
-            <div className="fade-in">
-              {!selectedProvider ? (
-                <div className="empty-state">
-                  <span className="icon">📚</span>
-                  Select a provider in the Connect tab first
-                </div>
-              ) : (
-                <div className="card">
-                  <div className="card-title">
-                    <span className="icon">📚</span> Catalog &amp; Health — {providerInfo?.label}
-                  </div>
-
-                  <p
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      marginBottom: '1rem',
-                    }}
-                  >
-                    <code>checkConnection()</code> is on every adapter and does{' '}
-                    <strong>not</strong> throw when credentials are dead — it returns{' '}
-                    <code>{'{ ok: false, reason }'}</code>. A network blip or 5xx still throws, so a
-                    transient fault is never mistaken for a revoked integration.
-                  </p>
-                  <p
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      marginBottom: '1rem',
-                    }}
-                  >
-                    <code>listServices()</code> / <code>listStaff()</code> need{' '}
-                    <code>capabilities.serviceCatalog</code> /{' '}
-                    <code>capabilities.staffDirectory</code> — which are <em>not</em> the same as{' '}
-                    <code>services</code> / <code>staff</code>, those only say a booking can
-                    reference one.
-                  </p>
-
-                  <div className="op-row">
-                    <button
-                      className="btn btn-sm btn-primary"
-                      disabled={busy('catalog')}
-                      onClick={() =>
-                        wrap(
-                          'catalog',
-                          () => callCheckConnection(selectedProvider, conn),
-                          setCatalogResult,
-                        )
-                      }
-                    >
-                      ❤️ Check Connection
-                    </button>
-                    <button
-                      className="btn btn-sm btn-secondary"
-                      disabled={busy('catalog')}
-                      onClick={() =>
-                        wrap(
-                          'catalog',
-                          () => callListServices(selectedProvider, conn, { limit: 20 }),
-                          setCatalogResult,
-                        )
-                      }
-                    >
-                      🧾 List Services
-                    </button>
-                    <button
-                      className="btn btn-sm btn-secondary"
-                      disabled={busy('catalog')}
-                      onClick={() =>
-                        wrap(
-                          'catalog',
-                          () => callListStaff(selectedProvider, conn, { limit: 20 }),
-                          setCatalogResult,
-                        )
-                      }
-                    >
-                      🧑‍🔧 List Staff
-                    </button>
-                  </div>
-
-                  <p
-                    style={{
-                      color: 'var(--text-muted)',
-                      fontSize: '0.78rem',
-                      marginTop: '1rem',
-                    }}
-                  >
-                    Catalog <strong>writes</strong> (<code>createService</code>,{' '}
-                    <code>setStaffActive</code>, …) are supported by the library on Square but are
-                    deliberately not exposed here — this playground talks to real accounts, and a
-                    demo should not mutate a live salon&apos;s catalog.
-                  </p>
-
-                  {catalogResult && (
-                    <ResultBox result={catalogResult} label="catalog result" />
-                  )}
-                </div>
-              )}
-            </div>
+            <CatalogTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              catalogResult={catalogResult}
+              setCatalogResult={setCatalogResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.catalog}
+            />
           )}
           {activeTab === 'utilities' && (
-            <div className="fade-in">
-              <div className="card" style={{ marginBottom: '1rem' }}>
-                <div className="card-title">
-                  <span className="icon">🛠</span> Core Utilities
-                </div>
-                <div className="feature-list">
-                  <div className="feature-item">
-                    <span className="icon">🔄</span>
-                    <div>
-                      <h4>createRegistry</h4>
-                      <p>
-                        Dynamic dispatch: register adapters and look them up by{' '}
-                        <code>ProviderId</code>. Methods: <code>get</code>, <code>tryGet</code>,{' '}
-                        <code>has</code>, <code>ids</code>.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="feature-item">
-                    <span className="icon">🔁</span>
-                    <div>
-                      <h4>withRetry</h4>
-                      <p>
-                        Wrap a client for exponential backoff on transient errors. Honors{' '}
-                        <code>retryAfterMs</code> from RATE_LIMIT. Safe for creates only with{' '}
-                        <code>idempotencyKey</code>.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="feature-item">
-                    <span className="icon">📄</span>
-                    <div>
-                      <h4>listAll / collectAll</h4>
-                      <p>
-                        Auto-paginate <code>listBookings</code> across every page.{' '}
-                        <code>listAll</code> yields via AsyncGenerator; <code>collectAll</code>{' '}
-                        returns an array.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="feature-item">
-                    <span className="icon">⚠️</span>
-                    <div>
-                      <h4>Error Helpers</h4>
-                      <p>
-                        <code>isUnibookingError</code>, <code>isRetryable</code>,{' '}
-                        <code>codeForStatus</code> — discriminate and map errors consistently.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ marginBottom: '1rem' }}>
-                <div className="card-title">Try Them</div>
-                <div className="op-row">
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => wrap('util', () => demoRegistry(), setUtilResult)}
-                    disabled={busy('util')}
-                  >
-                    🔄 createRegistry
-                  </button>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => wrap('util', () => demoErrorHelpers(), setUtilResult)}
-                    disabled={busy('util')}
-                  >
-                    ⚠️ Error Helpers
-                  </button>
-                  {selectedProvider && (
-                    <>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() =>
-                          wrap(
-                            'util',
-                            () =>
-                              demoWithRetry(selectedProvider, conn, {
-                                start: '2026-07-20T00:00:00Z',
-                                end: '2026-07-27T00:00:00Z',
-                              }),
-                            setUtilResult,
-                          )
-                        }
-                        disabled={busy('util')}
-                      >
-                        🔁 withRetry
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() =>
-                          wrap(
-                            'util',
-                            () =>
-                              demoCollectAll(selectedProvider, conn, {
-                                start: '2026-07-20T00:00:00Z',
-                                end: '2026-07-27T00:00:00Z',
-                              }),
-                            setUtilResult,
-                          )
-                        }
-                        disabled={busy('util')}
-                      >
-                        📄 collectAll
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() =>
-                          wrap(
-                            'util',
-                            () =>
-                              demoListAll(selectedProvider, conn, {
-                                start: '2026-07-20T00:00:00Z',
-                                end: '2026-07-27T00:00:00Z',
-                              }),
-                            setUtilResult,
-                          )
-                        }
-                        disabled={busy('util')}
-                      >
-                        📄 listAll
-                      </button>
-                    </>
-                  )}
-                </div>
-                {!selectedProvider && (
-                  <p
-                    style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}
-                  >
-                    ℹ️ Connect to a provider to unlock withRetry, collectAll, and listAll demos.
-                  </p>
-                )}
-                <ResultBox result={utilResult} label="Utility Result" />
-              </div>
-            </div>
+            <UtilitiesTab
+              selectedProvider={selectedProvider}
+              conn={conn}
+              defaultRange={defaultRange}
+              utilResult={utilResult}
+              setUtilResult={setUtilResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.util}
+            />
           )}
 
           {/* ═══ WEBHOOKS TAB ═══ */}
           {activeTab === 'webhooks' && (
-            <div className="fade-in">
-              <div className="card">
-                <div className="card-title">
-                  <span className="icon">🔔</span> Webhook Verification
-                </div>
-                <p
-                  style={{
-                    color: 'var(--text-secondary)',
-                    fontSize: '0.82rem',
-                    marginBottom: '1rem',
-                  }}
-                >
-                  9 webhook verifiers — paste the raw payload + signature to verify.
-                </p>
-
-                <div className="section-title">Select Webhook Provider</div>
-                <div className="provider-grid" style={{ marginBottom: '1.2rem' }}>
-                  {Object.entries(WEBHOOK_PROVIDERS).map(([id, wp]) => (
-                    <button
-                      key={id}
-                      className={`provider-chip ${webhookProvider === id ? 'selected' : ''}`}
-                      onClick={() => {
-                        setWebhookProvider(id);
-                        setWebhookFields({});
-                        setWebhookResult(null);
-                      }}
-                    >
-                      {wp.label}
-                    </button>
-                  ))}
-                </div>
-
-                {WEBHOOK_PROVIDERS[webhookProvider] && (
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      wrap(
-                        'webhook',
-                        () => verifyWebhook(webhookProvider, webhookFields),
-                        setWebhookResult,
-                      );
-                    }}
-                  >
-                    <div className="section-title">
-                      {WEBHOOK_PROVIDERS[webhookProvider].label} Fields
-                    </div>
-                    {WEBHOOK_PROVIDERS[webhookProvider].fields.map((f) => (
-                      <div className="form-group" key={f.key}>
-                        <label className="form-label">{f.label}</label>
-                        {f.multiline ? (
-                          <textarea
-                            className="form-textarea"
-                            placeholder={f.placeholder}
-                            value={webhookFields[f.key] ?? ''}
-                            onChange={(e) =>
-                              setWebhookFields((prev) => ({ ...prev, [f.key]: e.target.value }))
-                            }
-                          />
-                        ) : (
-                          <input
-                            className="form-input"
-                            type={/password|secret|key/i.test(f.key) ? 'password' : 'text'}
-                            placeholder={f.placeholder}
-                            value={webhookFields[f.key] ?? ''}
-                            onChange={(e) =>
-                              setWebhookFields((prev) => ({ ...prev, [f.key]: e.target.value }))
-                            }
-                          />
-                        )}
-                      </div>
-                    ))}
-                    <button className="btn btn-primary" type="submit" disabled={busy('webhook')}>
-                      {busy('webhook') ? '...' : '🔐 Verify Signature'}
-                    </button>
-                  </form>
-                )}
-
-                <ResultBox result={webhookResult} label="Webhook Verification" />
-              </div>
-            </div>
+            <WebhooksTab
+              webhookResult={webhookResult}
+              setWebhookResult={setWebhookResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.webhook}
+            />
           )}
         </main>
       </div>

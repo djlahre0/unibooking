@@ -1,5 +1,8 @@
 'use client';
 
+import { clearUiState, persistenceEnabled } from '../lib/ui-state';
+import { SAMPLE_KEY } from '../lib/sample/store';
+
 export type PersistenceControlsProps = {
   remember: boolean;
   onToggleRemember: (on: boolean) => void;
@@ -73,6 +76,16 @@ export default function PersistenceControls({
         </div>
       )}
 
+      {available && !persistenceEnabled() && (
+        <p
+          role="note"
+          style={{ fontSize: '0.75rem', color: 'var(--text-muted, #8888a0)', marginTop: '0.4rem' }}
+        >
+          This browser&apos;s storage is full or unavailable, so nothing you do here will be
+          remembered after a reload. The demo keeps working for this session.
+        </p>
+      )}
+
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
         <button
           className="btn btn-sm btn-secondary"
@@ -81,7 +94,28 @@ export default function PersistenceControls({
         >
           Clear {providerLabel}
         </button>
-        <button className="btn btn-sm btn-secondary" onClick={onClearAll} disabled={!available}>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={() => {
+            // ONE confirmation covering all three stores. The confirm lives
+            // here rather than in the caller so the wording can name
+            // everything that is actually about to go.
+            if (
+              !confirm(
+                'Clear everything this demo saved on this device — credentials, what you were doing, and the sample data?',
+              )
+            )
+              return;
+            clearUiState();
+            try {
+              localStorage.removeItem(SAMPLE_KEY);
+            } catch {
+              // Blocked storage: there was nothing saved to clear.
+            }
+            onClearAll();
+          }}
+          disabled={!available}
+        >
           Clear all saved
         </button>
       </div>
