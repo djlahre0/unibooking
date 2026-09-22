@@ -6,6 +6,7 @@ import type {
   ConnectionStatus,
   CredsInput,
   CustomerOps,
+  ListCalendarsQuery,
   ListServicesQuery,
   ListStaffQuery,
   ProviderCredentials,
@@ -27,6 +28,7 @@ export interface AdapterMethods {
   checkConnection: BookingClient['checkConnection'];
   listServices?: NonNullable<BookingClient['listServices']>;
   listStaff?: NonNullable<BookingClient['listStaff']>;
+  listCalendars?: NonNullable<BookingClient['listCalendars']>;
   createService?: NonNullable<BookingClient['createService']>;
   updateService?: NonNullable<BookingClient['updateService']>;
   setServiceActive?: NonNullable<BookingClient['setServiceActive']>;
@@ -112,6 +114,14 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
             listStaff: async (query?: ListStaffQuery) => {
               const result = await m.listStaff!(query);
               return capPage(result, 'staff', query?.limit);
+            },
+          }
+        : {}),
+      ...(m.listCalendars
+        ? {
+            listCalendars: async (query?: ListCalendarsQuery) => {
+              const result = await m.listCalendars!(query);
+              return capPage(result, 'calendars', query?.limit);
             },
           }
         : {}),
@@ -220,6 +230,15 @@ export function minutesFromIso8601Duration(v: unknown): number | undefined {
   const total =
     Number(d ?? 0) * 1440 + Number(h ?? 0) * 60 + Number(min ?? 0) + Number(sec ?? 0) / 60;
   return total > 0 ? total : undefined;
+}
+
+/** A provider color → canonical `#RRGGBB`. CalDAV servers (iCloud) append an
+ *  alpha byte (`#FF2968FF`), which is dropped; anything that is not a hex color
+ *  (Graph answers `''` for an unset one) is undefined rather than passed on. */
+export function hexColor(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(v.trim());
+  return m ? `#${m[1]}` : undefined;
 }
 
 /** Throw a consistent UNSUPPORTED error (for capabilities a provider lacks). */

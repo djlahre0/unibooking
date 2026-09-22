@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   addMinutes,
+  allDayDates,
+  assertAllDayInput,
   assertValidRange,
   durationMinutes,
   endFromDuration,
   formatWithOffset,
   isInstant,
+  instantToZoned,
   parseOffsetMinutes,
+  wallClockIn,
+  zonedToInstant,
 } from '../src/time';
 import { isUnibookingError } from '../src/errors';
 
@@ -94,5 +99,102 @@ describe('time', () => {
       })();
       expect(isUnibookingError(err) && err.code).toBe('INVALID_INPUT');
     }
+  });
+});
+
+describe('zonedToInstant', () => {
+  it('writes the instant in the zone offset in force at that moment', () => {
+    expect(zonedToInstant('2026-09-21T10:00', 'Asia/Kolkata')).toBe('2026-09-21T10:00:00+05:30');
+    expect(zonedToInstant('2026-01-15T09:30:15', 'America/New_York')).toBe(
+      '2026-01-15T09:30:15-05:00',
+    );
+    expect(zonedToInstant('2026-07-15T09:30', 'America/New_York')).toBe(
+      '2026-07-15T09:30:00-04:00',
+    );
+    expect(zonedToInstant('2026-07-15T09:30', 'UTC')).toBe('2026-07-15T09:30:00Z');
+  });
+
+  it('resolves a wall-clock time inside a DST gap forward', () => {
+    // 02:30 does not exist on 2026-03-08 in New York: clocks jump 02:00 -> 03:00.
+    expect(zonedToInstant('2026-03-08T02:30', 'America/New_York')).toBe(
+      '2026-03-08T03:30:00-04:00',
+    );
+  });
+
+  it('resolves an ambiguous time in a DST overlap to the earlier instant', () => {
+    // 01:30 happens twice on 2026-11-01 in New York; the first is still EDT.
+    expect(zonedToInstant('2026-11-01T01:30', 'America/New_York')).toBe(
+      '2026-11-01T01:30:00-04:00',
+    );
+  });
+
+  it('accepts Windows zone ids', () => {
+    expect(zonedToInstant('2026-01-15T09:00', 'Eastern Standard Time')).toBe(
+      '2026-01-15T09:00:00-05:00',
+    );
+  });
+
+  it('throws RangeError for an unknown zone or malformed/impossible input', () => {
+    expect(() => zonedToInstant('2026-09-21T10:00', 'Mars/Olympus')).toThrow(RangeError);
+    expect(() => zonedToInstant('2026-09-21 10:00', 'UTC')).toThrow(RangeError);
+    expect(() => zonedToInstant('2026-02-30T10:00', 'UTC')).toThrow(RangeError);
+    expect(() => zonedToInstant('2026-09-21T24:00', 'UTC')).toThrow(RangeError);
+  });
+});
+
+describe('instantToZoned / wallClockIn', () => {
+  it('renders the wall-clock date and time in a zone', () => {
+    expect(instantToZoned('2026-09-21T04:30:00Z', 'Asia/Kolkata')).toEqual({
+      date: '2026-09-21',
+      time: '10:00',
+    });
+    expect(instantToZoned('2026-09-21T02:00:00Z', 'America/Los_Angeles')).toEqual({
+      date: '2026-09-20',
+      time: '19:00',
+    });
+    expect(wallClockIn('2026-09-21T04:30:15Z', 'Asia/Kolkata')).toBe('2026-09-21T10:00:15');
+  });
+
+  it('throws RangeError for a bad instant or zone; wallClockIn returns undefined', () => {
+    expect(() => instantToZoned('nope', 'UTC')).toThrow(RangeError);
+    expect(() => instantToZoned('2026-09-21T04:30:00Z', 'Nope/Zone')).toThrow(RangeError);
+    expect(wallClockIn('2026-09-21T04:30:00Z', 'Nope/Zone')).toBeUndefined();
+  });
+
+  it('round-trips with zonedToInstant', () => {
+    const instant = zonedToInstant('2026-12-31T23:45', 'Pacific/Auckland');
+    expect(instantToZoned(instant, 'Pacific/Auckland')).toEqual({
+      date: '2026-12-31',
+      time: '23:45',
+    });
+  });
+});
+
+describe('allDayDates / assertAllDayInput', () => {
+  it('takes the dates as written in the caller offset, end exclusive', () => {
+    expect(
+      allDayDates(
+        { start: '2026-09-21T00:00:00+05:30', end: '2026-09-23T00:00:00+05:30' },
+        'google',
+      ),
+    ).toEqual({ start: '2026-09-21', end: '2026-09-23' });
+  });
+
+  it('rejects an end date that is not after the start date', () => {
+    const err = (() => {
+      try {
+        allDayDates({ start: '2026-09-21T00:00:00Z', end: '2026-09-21T23:00:00Z' }, 'google');
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(isUnibookingError(err) && err.code).toBe('INVALID_INPUT');
+    expect(String((err as Error).message)).toMatch(/all-day end date must be after the start date/);
+  });
+
+  it('requires a range whenever allDay is given on an update', () => {
+    expect(() => assertAllDayInput({ allDay: true }, 'google')).toThrow(/requires a range/);
+    expect(() => assertAllDayInput({ allDay: false }, 'google')).toThrow(/requires a range/);
+    expect(() => assertAllDayInput({}, 'google')).not.toThrow();
   });
 });

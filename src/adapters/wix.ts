@@ -281,6 +281,7 @@ export const wix = defineAdapter<WixCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: c.accessToken } }),

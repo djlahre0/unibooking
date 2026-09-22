@@ -15,3 +15,4 @@ docs/superpowers/
 # tracked one nested under a subdirectory.
 /comparison.md
 tmp
+/docs

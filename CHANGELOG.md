@@ -78,10 +78,73 @@ All notable changes to this project are documented here. The format is based on
   misleading. Additive and optional — omitting it keeps the status-derived
   default, so no other adapter changes behaviour.
 
+- **BREAKING — `Capabilities` gains the required `calendarList` field.** Only
+  custom adapters built with `defineAdapter` are affected: add
+  `calendarList: false` (or `true` alongside a `listCalendars` method). Every
+  shipped adapter already declares it.
+
+- **Outlook writes honor `range.timezone`.** When the zone resolves, `start`/`end`
+  are sent as wall-clock time plus that zone (Graph accepts IANA and Windows
+  names), so Outlook shows the event in the zone the user picked instead of
+  UTC. An unresolvable zone keeps the previous UTC write. Outlook event requests
+  also ask for plain-text bodies (`Prefer: outlook.body-content-type="text"`),
+  so `description` never carries Outlook's HTML wrapper.
+
+- `HttpRequest.onResponse` now also receives the response `url` (after
+  redirects, falling back to the requested URL). Additive.
+
 ### Added
+
+- **`listCalendars()` and the canonical `Calendar` type** on Google, Outlook and
+  Apple (`capabilities.calendarList`). Each `Calendar.id` is exactly what that
+  adapter takes to target the calendar — Google/Outlook `calendarId`, Apple
+  `calendarUrl` — along with `name`, `timezone`, `primary`, `readOnly` and
+  `color`. The same terminal-page `limit` backstop as `listServices` applies, and
+  `withRetry` retries it as a read.
+
+  ```ts
+  const { calendars } = await google({ accessToken }).listCalendars!();
+  const work = google({ accessToken, calendarId: calendars[1]!.id });
+  ```
+
+- **Apple CalDAV discovery: `calendarUrl` is now optional.** `listCalendars()`
+  walks `current-user-principal` → `calendar-home-set` → the home collection
+  (RFC 4791/5397) from the server root — iCloud by default, any CalDAV server via
+  `options.baseUrl` — so an Apple ID and an app-specific password are all a
+  caller needs. `checkConnection()` works without a calendar too. Event
+  operations without `calendarUrl` fail fast with `INVALID_INPUT` naming
+  `listCalendars()`, before any request.
+
+- **`description`, `location` and `allDay` on events** (`Booking`,
+  `CreateBookingInput`, `UpdateBookingInput`), mapped by the calendar adapters:
+  Google `description`/`location`/`start.date`, Outlook `body`/`location`/
+  `isAllDay`, iCal `DESCRIPTION`/`LOCATION`/`VALUE=DATE`. All-day dates are the
+  calendar dates of `range.start`/`range.end` **as written in the caller's
+  offset**, end exclusive; they read back as UTC midnights with
+  `allDay: true`. Updates switch timed ↔ all-day cleanly (Google nulls the
+  other form; `patchICS` rewrites the value type). An empty string clears a
+  field. Outlook all-day reads are correct whether Graph reports midnight or
+  converts the event into UTC. Booking platforms ignore the fields, like `notify`.
+
+- **`zonedToInstant()` / `instantToZoned()`** — wall-clock date and time in an
+  IANA (or Windows) zone ↔ canonical instant:
+  `zonedToInstant('2026-09-21T10:00', 'Asia/Kolkata')` →
+  `'2026-09-21T10:00:00+05:30'`. DST gaps resolve forward, overlaps to the
+  earlier instant, and an unknown zone throws `RangeError` rather than falling
+  back to UTC.
 
 - `sha256Hex()` in the crypto helpers — for deriving stable, bounded-length keys
   from arbitrary input, not for signing.
+
+- **Demo: 📆 My Calendar.** Connect Google or Outlook with one click (OAuth +
+  PKCE through `unibooking/oauth`), or Apple iCloud with an app-specific
+  password, then pick a calendar and create, read, update and delete events with
+  date, start/end time, timezone, all-day, location and description. Tokens are
+  sealed (AES-256-GCM) into an HttpOnly cookie and refreshed automatically with
+  `withAutoRefresh`; the demo server stores nothing. The deployer sets the OAuth
+  app credentials once through environment variables (see
+  `demo/.env.example`); without them the tab explains what is missing and the
+  explorer tabs keep working.
 
 ## [0.4.0] - 2026-08-12
 

@@ -265,6 +265,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),

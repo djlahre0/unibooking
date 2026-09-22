@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
-import type { Booking, BookingClient, ProviderId, Service, Staff } from '../src/types';
+import type { Booking, BookingClient, Calendar, ProviderId, Service, Staff } from '../src/types';
 import { isInstant } from '../src/time';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -178,6 +178,10 @@ export function runConformance(config: ConformanceConfig): void {
         typeof client.listStaff === 'function',
         'listStaff presence matches capabilities.staffDirectory',
       ).toBe(client.capabilities.staffDirectory);
+      expect(
+        typeof client.listCalendars === 'function',
+        'listCalendars presence matches capabilities.calendarList',
+      ).toBe(client.capabilities.calendarList);
 
       // Writes travel as a set: a provider that can create but not update would
       // need its own flag, and none does.
@@ -244,4 +248,15 @@ export function assertCanonicalStaff(s: Staff): void {
   expect(s.id, 'staff.id is non-empty').toBeTruthy();
   expect(s.name, 'staff.name is non-empty').toBeTruthy();
   expect(typeof s.active, 'staff.active is a boolean').toBe('boolean');
+}
+
+/** Canonical invariants every Calendar must satisfy, regardless of provider. */
+export function assertCanonicalCalendar(c: Calendar): void {
+  expect(c.id, 'calendar.id is non-empty').toBeTruthy();
+  expect(c.name, 'calendar.name is non-empty').toBeTruthy();
+  expect(typeof c.primary, 'calendar.primary is a boolean').toBe('boolean');
+  expect(typeof c.readOnly, 'calendar.readOnly is a boolean').toBe('boolean');
+  if (c.color !== undefined)
+    expect(c.color, 'calendar.color is #RRGGBB').toMatch(/^#[0-9a-f]{6}$/i);
+  expect('raw' in c, 'calendar has raw escape hatch').toBe(true);
 }

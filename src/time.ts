@@ -1,5 +1,6 @@
 import type { ProviderId, TimeRange } from './types';
 import { UnibookingError } from './errors';
+import { zoneOffsetMinutes } from './tz';
 
 /**
  * Time handling is the #1 cross-provider correctness hazard. Rules here:
@@ -107,6 +108,139 @@ export function assertValidRange(range: TimeRange, provider: ProviderId): void {
       provider,
       code: 'INVALID_INPUT',
       message: `range.end must be after range.start (start=${range.start}, end=${range.end})`,
+    });
+  }
+}
+
+// --- Zoned wall-clock time --------------------------------------------------
+// Forms and calendars speak in "10:00 on 21 Sep in Asia/Kolkata"; the canonical
+// model speaks in instants. These convert between the two through the platform
+// Intl zone database (IANA ids, plus the Windows ids Exchange emits).
+
+const LOCAL_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+const DAY_MS = 86_400_000;
+
+function offsetAt(timeZone: string, epochMs: number): number {
+  const off = zoneOffsetMinutes(timeZone, new Date(epochMs));
+  if (off === null) throw new RangeError(`unknown time zone: ${timeZone}`);
+  return off;
+}
+
+/**
+ * A wall-clock `YYYY-MM-DDTHH:mm` (or `:ss`) in a zone → the RFC3339 instant,
+ * written in that zone's offset at that moment:
+ * `zonedToInstant('2026-09-21T10:00', 'Asia/Kolkata')` → `'2026-09-21T10:00:00+05:30'`.
+ *
+ * A time inside a DST gap resolves forward (02:30 on a spring-forward day is
+ * 03:30); a time that happens twice in an overlap resolves to the earlier one.
+ * Throws RangeError for malformed or impossible input or an unknown zone —
+ * never falling back to UTC, which would silently move the event by hours.
+ */
+export function zonedToInstant(localDateTime: string, timeZone: string): string {
+  const m = LOCAL_RE.exec(localDateTime);
+  if (!m) throw new RangeError(`expected YYYY-MM-DDTHH:mm[:ss], got ${localDateTime}`);
+  const [y, mo, d, h, mi, s] = m.slice(1).map((v) => Number(v ?? 0)) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const check = new Date(guess);
+  if (
+    h > 23 ||
+    mi > 59 ||
+    s > 59 ||
+    check.getUTCFullYear() !== y ||
+    check.getUTCMonth() !== mo - 1 ||
+    check.getUTCDate() !== d
+  ) {
+    throw new RangeError(`not a real date-time: ${localDateTime}`);
+  }
+  // DST transitions are far more than 48h apart, so the offsets a day either
+  // side bracket the only two readings this wall-clock time can have.
+  const before = offsetAt(timeZone, guess - DAY_MS);
+  const after = offsetAt(timeZone, guess + DAY_MS);
+  const valid = [...new Set([before, after])]
+    .map((off) => ({ off, epoch: guess - off * 60_000 }))
+    .filter((c) => offsetAt(timeZone, c.epoch) === c.off)
+    .map((c) => c.epoch);
+  // No valid reading is a DST gap: reading it with the pre-transition offset
+  // lands the same distance past the jump.
+  const epoch = valid.length > 0 ? Math.min(...valid) : guess - before * 60_000;
+  return formatWithOffset(epoch, offsetAt(timeZone, epoch));
+}
+
+/** An instant's wall clock in a zone as `YYYY-MM-DDTHH:mm:ss`, or undefined
+ *  when the instant or the zone cannot be resolved. */
+export function wallClockIn(instant: string, timeZone: string): string | undefined {
+  const ms = Date.parse(instant);
+  if (Number.isNaN(ms)) return undefined;
+  const off = zoneOffsetMinutes(timeZone, new Date(ms));
+  if (off === null) return undefined;
+  return formatWithOffset(ms, off).slice(0, 19);
+}
+
+/** An instant → its wall-clock date and time in a zone:
+ *  `instantToZoned('2026-09-21T04:30:00Z', 'Asia/Kolkata')` →
+ *  `{ date: '2026-09-21', time: '10:00' }`. Throws RangeError for an invalid
+ *  instant or an unknown zone. */
+export function instantToZoned(instant: string, timeZone: string): { date: string; time: string } {
+  if (Number.isNaN(Date.parse(instant))) throw new RangeError(`not a valid timestamp: ${instant}`);
+  const local = wallClockIn(instant, timeZone);
+  if (local === undefined) throw new RangeError(`unknown time zone: ${timeZone}`);
+  return { date: local.slice(0, 10), time: local.slice(11, 16) };
+}
+
+// --- All-day events ---------------------------------------------------------
+
+const DATE_PREFIX = /^(\d{4}-\d{2}-\d{2})T/;
+
+/** The calendar dates of an all-day range, read as written in each endpoint's
+ *  own offset (the caller's wall clock, never UTC — midnight +05:30 is still
+ *  the 21st), end exclusive. A range whose end date is its start date covers no
+ *  whole day and is rejected rather than rounded. */
+export function allDayDates(
+  range: TimeRange,
+  provider: ProviderId,
+): { start: string; end: string } {
+  const start = DATE_PREFIX.exec(range.start)?.[1];
+  const end = DATE_PREFIX.exec(range.end)?.[1];
+  if (start === undefined || end === undefined) {
+    throw new UnibookingError({
+      provider,
+      code: 'INVALID_INPUT',
+      message: 'all-day range endpoints must be RFC3339 date-times',
+    });
+  }
+  if (end <= start) {
+    throw new UnibookingError({
+      provider,
+      code: 'INVALID_INPUT',
+      message: `all-day end date must be after the start date (end is exclusive): ${start}..${end}`,
+    });
+  }
+  return { start, end };
+}
+
+/** The canonical read form of an all-day date: UTC midnight of that date. */
+export function allDayInstant(date: string): string {
+  return `${date}T00:00:00Z`;
+}
+
+/** Switching between timed and all-day rewrites both endpoints, so an update
+ *  that sets `allDay` has to supply them. */
+export function assertAllDayInput(
+  input: { allDay?: boolean; range?: TimeRange },
+  provider: ProviderId,
+): void {
+  if (input.allDay !== undefined && input.range === undefined) {
+    throw new UnibookingError({
+      provider,
+      code: 'INVALID_INPUT',
+      message: 'changing allDay requires a range',
     });
   }
 }

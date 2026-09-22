@@ -25,6 +25,12 @@ export interface VEvent {
   /** Raw value of each EXDATE property (one entry per line; a single line can
    *  itself be a comma-separated list). Excluded dates for a recurring master. */
   exdate?: string[];
+  /** Unescaped DESCRIPTION text. */
+  description?: string;
+  /** Unescaped LOCATION text. */
+  location?: string;
+  /** DTSTART is a DATE (`VALUE=DATE`): a whole-day event. */
+  allDay?: boolean;
   raw: string;
 }
 
@@ -186,6 +192,9 @@ export function parseICS(text: string): VEvent[] {
           ...(cur.recurrenceId !== undefined ? { recurrenceId: cur.recurrenceId } : {}),
           ...(cur.rrule !== undefined ? { rrule: cur.rrule } : {}),
           ...(cur.exdate !== undefined ? { exdate: cur.exdate } : {}),
+          ...(cur.description !== undefined ? { description: cur.description } : {}),
+          ...(cur.location !== undefined ? { location: cur.location } : {}),
+          ...(cur._allDayStart ? { allDay: true } : {}),
         });
       }
       cur = null;
@@ -221,6 +230,12 @@ export function parseICS(text: string): VEvent[] {
         break;
       case 'SUMMARY':
         cur.summary = unescapeText(value);
+        break;
+      case 'DESCRIPTION':
+        cur.description = unescapeText(value);
+        break;
+      case 'LOCATION':
+        cur.location = unescapeText(value);
         break;
       case 'STATUS':
         cur.status = value.toUpperCase();
@@ -536,12 +551,23 @@ function sanitizeValue(s: string): string {
 
 export interface BuildVEventInput {
   uid: string;
+  /** Canonical instant, or a `YYYY-MM-DD` date when `allDay` is true. */
   start: string;
+  /** Canonical instant, or a `YYYY-MM-DD` date (exclusive) when `allDay` is true. */
   end: string;
   stamp: string;
   summary?: string;
+  description?: string;
+  location?: string;
+  /** Write DTSTART/DTEND as `VALUE=DATE` (a whole-day event). */
+  allDay?: boolean;
   attendeeEmail?: string;
   attendeeName?: string;
+}
+
+/** `2026-09-21` → `20260921`, the iCalendar DATE form. */
+function icalDate(date: string): string {
+  return date.replace(/-/g, '');
 }
 
 /** Serialize a single-VEVENT VCALENDAR document. */
@@ -554,9 +580,11 @@ export function buildICS(e: BuildVEventInput): string {
     'BEGIN:VEVENT',
     `UID:${sanitizeValue(e.uid)}`,
     `DTSTAMP:${instantToICalUTC(e.stamp)}`,
-    `DTSTART:${instantToICalUTC(e.start)}`,
-    `DTEND:${instantToICalUTC(e.end)}`,
+    e.allDay ? `DTSTART;VALUE=DATE:${icalDate(e.start)}` : `DTSTART:${instantToICalUTC(e.start)}`,
+    e.allDay ? `DTEND;VALUE=DATE:${icalDate(e.end)}` : `DTEND:${instantToICalUTC(e.end)}`,
     ...(e.summary ? [`SUMMARY:${escapeText(e.summary)}`] : []),
+    ...(e.description ? [`DESCRIPTION:${escapeText(e.description)}`] : []),
+    ...(e.location ? [`LOCATION:${escapeText(e.location)}`] : []),
     ...(e.attendeeEmail
       ? [
           `ATTENDEE${e.attendeeName ? `;CN=${quoteParam(e.attendeeName)}` : ''}` +
@@ -571,13 +599,30 @@ export function buildICS(e: BuildVEventInput): string {
 
 export interface PatchVEventInput {
   stamp: string;
-  /** Canonical instant; replaces DTSTART (as a UTC value). */
+  /** Canonical instant; replaces DTSTART (as a UTC value). A `YYYY-MM-DD` date
+   *  when `allDay` is true. */
   start?: string;
-  /** Canonical instant; replaces DTEND (as a UTC value). */
+  /** Canonical instant; replaces DTEND (as a UTC value). A `YYYY-MM-DD` date
+   *  (exclusive) when `allDay` is true. */
   end?: string;
   summary?: string;
+  /** Replaces DESCRIPTION; an empty string removes it. */
+  description?: string;
+  /** Replaces LOCATION; an empty string removes it. */
+  location?: string;
+  /** Write DTSTART/DTEND as `VALUE=DATE`, whatever form they had. */
+  allDay?: boolean;
   /** iCal STATUS value (e.g. `CONFIRMED`). */
   status?: string;
+}
+
+/** Replacement marker meaning "drop this property" rather than rewrite it. */
+const REMOVE = '\u0000remove';
+
+/** A TEXT property's replacement line: escaped, or REMOVE for an empty value. */
+function textLine(name: string, value: string | undefined): Record<string, string> {
+  if (value === undefined) return {};
+  return { [name]: value === '' ? REMOVE : `${name}:${escapeText(value)}` };
 }
 
 /** Property name of a content line (`DTSTART;TZID=...:...` → `DTSTART`). */
@@ -632,13 +677,15 @@ function masterEventOrdinal(lines: string[]): number {
 export function patchICS(raw: string, changes: PatchVEventInput): string {
   const unfolded = raw.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
   const lines = unfolded.split(/\r\n|\n|\r/);
+  const dateLine = (name: 'DTSTART' | 'DTEND', value: string): string =>
+    changes.allDay ? `${name};VALUE=DATE:${icalDate(value)}` : `${name}:${instantToICalUTC(value)}`;
   const replacements: Record<string, string | undefined> = {
     DTSTAMP: `DTSTAMP:${instantToICalUTC(changes.stamp)}`,
-    ...(changes.start !== undefined
-      ? { DTSTART: `DTSTART:${instantToICalUTC(changes.start)}` }
-      : {}),
-    ...(changes.end !== undefined ? { DTEND: `DTEND:${instantToICalUTC(changes.end)}` } : {}),
+    ...(changes.start !== undefined ? { DTSTART: dateLine('DTSTART', changes.start) } : {}),
+    ...(changes.end !== undefined ? { DTEND: dateLine('DTEND', changes.end) } : {}),
     ...(changes.summary !== undefined ? { SUMMARY: `SUMMARY:${escapeText(changes.summary)}` } : {}),
+    ...textLine('DESCRIPTION', changes.description),
+    ...textLine('LOCATION', changes.location),
     ...(changes.status !== undefined ? { STATUS: `STATUS:${changes.status}` } : {}),
   };
 
@@ -677,8 +724,17 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
     if (end) {
       const comp = end[1]!.trim().toUpperCase();
       if (comp === 'VEVENT' && inTargetEvent) {
-        for (const key of ['DTSTAMP', 'DTSTART', 'DTEND', 'SUMMARY', 'STATUS']) {
-          if (replacements[key] !== undefined && !seen.has(key)) out.push(replacements[key]!);
+        for (const key of [
+          'DTSTAMP',
+          'DTSTART',
+          'DTEND',
+          'SUMMARY',
+          'DESCRIPTION',
+          'LOCATION',
+          'STATUS',
+        ]) {
+          const line = replacements[key];
+          if (line !== undefined && line !== REMOVE && !seen.has(key)) out.push(line);
         }
         inTargetEvent = false;
       }
@@ -697,7 +753,13 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
       if (name === 'DURATION' && changes.end !== undefined) continue;
       const replacement = replacements[name];
       if (replacement !== undefined) {
-        if (name === 'DTSTART' && changes.start !== undefined) {
+        seen.add(name);
+        if (replacement === REMOVE) continue;
+        // An all-day rewrite replaces the value type outright; keeping a TZID
+        // on a DATE value would be invalid.
+        if (changes.allDay && (name === 'DTSTART' || name === 'DTEND')) {
+          out.push(replacement);
+        } else if (name === 'DTSTART' && changes.start !== undefined) {
           out.push(retimed(line, 'DTSTART', changes.start));
         } else if (name === 'DTEND' && changes.end !== undefined) {
           out.push(retimed(line, 'DTEND', changes.end));
@@ -791,7 +853,7 @@ const XML_ENTITIES: Record<string, string> = {
  *  ICS line end in a literal `&#13;` — so `BEGIN:VEVENT` never matched and
  *  `listBookings` silently returned nothing. Single pass, so an escaped `&amp;`
  *  can't be re-expanded into the entity it encodes. */
-function unescapeXml(s: string): string {
+export function unescapeXml(s: string): string {
   return s.replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (match, body: string) => {
     if (body.startsWith('#')) {
       const hex = body[1] === 'x' || body[1] === 'X';

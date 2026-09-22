@@ -19,6 +19,7 @@ const CAPS: Capabilities = {
   staffDirectory: false,
   serviceCatalogWrite: false,
   staffDirectoryWrite: false,
+  calendarList: false,
 };
 
 function fakeBooking(id: string): Booking {
@@ -328,8 +329,10 @@ describe('withRetry preserves the whole client surface', () => {
         staffDirectory: true,
         serviceCatalogWrite: true,
         staffDirectoryWrite: true,
+        calendarList: true,
       },
       listServices: track('listServices'),
+      listCalendars: track('listCalendars'),
       listStaff: track('listStaff'),
       createService: track('createService'),
       updateService: track('updateService'),
@@ -358,6 +361,7 @@ describe('withRetry preserves the whole client surface', () => {
       'createStaff',
       'updateStaff',
       'setStaffActive',
+      'listCalendars',
     ] as const;
 
     for (const name of expected) {
@@ -373,5 +377,38 @@ describe('withRetry preserves the whole client surface', () => {
     expect(wrapped.listServices).toBeUndefined();
     expect(wrapped.createService).toBeUndefined();
     expect(wrapped.setStaffActive).toBeUndefined();
+    expect(wrapped.listCalendars).toBeUndefined();
+  });
+});
+
+describe('defineAdapter: listCalendars limit backstop', () => {
+  // Same terminal-page rule as listServices/listStaff: trimming a page that
+  // carries a cursor would hide the entries between the cut and the next page.
+  const cal = (id: string) => ({ id, name: id, primary: false, readOnly: false, raw: {} });
+  const { id: _id, capabilities: _caps, ...methods } = fakeClient({});
+  const make = (nextPageToken?: string) =>
+    defineAdapter({
+      id: 'google',
+      capabilities: { ...CAPS, calendarList: true },
+      baseUrl: 'https://example.invalid/',
+      auth: () => ({}),
+      build: () => ({
+        ...methods,
+        listCalendars: async () => ({
+          calendars: [cal('a'), cal('b'), cal('c')],
+          ...(nextPageToken ? { nextPageToken } : {}),
+        }),
+      }),
+    })({});
+
+  it('trims a terminal page to limit', async () => {
+    const r = await make().listCalendars!({ limit: 2 });
+    expect(r.calendars.map((c) => c.id)).toEqual(['a', 'b']);
+  });
+
+  it('leaves a page with a cursor alone', async () => {
+    const r = await make('p2').listCalendars!({ limit: 2 });
+    expect(r.calendars).toHaveLength(3);
+    expect(r.nextPageToken).toBe('p2');
   });
 });

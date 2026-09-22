@@ -1,7 +1,14 @@
-import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, BookingStatus, Calendar, TimeRange } from '../types';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  hexColor,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
-import { assertValidRange } from '../time';
+import { allDayDates, allDayInstant, assertAllDayInput, assertValidRange } from '../time';
 import { freeSlots } from '../availability';
 
 /**
@@ -12,6 +19,10 @@ import { freeSlots } from '../availability';
  * to size each slot. `idempotency` is false because Google only accepts
  * client-supplied event ids in a restricted format — pass such an id via
  * `providerOptions.id` if you need it.
+ *
+ * `listCalendars` reads the user's calendar list; each `Calendar.id` is a valid
+ * `calendarId`. Events carry `description`, `location` and all-day dates
+ * (`start.date`/`end.date`, end exclusive) natively.
  */
 export type GoogleCredentials = {
   /** OAuth2 access token (scope `https://www.googleapis.com/auth/calendar`). */
@@ -45,12 +56,61 @@ function sendUpdatesFor(notify: boolean | undefined): 'all' | 'none' | undefined
   return notify === true ? 'all' : notify === false ? 'none' : undefined;
 }
 
+/** Canonical range → Google `start`/`end`. On update, `clear` nulls the other
+ *  representation: PATCH merges, so switching a timed event to all-day (or
+ *  back) would otherwise leave both `date` and `dateTime` set, which Google
+ *  rejects. */
+function eventTimes(
+  range: TimeRange,
+  allDay: boolean | undefined,
+  clear: boolean,
+): Record<string, unknown> {
+  if (allDay === true) {
+    const d = allDayDates(range, 'google');
+    const other = clear ? { dateTime: null } : {};
+    return { start: { date: d.start, ...other }, end: { date: d.end, ...other } };
+  }
+  const other = clear ? { date: null } : {};
+  return {
+    start: { ...point(range.start, range.timezone), ...other },
+    end: { ...point(range.end, range.timezone), ...other },
+  };
+}
+
+/** `description`/`location` as given. An empty string is sent too: it clears. */
+function textFields(input: { description?: string; location?: string }): Record<string, unknown> {
+  return {
+    ...(input.description !== undefined ? { description: input.description } : {}),
+    ...(input.location !== undefined ? { location: input.location } : {}),
+  };
+}
+
+function toCalendar(raw: unknown): Calendar {
+  const c = asRecord(raw, 'google', 'calendarListEntry');
+  const id = reqString(c.id, 'google', 'calendarListEntry.id');
+  // summaryOverride is the user's own rename of a calendar shared with them.
+  const name = [c.summaryOverride, c.summary].find(
+    (v): v is string => typeof v === 'string' && v !== '',
+  );
+  const color = hexColor(c.backgroundColor);
+  return {
+    id,
+    name: name ?? id,
+    ...(typeof c.timeZone === 'string' && c.timeZone ? { timezone: c.timeZone } : {}),
+    primary: c.primary === true,
+    // `reader` and `freeBusyReader` cannot write events; only these two can.
+    readOnly: c.accessRole !== 'owner' && c.accessRole !== 'writer',
+    ...(color ? { color } : {}),
+    raw: c,
+  };
+}
+
 function pointToInstant(p: any): string | undefined {
   if (!p || typeof p !== 'object') return undefined;
   if (typeof p.dateTime === 'string') return p.dateTime;
   // All-day event: date-only, and `end.date` is exclusive — appending midnight
   // UTC keeps the canonical `end > start` invariant.
-  if (typeof p.date === 'string') return `${p.date}T00:00:00Z`;
+  if (typeof p.date === 'string') return allDayInstant(p.date);
   return undefined;
 }
 
@@ -116,6 +176,11 @@ function toBooking(raw: unknown): Booking {
     ...(customer ? { customer } : {}),
     ...(typeof e.created === 'string' ? { createdAt: e.created } : {}),
     ...(typeof e.updated === 'string' ? { updatedAt: e.updated } : {}),
+    ...(typeof e.description === 'string' && e.description ? { description: e.description } : {}),
+    ...(typeof e.location === 'string' && e.location ? { location: e.location } : {}),
+    ...(typeof e.start?.date === 'string' && typeof e.start?.dateTime !== 'string'
+      ? { allDay: true }
+      : {}),
     raw: e,
   };
 }
@@ -173,6 +238,7 @@ export const google = defineAdapter<GoogleCredentials>({
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
@@ -202,8 +268,8 @@ export const google = defineAdapter<GoogleCredentials>({
         query: { sendUpdates: sendUpdatesFor(input.notify) },
         body: {
           summary: input.title,
-          start: point(input.range.start, input.range.timezone),
-          end: point(input.range.end, input.range.timezone),
+          ...eventTimes(input.range, input.allDay, false),
+          ...textFields(input),
           ...(input.customer?.email
             ? {
                 attendees: [
@@ -230,6 +296,7 @@ export const google = defineAdapter<GoogleCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'google');
+      assertAllDayInput(input, 'google');
       const c = await http.resolve();
       // Google models tentative/confirmed/cancelled as the event `status`, so a
       // canonical status update maps straight onto it (a status with no Google
@@ -241,12 +308,8 @@ export const google = defineAdapter<GoogleCredentials>({
         query: { sendUpdates: sendUpdatesFor(input.notify) },
         body: {
           ...(input.title !== undefined ? { summary: input.title } : {}),
-          ...(input.range
-            ? {
-                start: point(input.range.start, input.range.timezone),
-                end: point(input.range.end, input.range.timezone),
-              }
-            : {}),
+          ...(input.range ? eventTimes(input.range, input.allDay, true) : {}),
+          ...textFields(input),
           ...(status !== undefined ? { status } : {}),
           ...input.providerOptions,
         },
@@ -283,6 +346,20 @@ export const google = defineAdapter<GoogleCredentials>({
       return {
         bookings: items.map(toBooking),
         ...(typeof res?.nextPageToken === 'string' ? { nextPageToken: res.nextPageToken } : {}),
+      };
+    },
+
+    async listCalendars(query) {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        path: 'users/me/calendarList',
+        query: { maxResults: query?.limit, pageToken: query?.pageToken },
+      });
+      return {
+        calendars: asArray(res?.items, 'google', 'calendarList.items').map(toCalendar),
+        ...(typeof res?.nextPageToken === 'string' && res.nextPageToken
+          ? { nextPageToken: res.nextPageToken }
+          : {}),
       };
     },
 

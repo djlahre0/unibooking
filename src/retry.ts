@@ -89,6 +89,10 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     ...(client.listStaff
       ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
       : {}),
+    // A read, so safe to retry.
+    ...(client.listCalendars
+      ? { listCalendars: (query) => run(() => client.listCalendars!(query), true) }
+      : {}),
     // Creates are NOT auto-retried: neither provider write takes an idempotency
     // key from the caller, so a network retry after a create that actually
     // succeeded would duplicate the service or staff member. Same reasoning as

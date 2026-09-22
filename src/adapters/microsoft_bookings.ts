@@ -130,6 +130,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),

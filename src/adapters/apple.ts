@@ -1,7 +1,8 @@
 import type { Booking, BookingStatus, Customer } from '../types';
 import { defineAdapter, probeConnection, unsupported } from '../adapter-kit';
 import { UnibookingError } from '../errors';
-import { assertValidRange } from '../time';
+import { allDayDates, allDayInstant, assertAllDayInput, assertValidRange } from '../time';
+import { discoverCalendars, findPrincipal } from '../caldav';
 import {
   buildICS,
   expandRecurrence,
@@ -14,16 +15,36 @@ import {
 
 /**
  * Apple Calendar / any CalDAV server (iCloud, Fastmail, Nextcloud, …). Speaks
- * WebDAV + iCalendar rather than JSON. Provide the full calendar-collection URL
- * (this package does not run principal discovery). For iCloud, use an
- * app-specific password. No staff/services/availability/webhooks.
+ * WebDAV + iCalendar rather than JSON. For iCloud, use an app-specific password
+ * (appleid.apple.com → Sign-In and Security). No staff/services/availability/
+ * webhooks.
+ *
+ * `listCalendars` runs CalDAV discovery from the server root (iCloud by
+ * default; any other server via `options.baseUrl`), so an account and password
+ * are all a caller needs. Each `Calendar.id` is a collection URL to pass back
+ * as `calendarUrl` for event operations. Events carry DESCRIPTION, LOCATION and
+ * all-day (`VALUE=DATE`) dates.
  */
 export type AppleCredentials = {
   username: string;
   appPassword: string;
-  /** The calendar collection URL, e.g. `https://p01-caldav.icloud.com/123/calendars/home/`. */
-  calendarUrl: string;
+  /** The calendar collection URL, e.g. `https://p01-caldav.icloud.com/123/calendars/home/`.
+   *  Optional: `listCalendars()` discovers the account's calendars, and each
+   *  `Calendar.id` is a valid value. Required for event operations. */
+  calendarUrl?: string;
 };
+
+/** The collection event operations address. Checked before any request, so a
+ *  missing one fails fast with directions instead of an opaque 404. */
+function collection(c: AppleCredentials): string {
+  if (c.calendarUrl) return c.calendarUrl;
+  throw new UnibookingError({
+    provider: 'apple',
+    code: 'INVALID_INPUT',
+    message:
+      'Apple event operations need calendarUrl — call listCalendars() and pass a Calendar.id as calendarUrl',
+  });
+}
 
 const BASE = 'https://caldav.icloud.com/';
 
@@ -114,6 +135,9 @@ function toBooking(ev: VEvent): Booking {
     range: { start: ev.start, end: ev.end },
     ...(customer ? { customer } : {}),
     status: mapStatus(ev.status),
+    ...(ev.description ? { description: ev.description } : {}),
+    ...(ev.location ? { location: ev.location } : {}),
+    ...(ev.allDay ? { allDay: true } : {}),
     raw: ev.raw,
   };
 }
@@ -159,6 +183,7 @@ export const apple = defineAdapter<AppleCredentials>({
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` } }),
@@ -166,8 +191,12 @@ export const apple = defineAdapter<AppleCredentials>({
     async checkConnection() {
       const c = await http.resolve();
       return probeConnection('apple', async () => {
-        // CalDAV has no identity endpoint. A Depth:0 PROPFIND on the collection
-        // is the cheapest proof the credentials still open it.
+        // CalDAV has no identity endpoint. Without a collection, principal
+        // discovery is the cheapest authenticated request; with one, a Depth:0
+        // PROPFIND on it also proves the credentials still open that calendar.
+        if (!c.calendarUrl) {
+          return { account: { name: c.username }, raw: await findPrincipal(http, c, 'apple') };
+        }
         const res = await http.request(c, {
           method: 'PROPFIND',
           path: c.calendarUrl,
@@ -180,19 +209,24 @@ export const apple = defineAdapter<AppleCredentials>({
     async createBooking(input) {
       assertValidRange(input.range, 'apple');
       const c = await http.resolve();
+      const calendarUrl = collection(c);
+      const dates = input.allDay === true ? allDayDates(input.range, 'apple') : undefined;
       const uid = input.idempotencyKey ?? globalThis.crypto.randomUUID();
       const ics = buildICS({
         uid,
-        start: input.range.start,
-        end: input.range.end,
+        start: dates?.start ?? input.range.start,
+        end: dates?.end ?? input.range.end,
+        ...(dates ? { allDay: true } : {}),
         stamp: now(),
         summary: input.title,
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.location ? { location: input.location } : {}),
         ...(input.customer?.email ? { attendeeEmail: input.customer.email } : {}),
         ...(input.customer?.name ? { attendeeName: input.customer.name } : {}),
       });
       await http.request(c, {
         method: 'PUT',
-        path: resourceUrl(c.calendarUrl, uid),
+        path: resourceUrl(calendarUrl, uid),
         // If-None-Match:* makes the PUT a create-only: a colliding UID (or a
         // replayed idempotencyKey) fails with 412 instead of silently
         // overwriting an existing event.
@@ -208,9 +242,16 @@ export const apple = defineAdapter<AppleCredentials>({
         id: uid,
         provider: 'apple',
         title: input.title,
-        range: input.range,
+        // An all-day booking reads back as UTC midnights of its dates, so echo
+        // that form rather than the caller's offset-bearing input.
+        range: dates
+          ? { start: allDayInstant(dates.start), end: allDayInstant(dates.end) }
+          : input.range,
         ...(input.customer ? { customer: input.customer } : {}),
         status: 'confirmed',
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.location ? { location: input.location } : {}),
+        ...(dates ? { allDay: true } : {}),
         raw: { uid, ics },
       };
     },
@@ -218,7 +259,7 @@ export const apple = defineAdapter<AppleCredentials>({
     async getBooking(id) {
       const c = await http.resolve();
       const text = await http.request<string>(c, {
-        path: resourceUrl(c.calendarUrl, id),
+        path: resourceUrl(collection(c), id),
         headers: ACCEPT_ICS,
         parse: 'text',
       });
@@ -237,10 +278,14 @@ export const apple = defineAdapter<AppleCredentials>({
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'apple');
+      assertAllDayInput(input, 'apple');
+      const dates =
+        input.range && input.allDay === true ? allDayDates(input.range, 'apple') : undefined;
       const c = await http.resolve();
+      const calendarUrl = collection(c);
       let etag: string | undefined;
       const text = await http.request<string>(c, {
-        path: resourceUrl(c.calendarUrl, id),
+        path: resourceUrl(calendarUrl, id),
         headers: ACCEPT_ICS,
         parse: 'text',
         onResponse: ({ headers }) => {
@@ -261,15 +306,21 @@ export const apple = defineAdapter<AppleCredentials>({
       const status = input.status !== undefined ? toICalStatus(input.status) : undefined;
       const ics = patchICS(text, {
         stamp: now(),
-        ...(input.range ? { start: input.range.start, end: input.range.end } : {}),
+        ...(dates
+          ? { allDay: true, start: dates.start, end: dates.end }
+          : input.range
+            ? { start: input.range.start, end: input.range.end }
+            : {}),
         ...(input.title !== undefined ? { summary: input.title } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.location !== undefined ? { location: input.location } : {}),
         // A status with no iCal form (e.g. no_show) leaves the existing STATUS
         // untouched instead of erasing it.
         ...(status !== undefined ? { status } : {}),
       });
       await http.request(c, {
         method: 'PUT',
-        path: resourceUrl(c.calendarUrl, id),
+        path: resourceUrl(calendarUrl, id),
         // If-Match on the captured ETag makes the write fail (412) rather than
         // silently clobber a concurrent edit (lost-update protection).
         headers: {
@@ -290,7 +341,7 @@ export const apple = defineAdapter<AppleCredentials>({
       const c = await http.resolve();
       await http.request(c, {
         method: 'DELETE',
-        path: resourceUrl(c.calendarUrl, id),
+        path: resourceUrl(collection(c), id),
         headers: ACCEPT_XML,
         parse: 'none',
       });
@@ -301,7 +352,7 @@ export const apple = defineAdapter<AppleCredentials>({
       const c = await http.resolve();
       const xml = await http.request<string>(c, {
         method: 'REPORT',
-        path: c.calendarUrl,
+        path: collection(c),
         headers: { ...ACCEPT_XML, 'content-type': 'application/xml; charset=utf-8', depth: '1' },
         body: calendarQuery(instantToICalUTC(query.range.start), instantToICalUTC(query.range.end)),
         parse: 'text',
@@ -334,6 +385,13 @@ export const apple = defineAdapter<AppleCredentials>({
 
     async searchAvailability(_query) {
       return unsupported('apple', 'availability');
+    },
+
+    // Discovery has no paging to resume, so there is never a nextPageToken;
+    // defineAdapter's backstop applies `limit` to the single page.
+    async listCalendars() {
+      const c = await http.resolve();
+      return { calendars: await discoverCalendars(http, c, 'apple') };
     },
   }),
 });

@@ -199,6 +199,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   // OAuth2 apps send a bearer token; single-account keys use HTTP Basic.

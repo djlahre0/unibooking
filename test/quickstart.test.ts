@@ -158,6 +158,7 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       staffDirectory: true,
       serviceCatalogWrite: true,
       staffDirectoryWrite: true,
+      calendarList: false,
     });
 
     const serviceId = 'SERVICE_VARIATION_ID';

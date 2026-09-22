@@ -209,6 +209,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({

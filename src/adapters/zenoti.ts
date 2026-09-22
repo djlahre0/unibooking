@@ -386,6 +386,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `apikey ${c.apiKey}` } }),

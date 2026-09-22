@@ -37,6 +37,8 @@ export {
   parseOffsetMinutes,
   formatWithOffset,
   assertValidRange,
+  zonedToInstant,
+  instantToZoned,
 } from './time';
 
 // Adapter-authoring toolkit (for building your own adapters).

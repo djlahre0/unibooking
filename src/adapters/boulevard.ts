@@ -370,6 +370,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: async (c) => {

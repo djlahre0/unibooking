@@ -13,10 +13,12 @@ export interface HttpRequest {
   body?: unknown;
   /** How to read the response body. Default `'json'`. */
   parse?: 'json' | 'text' | 'none';
-  /** Observe response metadata (status, headers) before the body is parsed —
-   *  e.g. to capture an `ETag` for CalDAV optimistic concurrency. Called for
-   *  both success and error responses. */
-  onResponse?: (meta: { status: number; headers: Headers }) => void;
+  /** Observe response metadata (status, headers, final URL) before the body is
+   *  parsed — e.g. to capture an `ETag` for CalDAV optimistic concurrency, or to
+   *  resolve the relative hrefs of a WebDAV multistatus. `url` is the response
+   *  URL after any redirects, or the requested URL when the runtime reports none.
+   *  Called for both success and error responses. */
+  onResponse?: (meta: { status: number; headers: Headers; url: string }) => void;
 }
 
 /** Given resolved credentials, produce the auth to apply to a request. May be
@@ -171,7 +173,7 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
     }
 
     const requestId = readRequestId(res.headers, config.requestIdHeader);
-    req.onResponse?.({ status: res.status, headers: res.headers });
+    req.onResponse?.({ status: res.status, headers: res.headers, url: res.url || url });
 
     if (!res.ok) {
       const rawText = await res.text().catch(() => '');

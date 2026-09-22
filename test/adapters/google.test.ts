@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { google } from '../../src/adapters/google';
 import { isInstant } from '../../src/time';
-import { runConformance } from '../conformance';
+import { assertCanonicalCalendar, runConformance } from '../conformance';
 
 const EVENT = {
   id: 'ev1',
@@ -244,6 +244,171 @@ describe('google: freeBusy-derived availability', () => {
     ).rejects.toMatchObject({
       code: 'UPSTREAM',
       message: expect.stringContaining('mine@example.com'),
+    });
+  });
+});
+
+describe('google: calendars, event details and all-day events', () => {
+  const ORIGIN = 'https://www.googleapis.com';
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  /** Reply with `reply`, capturing the request body and query. */
+  function capture(method: string, path: string, reply: unknown) {
+    const seen: { body?: any; query?: URLSearchParams } = {};
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.split('?')[0] === path, method })
+      .reply(
+        200,
+        (opts) => {
+          seen.query = new URL(String(opts.path), ORIGIN).searchParams;
+          if (opts.body) seen.body = JSON.parse(String(opts.body));
+          return JSON.stringify(reply);
+        },
+        { headers: JSON_HEADERS },
+      );
+    return seen;
+  }
+
+  const ALL_DAY_EVENT = {
+    id: 'ad1',
+    summary: 'Offsite',
+    status: 'confirmed',
+    start: { date: '2026-09-21' },
+    end: { date: '2026-09-22' },
+    description: 'Bring laptops',
+    location: 'HQ, Floor 3',
+  };
+
+  it('lists calendars with primary, read-only, color and paging', async () => {
+    const seen = capture('GET', '/calendar/v3/users/me/calendarList', {
+      items: [
+        {
+          id: 'jane@gmail.com',
+          summary: 'Jane',
+          timeZone: 'Asia/Kolkata',
+          primary: true,
+          accessRole: 'owner',
+          backgroundColor: '#9fe1e7',
+        },
+        {
+          id: 'en.indian#holiday@group.v.calendar.google.com',
+          summary: 'Holidays in India',
+          summaryOverride: 'India holidays',
+          accessRole: 'reader',
+          backgroundColor: '#16a765',
+        },
+      ],
+      nextPageToken: 'n2',
+    });
+    const res = await google({ accessToken: 't' }).listCalendars!({ limit: 50, pageToken: 'p1' });
+    expect(seen.query?.get('maxResults')).toBe('50');
+    expect(seen.query?.get('pageToken')).toBe('p1');
+    expect(res.nextPageToken).toBe('n2');
+    expect(res.calendars[0]).toMatchObject({
+      id: 'jane@gmail.com',
+      name: 'Jane',
+      timezone: 'Asia/Kolkata',
+      primary: true,
+      readOnly: false,
+      color: '#9fe1e7',
+    });
+    expect(res.calendars[1]).toMatchObject({
+      name: 'India holidays',
+      primary: false,
+      readOnly: true,
+    });
+    for (const c of res.calendars) assertCanonicalCalendar(c);
+  });
+
+  it('creates an all-day event with description and location', async () => {
+    const seen = capture('POST', '/calendar/v3/calendars/primary/events', ALL_DAY_EVENT);
+    const b = await google({ accessToken: 't' }).createBooking({
+      title: 'Offsite',
+      range: {
+        start: '2026-09-21T00:00:00+05:30',
+        end: '2026-09-22T00:00:00+05:30',
+        timezone: 'Asia/Kolkata',
+      },
+      allDay: true,
+      description: 'Bring laptops',
+      location: 'HQ, Floor 3',
+    });
+    expect(seen.body.start).toEqual({ date: '2026-09-21' });
+    expect(seen.body.end).toEqual({ date: '2026-09-22' });
+    expect(seen.body.description).toBe('Bring laptops');
+    expect(seen.body.location).toBe('HQ, Floor 3');
+    expect(b).toMatchObject({
+      allDay: true,
+      range: { start: '2026-09-21T00:00:00Z', end: '2026-09-22T00:00:00Z' },
+      description: 'Bring laptops',
+      location: 'HQ, Floor 3',
+    });
+  });
+
+  it('switches timed <-> all-day on update by nulling the other form', async () => {
+    const toTimed = capture('PATCH', '/calendar/v3/calendars/primary/events/ad1', {
+      ...ALL_DAY_EVENT,
+      start: { dateTime: '2026-09-21T10:00:00+05:30' },
+      end: { dateTime: '2026-09-21T11:00:00+05:30' },
+    });
+    await google({ accessToken: 't' }).updateBooking('ad1', {
+      range: {
+        start: '2026-09-21T10:00:00+05:30',
+        end: '2026-09-21T11:00:00+05:30',
+        timezone: 'Asia/Kolkata',
+      },
+    });
+    expect(toTimed.body.start).toEqual({
+      dateTime: '2026-09-21T10:00:00+05:30',
+      timeZone: 'Asia/Kolkata',
+      date: null,
+    });
+
+    const toAllDay = capture('PATCH', '/calendar/v3/calendars/primary/events/ad1', ALL_DAY_EVENT);
+    await google({ accessToken: 't' }).updateBooking('ad1', {
+      range: { start: '2026-09-21T00:00:00Z', end: '2026-09-22T00:00:00Z' },
+      allDay: true,
+      location: '',
+    });
+    expect(toAllDay.body.start).toEqual({ date: '2026-09-21', dateTime: null });
+    expect(toAllDay.body.location).toBe('');
+  });
+
+  it('rejects allDay without a range, and a zero-day all-day range, before any request', async () => {
+    const client = google({ accessToken: 't' });
+    await expect(client.updateBooking('ad1', { allDay: true })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+    await expect(
+      client.createBooking({
+        title: 'x',
+        range: { start: '2026-09-21T00:00:00Z', end: '2026-09-21T12:00:00Z' },
+        allDay: true,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('reads description, location and all-day from an event', async () => {
+    capture('GET', '/calendar/v3/calendars/primary/events/ad1', ALL_DAY_EVENT);
+    const b = await google({ accessToken: 't' }).getBooking('ad1');
+    expect(b).toMatchObject({
+      allDay: true,
+      description: 'Bring laptops',
+      location: 'HQ, Floor 3',
     });
   });
 });

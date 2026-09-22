@@ -1,7 +1,21 @@
-import type { AvailabilitySlot, Booking, BookingStatus } from '../types';
-import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
+import type { AvailabilitySlot, Booking, BookingStatus, Calendar, TimeRange } from '../types';
+import {
+  asArray,
+  asRecord,
+  defineAdapter,
+  hexColor,
+  probeConnection,
+  reqString,
+} from '../adapter-kit';
 import { UnibookingError } from '../errors';
-import { assertValidRange } from '../time';
+import {
+  allDayDates,
+  allDayInstant,
+  assertAllDayInput,
+  assertValidRange,
+  instantToZoned,
+  wallClockIn,
+} from '../time';
 import { freeSlots } from '../availability';
 import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UTC } from '../graph';
 
@@ -12,6 +26,11 @@ import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UT
  * (supplied via `providerOptions.schedules`/`mailbox`, or a UPN-form `userId`)
  * plus a positive `durationMinutes` to size each slot. `idempotency` maps to
  * Graph's event `transactionId`. Scope: `Calendars.ReadWrite`.
+ *
+ * `listCalendars` reads the mailbox's calendars; each `Calendar.id` is a valid
+ * `calendarId`. Writes honor `range.timezone` (wall clock + zone, so Outlook
+ * shows the event in the zone the user picked), `description` (plain-text
+ * body), `location` and `allDay`.
  */
 export type OutlookCredentials = {
   accessToken: string;
@@ -30,6 +49,107 @@ function who(c: OutlookCredentials): string {
 
 function scope(c: OutlookCredentials): string {
   return c.calendarId ? `${who(c)}/calendars/${encodeURIComponent(c.calendarId)}` : who(c);
+}
+
+/** Event requests: UTC times + immutable ids (the shared Graph default), plus
+ *  plain-text bodies so `description` never carries Outlook's HTML wrapper. */
+const PREFER = { prefer: `${PREFER_UTC.prefer}, outlook.body-content-type="text"` };
+
+/** A pageToken is the full @odata.nextLink from a previous page; follow it
+ *  verbatim so any Graph paging param ($skiptoken or $skip) is preserved. */
+function followLink(pageToken: string | undefined): string | undefined {
+  if (pageToken === undefined) return undefined;
+  if (/^https?:\/\//i.test(pageToken)) return pageToken;
+  // A non-URL token used to be forwarded as `$skiptoken`. Graph pages
+  // calendarView with `$skip`, silently ignores unrecognized query params,
+  // and its docs say never to extract a paging token and reuse it — so
+  // that path returned page 1 forever and the caller looped indefinitely.
+  throw new UnibookingError({
+    provider: 'outlook',
+    code: 'INVALID_INPUT',
+    message:
+      'pageToken must be the full @odata.nextLink URL from a previous page; ' +
+      'Graph paging tokens cannot be reconstructed',
+  });
+}
+
+/** The calendar date of an all-day event boundary. Graph converts event times
+ *  into the `Prefer` zone, so an all-day event created in +05:30 can come back
+ *  as 18:30 the previous day in UTC. At midnight, the reported date is the
+ *  date; otherwise convert back to the event's original zone, where it IS
+ *  midnight. */
+function allDayDate(dtz: any, originalZone: unknown): string | undefined {
+  const raw: unknown = dtz?.dateTime;
+  if (typeof raw !== 'string' || raw.length < 10) return undefined;
+  if (/T00:00:00(?:\.0+)?$/.test(raw)) return raw.slice(0, 10);
+  const instant = graphToInstant(dtz);
+  if (instant !== undefined && typeof originalZone === 'string') {
+    try {
+      const local = instantToZoned(instant, originalZone);
+      if (local.time === '00:00') return local.date;
+    } catch {
+      // An unresolvable zone (e.g. a custom tzone://) leaves the reported date.
+    }
+  }
+  return raw.slice(0, 10);
+}
+
+/** Canonical range → Graph `start`/`end` (+ `isAllDay`). A resolvable
+ *  `range.timezone` is written as wall clock + zone, which Graph accepts for
+ *  IANA and Windows names alike; otherwise UTC, as before. An update always
+ *  states `isAllDay`, so a timed range turns an all-day event back into a
+ *  timed one. */
+function outlookTimes(
+  range: TimeRange,
+  allDay: boolean | undefined,
+  update: boolean,
+): Record<string, unknown> {
+  if (allDay === true) {
+    const d = allDayDates(range, 'outlook');
+    const timeZone = range.timezone ?? 'UTC';
+    return {
+      isAllDay: true,
+      start: { dateTime: `${d.start}T00:00:00`, timeZone },
+      end: { dateTime: `${d.end}T00:00:00`, timeZone },
+    };
+  }
+  const flag = update ? { isAllDay: false } : {};
+  const tz = range.timezone;
+  const start = tz ? wallClockIn(range.start, tz) : undefined;
+  const end = tz ? wallClockIn(range.end, tz) : undefined;
+  if (tz && start && end) {
+    return {
+      ...flag,
+      start: { dateTime: start, timeZone: tz },
+      end: { dateTime: end, timeZone: tz },
+    };
+  }
+  return { ...flag, start: graphDateTime(range.start), end: graphDateTime(range.end) };
+}
+
+/** `description` → a plain-text body, `location` → a display name. An empty
+ *  string is sent too: it clears the field. */
+function textFields(input: { description?: string; location?: string }): Record<string, unknown> {
+  return {
+    ...(input.description !== undefined
+      ? { body: { contentType: 'text', content: input.description } }
+      : {}),
+    ...(input.location !== undefined ? { location: { displayName: input.location } } : {}),
+  };
+}
+
+function toCalendar(raw: unknown): Calendar {
+  const c = asRecord(raw, 'outlook', 'calendar');
+  const id = reqString(c.id, 'outlook', 'calendar.id');
+  const color = hexColor(c.hexColor);
+  return {
+    id,
+    name: typeof c.name === 'string' && c.name ? c.name : id,
+    primary: c.isDefaultCalendar === true,
+    readOnly: c.canEdit === false,
+    ...(color ? { color } : {}),
+    raw: c,
+  };
 }
 
 /** Resolve the mailbox SMTP address(es) getSchedule needs in `schedules`. It is
@@ -83,15 +203,32 @@ function toBooking(raw: unknown): Booking {
     att && (att.address || att.name)
       ? { ...(att.address ? { email: att.address } : {}), ...(att.name ? { name: att.name } : {}) }
       : undefined;
+  const allDayStart =
+    e.isAllDay === true ? allDayDate(e.start, e.originalStartTimeZone) : undefined;
+  const allDayEnd =
+    e.isAllDay === true
+      ? allDayDate(e.end, e.originalEndTimeZone ?? e.originalStartTimeZone)
+      : undefined;
+  const allDay = allDayStart !== undefined && allDayEnd !== undefined;
   return {
     id: reqString(e.id, 'outlook', 'event.id'),
     provider: 'outlook',
     title: typeof e.subject === 'string' && e.subject ? e.subject : '(untitled)',
-    range: { start, end },
+    range:
+      allDayStart !== undefined && allDayEnd !== undefined
+        ? { start: allDayInstant(allDayStart), end: allDayInstant(allDayEnd) }
+        : { start, end },
     status: mapStatus(e),
     ...(customer ? { customer } : {}),
     ...(typeof e.createdDateTime === 'string' ? { createdAt: e.createdDateTime } : {}),
     ...(typeof e.lastModifiedDateTime === 'string' ? { updatedAt: e.lastModifiedDateTime } : {}),
+    ...(typeof e.body?.content === 'string' && e.body.content.trim()
+      ? { description: e.body.content }
+      : {}),
+    ...(typeof e.location?.displayName === 'string' && e.location.displayName
+      ? { location: e.location.displayName }
+      : {}),
+    ...(allDay ? { allDay: true } : {}),
     raw: e,
   };
 }
@@ -109,6 +246,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: true,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
@@ -138,11 +276,11 @@ export const outlook = defineAdapter<OutlookCredentials>({
       const res = await http.request(c, {
         method: 'POST',
         path: `${scope(c)}/events`,
-        headers: PREFER_UTC,
+        headers: PREFER,
         body: {
           subject: input.title,
-          start: graphDateTime(input.range.start),
-          end: graphDateTime(input.range.end),
+          ...outlookTimes(input.range, input.allDay, false),
+          ...textFields(input),
           ...(input.customer?.email
             ? {
                 attendees: [
@@ -167,13 +305,14 @@ export const outlook = defineAdapter<OutlookCredentials>({
       const c = await http.resolve();
       const res = await http.request(c, {
         path: `${scope(c)}/events/${encodeURIComponent(id)}`,
-        headers: PREFER_UTC,
+        headers: PREFER,
       });
       return toBooking(res);
     },
 
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'outlook');
+      assertAllDayInput(input, 'outlook');
       if (input.status === 'cancelled') {
         throw new UnibookingError({
           provider: 'outlook',
@@ -192,12 +331,11 @@ export const outlook = defineAdapter<OutlookCredentials>({
       const res = await http.request(c, {
         method: 'PATCH',
         path: `${scope(c)}/events/${encodeURIComponent(id)}`,
-        headers: PREFER_UTC,
+        headers: PREFER,
         body: {
           ...(input.title !== undefined ? { subject: input.title } : {}),
-          ...(input.range
-            ? { start: graphDateTime(input.range.start), end: graphDateTime(input.range.end) }
-            : {}),
+          ...(input.range ? outlookTimes(input.range, input.allDay, true) : {}),
+          ...textFields(input),
           ...(showAs ? { showAs } : {}),
           ...input.providerOptions,
         },
@@ -232,23 +370,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
     async listBookings(query) {
       assertValidRange(query.range, 'outlook');
       const c = await http.resolve();
-      // A pageToken is the full @odata.nextLink from a previous page; follow it
-      // verbatim so any Graph paging param ($skiptoken or $skip) is preserved.
-      const follow =
-        query.pageToken && /^https?:\/\//i.test(query.pageToken) ? query.pageToken : undefined;
-      if (query.pageToken !== undefined && follow === undefined) {
-        // A non-URL token used to be forwarded as `$skiptoken`. Graph pages
-        // calendarView with `$skip`, silently ignores unrecognized query params,
-        // and its docs say never to extract a paging token and reuse it — so
-        // that path returned page 1 forever and the caller looped indefinitely.
-        throw new UnibookingError({
-          provider: 'outlook',
-          code: 'INVALID_INPUT',
-          message:
-            'pageToken must be the full @odata.nextLink URL from a previous page; ' +
-            'Graph paging tokens cannot be reconstructed',
-        });
-      }
+      const follow = followLink(query.pageToken);
       if (query.limit !== undefined && (query.limit < 1 || query.limit > 1000)) {
         // calendarView documents $top as min 1, max 1000.
         throw new UnibookingError({
@@ -258,10 +380,10 @@ export const outlook = defineAdapter<OutlookCredentials>({
         });
       }
       const res = follow
-        ? await http.request(c, { path: follow, headers: PREFER_UTC })
+        ? await http.request(c, { path: follow, headers: PREFER })
         : await http.request(c, {
             path: `${scope(c)}/calendarView`,
-            headers: PREFER_UTC,
+            headers: PREFER,
             query: {
               startDateTime: query.range.start,
               endDateTime: query.range.end,
@@ -272,6 +394,20 @@ export const outlook = defineAdapter<OutlookCredentials>({
       const bookings = asArray(res?.value, 'outlook', 'calendarView.value').map(toBooking);
       const next = nextLinkFrom(res);
       return { bookings, ...(next !== undefined ? { nextPageToken: next } : {}) };
+    },
+
+    async listCalendars(query) {
+      const c = await http.resolve();
+      const follow = followLink(query?.pageToken);
+      const res = follow
+        ? await http.request(c, { path: follow })
+        : await http.request(c, {
+            path: `${who(c)}/calendars`,
+            query: { $top: query?.limit },
+          });
+      const calendars = asArray(res?.value, 'outlook', 'calendars.value').map(toCalendar);
+      const next = nextLinkFrom(res);
+      return { calendars, ...(next !== undefined ? { nextPageToken: next } : {}) };
     },
 
     async searchAvailability(query): Promise<AvailabilitySlot[]> {

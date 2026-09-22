@@ -135,4 +135,19 @@ describe('http client', () => {
     expect(first.auth).toBe('Bearer t1');
     expect(second.auth).toBe('Bearer t2');
   });
+
+  it('reports the response URL to onResponse, falling back to the requested one', async () => {
+    // A hand-built Response has an empty `url`; the requested URL stands in, so
+    // CalDAV discovery can always resolve relative hrefs against something.
+    const http = httpWith(async () => new Response('{}', { status: 200 }));
+    let seen = '';
+    await http.request(await http.resolve(), {
+      path: 'calendars/home/',
+      query: { depth: 1 },
+      onResponse: (meta) => {
+        seen = meta.url;
+      },
+    });
+    expect(seen).toBe('https://api.test/v1/calendars/home/?depth=1');
+  });
 });

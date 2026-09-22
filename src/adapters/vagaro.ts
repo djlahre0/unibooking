@@ -209,6 +209,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    calendarList: false,
   },
   baseUrl: BASE,
   // apiKey scheme: a raw `accessToken` header, not `Authorization: Bearer`.

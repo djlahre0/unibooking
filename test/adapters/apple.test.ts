@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { apple } from '../../src/adapters/apple';
-import { runConformance } from '../conformance';
+import { assertCanonicalCalendar, runConformance } from '../conformance';
+import { HOME_XML, LIST_XML, PARTITION, PRINCIPAL_XML, ROOT as DAV_ROOT } from '../caldav-fixtures';
 
 const ORIGIN = 'https://caldav.icloud.com';
 const CAL = 'https://caldav.icloud.com/123/calendars/home/';
@@ -281,5 +282,137 @@ describe('apple: update does GET then PUT', () => {
       Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v]));
     expect(lower(updateHeaders)['if-match']).toBe('"etag-123"');
     expect(lower(createHeaders)['if-none-match']).toBe('*');
+  });
+});
+
+describe('apple: discovery, event details and all-day events', () => {
+  const XML = { 'content-type': 'application/xml; charset=utf-8' };
+  const CREDS = { username: 'jane@icloud.com', appPassword: 'abcd-efgh-ijkl-mnop' };
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('lists calendars by discovery, needing no calendarUrl', async () => {
+    agent
+      .get(DAV_ROOT)
+      .intercept({ path: '/', method: 'PROPFIND' })
+      .reply(207, PRINCIPAL_XML, { headers: XML });
+    agent
+      .get(DAV_ROOT)
+      .intercept({ path: '/123456/principal/', method: 'PROPFIND' })
+      .reply(207, HOME_XML, { headers: XML });
+    agent
+      .get(PARTITION)
+      .intercept({ path: '/123456/calendars/', method: 'PROPFIND' })
+      .reply(207, LIST_XML, { headers: XML });
+
+    const { calendars } = await apple(CREDS).listCalendars!();
+    expect(calendars.map((c) => c.name)).toEqual(['Home & Family', 'Shared']);
+    expect(calendars[0]?.id).toBe('https://p57-caldav.icloud.com/123456/calendars/home/');
+    for (const c of calendars) assertCanonicalCalendar(c);
+  });
+
+  it('checks the connection against the principal when no calendarUrl is set', async () => {
+    agent
+      .get(DAV_ROOT)
+      .intercept({ path: '/', method: 'PROPFIND' })
+      .reply(207, PRINCIPAL_XML, { headers: XML });
+    const status = await apple(CREDS).checkConnection();
+    expect(status).toMatchObject({ ok: true, account: { name: 'jane@icloud.com' } });
+
+    agent.get(DAV_ROOT).intercept({ path: '/', method: 'PROPFIND' }).reply(401, '');
+    expect(await apple(CREDS).checkConnection()).toMatchObject({ ok: false, reason: 'AUTH' });
+  });
+
+  it('rejects event operations without a calendarUrl before sending anything', async () => {
+    const client = apple(CREDS);
+    for (const call of [
+      () => client.getBooking('x'),
+      () => client.cancelBooking('x'),
+      () => client.createBooking({ title: 't', range: RANGE }),
+      () => client.listBookings({ range: RANGE }),
+    ]) {
+      await expect(call()).rejects.toMatchObject({
+        code: 'INVALID_INPUT',
+        message: expect.stringContaining('listCalendars()'),
+      });
+    }
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('creates an all-day event with description and location', async () => {
+    let body = '';
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith(COLLECTION), method: 'PUT' })
+      .reply(201, (opts) => {
+        body = String(opts.body);
+        return '';
+      });
+    const b = await apple({ ...CREDS, calendarUrl: CAL }).createBooking({
+      title: 'Offsite',
+      range: { start: '2026-09-21T00:00:00+05:30', end: '2026-09-22T00:00:00+05:30' },
+      allDay: true,
+      description: 'Bring laptops',
+      location: 'HQ',
+      idempotencyKey: 'off-1',
+    });
+    expect(body).toContain('DTSTART;VALUE=DATE:20260921');
+    expect(body).toContain('DTEND;VALUE=DATE:20260922');
+    expect(body).toContain('DESCRIPTION:Bring laptops');
+    expect(body).toContain('LOCATION:HQ');
+    expect(b).toMatchObject({
+      id: 'off-1',
+      allDay: true,
+      range: { start: '2026-09-21T00:00:00Z', end: '2026-09-22T00:00:00Z' },
+      description: 'Bring laptops',
+      location: 'HQ',
+    });
+  });
+
+  it('patches description and location on update, and reads them back', async () => {
+    const stored = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:evt-9',
+      'SUMMARY:Planning',
+      'DTSTART:20260921T100000Z',
+      'DTEND:20260921T110000Z',
+      'DESCRIPTION:old notes',
+      'LOCATION:Old room',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    let put = '';
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: (p) => p.startsWith(COLLECTION), method: 'GET' })
+      .reply(200, stored, { headers: { etag: '"e1"' } });
+    pool.intercept({ path: (p) => p.startsWith(COLLECTION), method: 'PUT' }).reply(204, (opts) => {
+      put = String(opts.body);
+      return '';
+    });
+    const b = await apple({ ...CREDS, calendarUrl: CAL }).updateBooking('evt-9', {
+      location: 'Room 12',
+      description: '',
+    });
+    expect(put).toContain('LOCATION:Room 12');
+    expect(put).not.toContain('DESCRIPTION');
+    expect(b.location).toBe('Room 12');
+    expect(b.description).toBeUndefined();
+
+    await expect(
+      apple({ ...CREDS, calendarUrl: CAL }).updateBooking('evt-9', { allDay: true }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 });

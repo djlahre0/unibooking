@@ -427,6 +427,7 @@ export const square = defineAdapter<SquareCredentials>({
     staffDirectory: true,
     serviceCatalogWrite: true,
     staffDirectoryWrite: true,
+    calendarList: false,
   },
   baseUrl: BASE,
   auth: (c) => ({

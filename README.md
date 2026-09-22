@@ -522,6 +522,9 @@ Example
     idempotency: true,
     serviceCatalog: false,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
+    calendarList: false,
 }
 ```
 
@@ -759,6 +762,45 @@ resolvable.
 
 ---
 
+# List Calendars
+
+A connected Google, Outlook or Apple account usually has more than one
+calendar. Gated by `calendarList`:
+
+```ts
+if (client.capabilities.calendarList) {
+    const { calendars } = await client.listCalendars!();
+    // { id, name, timezone?, primary, readOnly, color?, raw }
+}
+```
+
+`Calendar.id` is exactly what that adapter takes to target the calendar, so it
+round-trips like `Service.id`:
+
+| Provider | Pass `Calendar.id` as |
+|----------|-----------------------|
+| Google   | `calendarId`          |
+| Outlook  | `calendarId`          |
+| Apple    | `calendarUrl`         |
+
+**Apple needs no calendar URL up front.** `listCalendars()` runs CalDAV
+discovery from the server root (iCloud by default, any CalDAV server through
+`options.baseUrl`), so an Apple ID and an
+[app-specific password](https://support.apple.com/en-us/102654) are enough:
+
+```ts
+import { apple } from "unibooking/adapters/apple";
+
+const account = { username: "jane@icloud.com", appPassword: "abcd-efgh-ijkl-mnop" };
+const { calendars } = await apple(account).listCalendars!();
+const home = apple({ ...account, calendarUrl: calendars[0]!.id });
+```
+
+Event operations without a `calendarUrl` fail fast with `INVALID_INPUT` pointing
+at `listCalendars()`.
+
+---
+
 # Search Availability
 
 Find bookable time slots.
@@ -879,6 +921,39 @@ console.log(booking.id);
 console.log(booking.status);
 console.log(booking.range.start);
 ```
+
+## Event details and all-day events
+
+Calendar providers (Google, Outlook, Apple) also take a `description`, a
+`location`, and whole-day events. Booking platforms ignore these fields, the
+same way they ignore `notify`.
+
+```ts
+import { zonedToInstant } from "unibooking";
+
+await calendar.createBooking({
+    title: "Quarterly planning",
+    range: {
+        start: zonedToInstant("2026-09-21T10:00", "Asia/Kolkata"),
+        end: zonedToInstant("2026-09-21T11:30", "Asia/Kolkata"),
+        timezone: "Asia/Kolkata", // Google and Outlook show the event in this zone
+    },
+    description: "Agenda: roadmap, hiring",
+    location: "Room 4",
+});
+
+// All day on 21 and 22 Sep: the dates as written, end exclusive.
+await calendar.createBooking({
+    title: "Offsite",
+    range: { start: "2026-09-21T00:00:00+05:30", end: "2026-09-23T00:00:00+05:30" },
+    allDay: true,
+});
+```
+
+An all-day booking reads back with `allDay: true` and a range of UTC midnights
+(`2026-09-21T00:00:00Z` … `2026-09-23T00:00:00Z`). On update, an empty string
+clears `description` or `location`, and switching between timed and all-day
+requires a `range`.
 
 ---
 
@@ -1119,30 +1194,51 @@ Europe/London
 Asia/Kolkata
 ```
 
+## From a date, time and timezone
+
+Forms and calendars think in "10:00 on 21 Sep in Asia/Kolkata". Two helpers
+convert between that and canonical instants, using the platform's own time-zone
+database — no date library:
+
+```ts
+import { zonedToInstant, instantToZoned } from "unibooking";
+
+zonedToInstant("2026-09-21T10:00", "Asia/Kolkata");
+// → "2026-09-21T10:00:00+05:30"
+
+instantToZoned("2026-09-21T04:30:00Z", "America/Los_Angeles");
+// → { date: "2026-09-20", time: "21:30" }
+```
+
+A time that falls in a daylight-saving gap resolves forward (02:30 on a
+spring-forward day becomes 03:30), a time that happens twice resolves to the
+earlier one, and an unknown zone throws a `RangeError` instead of silently
+falling back to UTC.
+
 ---
 
 # Supported Providers
 
 unibooking currently supports the following providers.
 
-| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW |
-|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|
-| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
-| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
-| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — |
-| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — |
-| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
+| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars |
+|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|:---------:|
+| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ |
+| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
+| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — |
+| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
+| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — | — |
+| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
+| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
+| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | ✅ |
+| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
 
 > **Note**
 >
@@ -1682,6 +1778,11 @@ Contributions of all sizes are welcome.
 Whether you're fixing a typo, improving documentation, implementing a provider,
 or reporting a bug—you are helping make booking integrations easier for everyone.
 
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) (change standards, commit messages,
+releases) and the contributor docs in [`docs/`](docs/):
+[Architecture](docs/ARCHITECTURE.md) · [Development guide](docs/DEVELOPMENT.md) ·
+[Provider reference](docs/PROVIDERS.md).
+
 ## Ways to Contribute
 
 - 🐛 Report bugs
@@ -1746,6 +1847,8 @@ src/
 
     webhooks/          square.ts, calendly.ts, wix.ts, ... (10)
 
+    oauth/             server-only OAuth helpers: core.ts, google.ts, microsoft.ts, ...
+
     adapter-kit.ts     defineAdapter() — the adapter authoring toolkit
 
     http.ts            shared fetch layer, auth, timeouts
@@ -1760,7 +1863,7 @@ src/
 
     types.ts           canonical Booking, Capabilities, BookingClient
 
-    time.ts  tz.ts  ical.ts  crypto.ts  graph.ts
+    time.ts  tz.ts  availability.ts  ical.ts  caldav.ts  crypto.ts  graph.ts
 
     index.ts           public barrel
 
@@ -1812,6 +1915,8 @@ export const myAdapter = defineAdapter({
 
     id: "mangomint",
 
+    // Every flag is required. An optional method (listServices, listCalendars,
+    // customers, …) must exist exactly when its flag is true.
     capabilities: {
         availability: true,
         staff: true,
@@ -1819,6 +1924,11 @@ export const myAdapter = defineAdapter({
         webhooks: false,
         idempotency: false,
         customers: false,
+        serviceCatalog: false,
+        staffDirectory: false,
+        serviceCatalogWrite: false,
+        staffDirectoryWrite: false,
+        calendarList: false,
     },
 
     baseUrl: "https://api.example.com/",
@@ -1828,6 +1938,10 @@ export const myAdapter = defineAdapter({
     }),
 
     build: (http) => ({
+
+        // Required on every adapter: the cheapest authenticated read, wrapped
+        // in probeConnection so a dead grant is returned, not thrown.
+        async checkConnection(){ /* ... */ },
 
         async createBooking(input){ /* ... */ },
 
@@ -1846,8 +1960,12 @@ export const myAdapter = defineAdapter({
 });
 ```
 
-`build` receives a ready HTTP context (auth, retries, error normalization already
-wired) and returns the method implementations.
+`build` receives a ready HTTP context (auth, timeouts and error normalization
+already wired) and returns the method implementations. Retries are not built in:
+wrap the client with `withRetry()`, which knows which methods are safe to retry.
+
+`id` must be one of the `ProviderId` values, so a private integration reuses an
+existing id (as above) or casts its own.
 
 Your adapter immediately works with
 

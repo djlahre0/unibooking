@@ -501,3 +501,84 @@ describe('ical: recurrence expansion', () => {
     expect(occ).toHaveLength(1000);
   });
 });
+
+describe('DESCRIPTION, LOCATION and all-day events', () => {
+  it('parses DESCRIPTION, LOCATION and a VALUE=DATE all-day event', () => {
+    const [ev] = parseICS(
+      vcal(
+        'UID:a',
+        'DTSTART;VALUE=DATE:20260921',
+        'DTEND;VALUE=DATE:20260923',
+        'DESCRIPTION:Line 1\\nLine 2\\, with comma',
+        'LOCATION:Room 4\\; east',
+      ),
+    );
+    expect(ev).toMatchObject({
+      allDay: true,
+      start: '2026-09-21T00:00:00Z',
+      end: '2026-09-23T00:00:00Z',
+      description: 'Line 1\nLine 2, with comma',
+      location: 'Room 4; east',
+    });
+  });
+
+  it('leaves allDay unset on a timed event', () => {
+    const [ev] = parseICS(vcal('UID:t', 'DTSTART:20260921T100000Z', 'DTEND:20260921T110000Z'));
+    expect(ev?.allDay).toBeUndefined();
+  });
+
+  it('builds an all-day event with escaped text fields', () => {
+    const ics = buildICS({
+      uid: 'u',
+      start: '2026-09-21',
+      end: '2026-09-22',
+      allDay: true,
+      stamp: '2026-09-01T00:00:00Z',
+      summary: 'Offsite',
+      description: 'a,b;c\nd',
+      location: 'HQ',
+    });
+    expect(ics).toContain('DTSTART;VALUE=DATE:20260921');
+    expect(ics).toContain('DTEND;VALUE=DATE:20260922');
+    expect(ics).toContain('DESCRIPTION:a\\,b\\;c\\nd');
+    expect(ics).toContain('LOCATION:HQ');
+    expect(parseICS(ics)[0]).toMatchObject({ allDay: true, description: 'a,b;c\nd' });
+  });
+
+  it('patches fields, clears with an empty string, and switches all-day <-> timed', () => {
+    const src = buildICS({
+      uid: 'u',
+      start: '2026-09-21T10:00:00Z',
+      end: '2026-09-21T11:00:00Z',
+      stamp: '2026-09-01T00:00:00Z',
+      description: 'old',
+      location: 'old place',
+    });
+
+    const allDay = patchICS(src, {
+      stamp: '2026-09-02T00:00:00Z',
+      allDay: true,
+      start: '2026-09-21',
+      end: '2026-09-22',
+      description: '',
+    });
+    expect(allDay).toContain('DTSTART;VALUE=DATE:20260921');
+    expect(allDay).toContain('DTEND;VALUE=DATE:20260922');
+    expect(allDay).not.toContain('DESCRIPTION');
+    expect(allDay).toContain('LOCATION:old place');
+
+    const timed = patchICS(allDay, {
+      stamp: '2026-09-03T00:00:00Z',
+      start: '2026-09-21T09:00:00Z',
+      end: '2026-09-21T10:00:00Z',
+      location: 'new',
+    });
+    expect(timed).toContain('DTSTART:20260921T090000Z');
+    expect(timed).not.toContain('VALUE=DATE');
+    expect(timed).toContain('LOCATION:new');
+    expect(timed).not.toContain('LOCATION:old place');
+
+    const added = patchICS(timed, { stamp: '2026-09-04T00:00:00Z', description: 'fresh' });
+    expect(parseICS(added)[0]?.description).toBe('fresh');
+  });
+});
