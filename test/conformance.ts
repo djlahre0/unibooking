@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
-import type { Booking, BookingClient, Calendar, ProviderId, Service, Staff } from '../src/types';
+import type {
+  Booking,
+  BookingClient,
+  Calendar,
+  ClassSession,
+  ProviderId,
+  Service,
+  Staff,
+} from '../src/types';
 import { isInstant } from '../src/time';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -11,8 +19,10 @@ const VALID_STATUSES = [
   'declined',
   'no_show',
   'completed',
+  'waitlisted',
   'unknown',
 ];
+const VALID_CLASS_STATUSES = ['scheduled', 'cancelled', 'completed', 'unknown'];
 
 export interface ConformanceCase {
   name: string;
@@ -67,8 +77,55 @@ export function assertCanonicalBooking(b: Booking, provider: ProviderId): void {
   expect('raw' in b, 'booking has raw escape hatch').toBe(true);
 }
 
+/** Canonical invariants every ClassSession must satisfy, regardless of provider. */
+export function assertCanonicalClassSession(k: ClassSession, provider: ProviderId): void {
+  expect(k.id, 'class.id is non-empty').toBeTruthy();
+  expect(k.provider).toBe(provider);
+  expect(typeof k.title).toBe('string');
+  expect(isInstant(k.range.start), `range.start is an instant: ${k.range.start}`).toBe(true);
+  expect(isInstant(k.range.end), `range.end is an instant: ${k.range.end}`).toBe(true);
+  expect(
+    Date.parse(k.range.end) > Date.parse(k.range.start),
+    `end > start (${k.range.start}..${k.range.end})`,
+  ).toBe(true);
+  expect(VALID_CLASS_STATUSES, `status in enum: ${k.status}`).toContain(k.status);
+  expect(typeof k.full, 'full is a boolean').toBe('boolean');
+  expect('raw' in k, 'class has raw escape hatch').toBe(true);
+  // Counts must be coherent when the provider reports them: a negative
+  // remaining count, or one that disagrees with capacity - booked, means the
+  // adapter derived it wrong.
+  for (const [name, v] of [
+    ['capacity', k.capacity],
+    ['booked', k.booked],
+    ['available', k.available],
+    ['waitlistCapacity', k.waitlistCapacity],
+    ['waitlistCount', k.waitlistCount],
+  ] as const) {
+    if (v !== undefined) {
+      expect(Number.isFinite(v), `${name} is finite: ${v}`).toBe(true);
+      expect(v >= 0, `${name} is non-negative: ${v}`).toBe(true);
+    }
+  }
+  if (k.capacity !== undefined && k.booked !== undefined && k.available !== undefined) {
+    expect(k.available, 'available === max(0, capacity - booked)').toBe(
+      Math.max(0, k.capacity - k.booked),
+    );
+  }
+}
+
 function assertCanonical(provider: ProviderId, result: any): void {
   if (result == null) return;
+  if (typeof result === 'object' && Array.isArray(result.classes)) {
+    for (const k of result.classes) assertCanonicalClassSession(k, provider);
+    return;
+  }
+  // A ClassSession also carries `provider` and `range`, so it must be matched
+  // before the Booking branch below or it would be checked against the wrong
+  // status enum. `full` is the discriminator — bookings have no such field.
+  if (typeof result === 'object' && 'provider' in result && 'full' in result) {
+    assertCanonicalClassSession(result, provider);
+    return;
+  }
   if (Array.isArray(result)) {
     for (const slot of result) {
       if (slot && typeof slot === 'object' && 'start' in slot && 'end' in slot) {
@@ -182,6 +239,18 @@ export function runConformance(config: ConformanceConfig): void {
         typeof client.listCalendars === 'function',
         'listCalendars presence matches capabilities.calendarList',
       ).toBe(client.capabilities.calendarList);
+      expect(
+        typeof client.syncBookings === 'function',
+        'syncBookings presence matches capabilities.changeFeed',
+      ).toBe(client.capabilities.changeFeed);
+      // Watching travels as a set: a subscription you cannot renew or stop is a
+      // leak, not a feature.
+      for (const m of ['watchBookings', 'renewWatch', 'stopWatch'] as const) {
+        expect(
+          typeof client[m] === 'function',
+          `${m} presence matches capabilities.changeNotifications`,
+        ).toBe(client.capabilities.changeNotifications);
+      }
 
       // Writes travel as a set: a provider that can create but not update would
       // need its own flag, and none does.

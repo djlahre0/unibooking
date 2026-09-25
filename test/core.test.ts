@@ -20,6 +20,15 @@ const CAPS: Capabilities = {
   serviceCatalogWrite: false,
   staffDirectoryWrite: false,
   calendarList: false,
+  staffServiceAssignment: false,
+  serviceCategories: false,
+  businessHours: false,
+  classCatalog: false,
+  classEnrollment: false,
+  classWaitlist: false,
+  changeFeed: false,
+  changeNotifications: false,
+  versionedWrites: false,
 };
 
 function fakeBooking(id: string): Booking {
@@ -330,9 +339,24 @@ describe('withRetry preserves the whole client surface', () => {
         serviceCatalogWrite: true,
         staffDirectoryWrite: true,
         calendarList: true,
+        serviceCategories: true,
+        businessHours: true,
+        classCatalog: true,
+        classEnrollment: true,
+        changeFeed: true,
+        changeNotifications: true,
       },
       listServices: track('listServices'),
       listCalendars: track('listCalendars'),
+      listCategories: track('listCategories'),
+      getBusinessHours: track('getBusinessHours'),
+      listClasses: track('listClasses'),
+      getClass: track('getClass'),
+      enrollInClass: track('enrollInClass'),
+      syncBookings: track('syncBookings'),
+      watchBookings: track('watchBookings'),
+      renewWatch: track('renewWatch'),
+      stopWatch: track('stopWatch'),
       listStaff: track('listStaff'),
       createService: track('createService'),
       updateService: track('updateService'),
@@ -362,6 +386,15 @@ describe('withRetry preserves the whole client surface', () => {
       'updateStaff',
       'setStaffActive',
       'listCalendars',
+      'listCategories',
+      'getBusinessHours',
+      'listClasses',
+      'getClass',
+      'enrollInClass',
+      'syncBookings',
+      'watchBookings',
+      'renewWatch',
+      'stopWatch',
     ] as const;
 
     for (const name of expected) {
@@ -378,6 +411,34 @@ describe('withRetry preserves the whole client surface', () => {
     expect(wrapped.createService).toBeUndefined();
     expect(wrapped.setStaffActive).toBeUndefined();
     expect(wrapped.listCalendars).toBeUndefined();
+    expect(wrapped.listClasses).toBeUndefined();
+    expect(wrapped.syncBookings).toBeUndefined();
+    expect(wrapped.watchBookings).toBeUndefined();
+  });
+
+  it('never retries a watch it may already have created, but retries a sync', async () => {
+    let watches = 0;
+    let syncs = 0;
+    const transient = () =>
+      new UnibookingError({ provider: 'google', code: 'UPSTREAM', message: 'blip' });
+    const client = {
+      ...fakeClient({}),
+      capabilities: { ...CAPS, changeFeed: true, changeNotifications: true },
+      watchBookings: async () => {
+        watches++;
+        throw transient();
+      },
+      syncBookings: async () => {
+        syncs++;
+        if (syncs === 1) throw transient();
+        return { changes: [], syncToken: 't' };
+      },
+    } as unknown as BookingClient;
+    const wrapped = withRetry(client, { sleep: async () => {} });
+    await expect(wrapped.watchBookings!({ address: 'https://x', token: 't' })).rejects.toThrow();
+    expect(watches).toBe(1);
+    expect(await wrapped.syncBookings!()).toEqual({ changes: [], syncToken: 't' });
+    expect(syncs).toBe(2);
   });
 });
 

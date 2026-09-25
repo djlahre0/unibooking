@@ -16,9 +16,14 @@ export interface VEvent {
   end?: string;
   attendee?: { email?: string; name?: string };
   /** Present only on an overridden occurrence of a recurring series. Expanded
-   *  instances of one series share a DAV resource (and so a booking id) — this
-   *  is what tells them apart. */
+   *  instances of one series share a DAV resource — this is what tells them
+   *  apart. The raw property value, without its parameters. */
   recurrenceId?: string;
+  /** `recurrenceId` as a canonical instant, read with its own parameters (a
+   *  `TZID=` local time is resolved in that zone; a DATE is its UTC midnight). */
+  recurrenceInstant?: string;
+  /** Every EXDATE as a canonical instant, read with its own parameters. */
+  excluded?: string[];
   /** Raw RRULE value (e.g. `FREQ=WEEKLY;BYDAY=MO,WE`) of a recurring master.
    *  Consumed by `expandRecurrence` for the client-side expansion fallback. */
   rrule?: string;
@@ -190,8 +195,12 @@ export function parseICS(text: string): VEvent[] {
           ...(cur.end !== undefined ? { end: cur.end } : {}),
           ...(cur.attendee !== undefined ? { attendee: cur.attendee } : {}),
           ...(cur.recurrenceId !== undefined ? { recurrenceId: cur.recurrenceId } : {}),
+          ...(cur.recurrenceInstant !== undefined
+            ? { recurrenceInstant: cur.recurrenceInstant }
+            : {}),
           ...(cur.rrule !== undefined ? { rrule: cur.rrule } : {}),
           ...(cur.exdate !== undefined ? { exdate: cur.exdate } : {}),
+          ...(cur.excluded !== undefined ? { excluded: cur.excluded } : {}),
           ...(cur.description !== undefined ? { description: cur.description } : {}),
           ...(cur.location !== undefined ? { location: cur.location } : {}),
           ...(cur._allDayStart ? { allDay: true } : {}),
@@ -254,14 +263,21 @@ export function parseICS(text: string): VEvent[] {
       case 'DURATION':
         cur._duration = value;
         break;
-      case 'RECURRENCE-ID':
+      case 'RECURRENCE-ID': {
         cur.recurrenceId = value;
+        const instant = icalDateToInstant(value, params);
+        if (instant !== undefined) cur.recurrenceInstant = instant;
         break;
+      }
       case 'RRULE':
         cur.rrule = value;
         break;
       case 'EXDATE':
         (cur.exdate ??= []).push(value);
+        for (const token of value.split(',')) {
+          const instant = icalDateToInstant(token.trim(), params);
+          if (instant !== undefined) (cur.excluded ??= []).push(instant);
+        }
         break;
       case 'ATTENDEE': {
         // Keep the FIRST attendee (the canonical `customer` is a single person);
@@ -351,24 +367,6 @@ function addMonthsUTC(baseMs: number, months: number): number | undefined {
   );
 }
 
-/** All EXDATE instants (in epoch-ms) an occurrence start may match. TZID-anchored
- *  EXDATEs are read as UTC/floating here — the same DST/local limitation the rest
- *  of the fallback carries; UTC-anchored series (the common no-expand case) match
- *  exactly. */
-function exdateInstants(exdate: string[] | undefined): Set<number> {
-  const out = new Set<number>();
-  if (!exdate) return out;
-  for (const line of exdate) {
-    for (const token of line.split(',')) {
-      const inst = icalDateToInstant(token.trim(), {});
-      if (inst === undefined) continue;
-      const ms = Date.parse(inst);
-      if (!Number.isNaN(ms)) out.add(ms);
-    }
-  }
-  return out;
-}
-
 /** Shallow-clone the master as a concrete occurrence: DTSTART/DTEND set to this
  *  instant (duration preserved), RRULE dropped, and a synthetic RECURRENCE-ID at
  *  the occurrence start so expanded siblings sharing a booking id can be told
@@ -380,6 +378,7 @@ function toOccurrence(master: VEvent, startMs: number, durationMs: number): VEve
     start,
     end: formatWithOffset(startMs + durationMs, 0),
     recurrenceId: start,
+    recurrenceInstant: start,
   };
   delete occ.rrule;
   return occ;
@@ -522,7 +521,9 @@ export function expandRecurrence(event: VEvent, windowStart: string, windowEnd: 
   }
 
   // Apply EXDATE, then keep only occurrences overlapping [windowStart, windowEnd).
-  const excluded = exdateInstants(event.exdate);
+  // `excluded` was read with each EXDATE's own parameters, so a TZID-anchored
+  // exclusion matches its occurrence instead of being misread as UTC.
+  const excluded = new Set((event.excluded ?? []).map((e) => Date.parse(e)));
   const occs = candidates.filter(
     (s) => !excluded.has(s) && s + durationMs > winStartMs && s < winEndMs,
   );
@@ -619,6 +620,14 @@ export interface PatchVEventInput {
 /** Replacement marker meaning "drop this property" rather than rewrite it. */
 const REMOVE = '\u0000remove';
 
+/** A document's content lines, unfolded (RFC 5545 §3.1). */
+function unfoldLines(raw: string): string[] {
+  return raw
+    .replace(/\r\n[ \t]/g, '')
+    .replace(/\n[ \t]/g, '')
+    .split(/\r\n|\n|\r/);
+}
+
 /** A TEXT property's replacement line: escaped, or REMOVE for an empty value. */
 function textLine(name: string, value: string | undefined): Record<string, string> {
   if (value === undefined) return {};
@@ -672,11 +681,11 @@ function masterEventOrdinal(lines: string[]): number {
  * DESCRIPTION, extra ATTENDEEs, VALARMs, X- props). This is what `updateBooking`
  * uses instead of rebuilding from the lean model, so a round-trip can't silently
  * drop event data. DTSTAMP is always refreshed; a property that is set but absent
- * is inserted before END:VEVENT.
+ * is inserted before END:VEVENT. `targetOrdinal` picks another VEVENT (by
+ * position) to patch instead — an occurrence override.
  */
-export function patchICS(raw: string, changes: PatchVEventInput): string {
-  const unfolded = raw.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
-  const lines = unfolded.split(/\r\n|\n|\r/);
+export function patchICS(raw: string, changes: PatchVEventInput, targetOrdinal?: number): string {
+  const lines = unfoldLines(raw);
   const dateLine = (name: 'DTSTART' | 'DTEND', value: string): string =>
     changes.allDay ? `${name};VALUE=DATE:${icalDate(value)}` : `${name}:${instantToICalUTC(value)}`;
   const replacements: Record<string, string | undefined> = {
@@ -706,7 +715,8 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
   }
   const out: string[] = [];
   const stack: string[] = [];
-  const target = masterEventOrdinal(lines); // only the master VEVENT is patched
+  // Only one VEVENT is patched: the series master unless told otherwise.
+  const target = targetOrdinal ?? masterEventOrdinal(lines);
   let ordinal = -1;
   let inTargetEvent = false;
   const seen = new Set<string>();
@@ -775,10 +785,235 @@ export function patchICS(raw: string, changes: PatchVEventInput): string {
   return out.map(foldLine).join('\r\n') + '\r\n';
 }
 
+// ---------------------------------------------------------------------------
+// Single occurrences of a recurring series (RFC 5545 §3.8.4.4 RECURRENCE-ID)
+// ---------------------------------------------------------------------------
+
+/** One occurrence, named by where the series originally put it. */
+export interface OccurrenceRef {
+  /** Canonical instant of the original start (UTC midnight for a DATE). */
+  instant: string;
+  /** The series is all-day, so the occurrence is named by its date. */
+  allDay: boolean;
+}
+
+/** The id suffix naming an occurrence: `20260727T220000Z`, or `20260727` for an
+ *  all-day series. UTC, so it is the same however the series is anchored. */
+export function occurrenceKey(ref: OccurrenceRef): string {
+  const utc = instantToICalUTC(ref.instant);
+  return ref.allDay ? utc.slice(0, 8) : utc;
+}
+
+/** `occurrenceKey` read back, or undefined if `key` is not one. */
+export function parseOccurrenceKey(key: string): OccurrenceRef | undefined {
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z)?$/.exec(key);
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, s] = m;
+  const instant = `${y}-${mo}-${d}T${h ?? '00'}:${mi ?? '00'}:${s ?? '00'}Z`;
+  if (Number.isNaN(Date.parse(instant))) return undefined;
+  return { instant, allDay: h === undefined };
+}
+
+interface VEventBlock {
+  /** Index of BEGIN:VEVENT / END:VEVENT in the line array. */
+  begin: number;
+  end: number;
+  /** Canonical RECURRENCE-ID, when this block is an override. */
+  recurrence?: string;
+}
+
+function contentParams(line: string): { value: string; params: Record<string, string> } {
+  const split = splitAtValueColon(line);
+  const left = split ? split[0] : line;
+  const value = split ? split[1] : '';
+  const params: Record<string, string> = {};
+  for (const p of splitParams(left).slice(1)) {
+    const eq = p.indexOf('=');
+    if (eq !== -1) params[p.slice(0, eq).toUpperCase()] = stripQuotes(p.slice(eq + 1));
+  }
+  return { value, params };
+}
+
+/** Every top-level VEVENT of a document, with its override RECURRENCE-ID. */
+function veventBlocks(lines: string[]): VEventBlock[] {
+  const blocks: VEventBlock[] = [];
+  const stack: string[] = [];
+  let cur: VEventBlock | undefined;
+  lines.forEach((line, i) => {
+    const begin = /^BEGIN:(.+)$/i.exec(line);
+    if (begin) {
+      const comp = begin[1]!.trim().toUpperCase();
+      stack.push(comp);
+      if (comp === 'VEVENT' && stack.length === 2) cur = { begin: i, end: i };
+      return;
+    }
+    if (/^END:/i.test(line)) {
+      if (stack.pop() === 'VEVENT' && cur && stack.length === 1) {
+        cur.end = i;
+        blocks.push(cur);
+        cur = undefined;
+      }
+      return;
+    }
+    if (cur && stack.length === 2 && propertyName(line) === 'RECURRENCE-ID') {
+      const { value, params } = contentParams(line);
+      const instant = icalDateToInstant(value, params);
+      if (instant !== undefined) cur.recurrence = instant;
+    }
+  });
+  return blocks;
+}
+
+/** How the series master writes its DTSTART — the form RECURRENCE-ID and
+ *  EXDATE must use too (RFC 5545 §3.8.4.4: "the same value type as DTSTART"). */
+type DateForm = { kind: 'date' } | { kind: 'zoned'; tzid: string } | { kind: 'utc' | 'floating' };
+
+function dateFormOf(dtstartLine: string | undefined): DateForm {
+  if (!dtstartLine) return { kind: 'utc' };
+  const { value, params } = contentParams(dtstartLine);
+  if (params.VALUE === 'DATE' || /^\d{8}$/.test(value)) return { kind: 'date' };
+  if (params.TZID && zoneOffsetMinutes(params.TZID, new Date()) !== null) {
+    return { kind: 'zoned', tzid: params.TZID };
+  }
+  return { kind: value.endsWith('Z') ? 'utc' : 'floating' };
+}
+
+/** `NAME` + parameters + `:` + value, for an instant in the given form. */
+function propertyIn(name: string, form: DateForm, instant: string): string {
+  const utc = instantToICalUTC(instant);
+  switch (form.kind) {
+    case 'date':
+      return `${name};VALUE=DATE:${utc.slice(0, 8)}`;
+    case 'zoned': {
+      const local = instantToICalLocal(instant, form.tzid);
+      return local !== undefined
+        ? `${name};TZID=${quoteParam(form.tzid)}:${local}`
+        : `${name}:${utc}`;
+    }
+    case 'floating':
+      // Floating times are read as UTC (see icalDateToInstant); write them back
+      // the same way so the value round-trips.
+      return `${name}:${utc.slice(0, -1)}`;
+    default:
+      return `${name}:${utc}`;
+  }
+}
+
+/** Properties an override must not copy from its master. */
+const SERIES_ONLY = new Set([
+  'RRULE',
+  'RDATE',
+  'EXRULE',
+  'EXDATE',
+  'RECURRENCE-ID',
+  'DTSTART',
+  'DTEND',
+  'DURATION',
+  'DTSTAMP',
+]);
+
+function masterBlock(blocks: VEventBlock[]): VEventBlock | undefined {
+  return blocks.find((b) => b.recurrence === undefined);
+}
+
+function sameInstant(a: string | undefined, b: string): boolean {
+  return a !== undefined && Date.parse(a) === Date.parse(b);
+}
+
+/**
+ * Change one occurrence of a recurring series without touching the rest: the
+ * override VEVENT for `ref` is patched when one exists, otherwise one is created
+ * — a copy of the master (alarms and attendees included, recurrence rules
+ * excluded) pinned to the occurrence by RECURRENCE-ID in the master's own date
+ * form — and then patched. Throws when the document has no series master.
+ */
+export function overrideICS(raw: string, ref: OccurrenceRef, changes: PatchVEventInput): string {
+  const lines = unfoldLines(raw);
+  const blocks = veventBlocks(lines);
+  const existing = blocks.findIndex((b) => sameInstant(b.recurrence, ref.instant));
+  if (existing !== -1) return patchICS(raw, changes, existing);
+
+  const master = masterBlock(blocks);
+  if (!master) throw new Error('no series master to override');
+  const body = lines.slice(master.begin + 1, master.end);
+  const master0 = parseICS(lines.slice(master.begin, master.end + 1).join('\r\n'))[0];
+  const durationMs =
+    master0?.start !== undefined && master0.end !== undefined
+      ? Date.parse(master0.end) - Date.parse(master0.start)
+      : 0;
+  const form = dateFormOf(body.find((l) => propertyName(l) === 'DTSTART'));
+
+  // Top-level properties are copied line by line; nested components (VALARM)
+  // go verbatim after them.
+  const props: string[] = [];
+  const nested: string[] = [];
+  let depth = 0;
+  for (const line of body) {
+    if (/^BEGIN:/i.test(line)) depth++;
+    if (depth > 0) nested.push(line);
+    else if (!SERIES_ONLY.has(propertyName(line))) props.push(line);
+    if (/^END:/i.test(line)) depth--;
+  }
+  const end = formatWithOffset(Date.parse(ref.instant) + durationMs, 0);
+  const override = [
+    'BEGIN:VEVENT',
+    ...props,
+    propertyIn('RECURRENCE-ID', form, ref.instant),
+    propertyIn('DTSTART', form, ref.instant),
+    propertyIn('DTEND', form, end),
+    `DTSTAMP:${instantToICalUTC(changes.stamp)}`,
+    ...nested,
+    'END:VEVENT',
+  ];
+  const calendarEnd = lines.map((l) => l.toUpperCase()).lastIndexOf('END:VCALENDAR');
+  const withOverride = [...lines.slice(0, calendarEnd), ...override, ...lines.slice(calendarEnd)];
+  return patchICS(withOverride.join('\r\n'), changes, blocks.length);
+}
+
+/**
+ * Remove one occurrence of a recurring series: any override for it goes, and
+ * the master gains an EXDATE in its own date form. Throws when the document has
+ * no series master.
+ */
+export function excludeOccurrenceICS(raw: string, ref: OccurrenceRef, stamp: string): string {
+  const lines = unfoldLines(raw);
+  const blocks = veventBlocks(lines);
+  const master = masterBlock(blocks);
+  if (!master) throw new Error('no series master to exclude from');
+  const drop = new Set<number>();
+  for (const b of blocks) {
+    if (sameInstant(b.recurrence, ref.instant)) {
+      for (let i = b.begin; i <= b.end; i++) drop.add(i);
+    }
+  }
+  const form = dateFormOf(
+    lines.slice(master.begin, master.end).find((l) => propertyName(l) === 'DTSTART'),
+  );
+  const out: string[] = [];
+  let depth = 0;
+  lines.forEach((line, i) => {
+    if (drop.has(i)) return;
+    if (i > master.begin && i < master.end) {
+      if (/^BEGIN:/i.test(line)) depth++;
+      if (depth === 0 && propertyName(line) === 'DTSTAMP') {
+        out.push(`DTSTAMP:${instantToICalUTC(stamp)}`);
+        return;
+      }
+      if (/^END:/i.test(line)) depth--;
+    }
+    if (i === master.end) out.push(propertyIn('EXDATE', form, ref.instant));
+    out.push(line);
+  });
+  while (out.length > 0 && out[out.length - 1] === '') out.pop();
+  return out.map(foldLine).join('\r\n') + '\r\n';
+}
+
 /** A CalDAV multistatus entry: the resource href plus its iCalendar payload. */
 export interface CalendarEntry {
   href?: string;
   ics: string;
+  /** The resource's `getetag`, when the server reported one. */
+  etag?: string;
 }
 
 /** Parse `<response>` blocks from a CalDAV multistatus, pairing each resource
@@ -788,6 +1023,7 @@ export function parseCalendarEntries(multistatusXml: string): CalendarEntry[] {
   const respRe = /<[a-z0-9]*:?response[\s>][\s\S]*?<\/[a-z0-9]*:?response>/gi;
   const hrefRe = /<[a-z0-9]*:?href[^>]*>([\s\S]*?)<\/[a-z0-9]*:?href>/i;
   const dataRe = /<[a-z0-9]*:?calendar-data[^>]*>([\s\S]*?)<\/[a-z0-9]*:?calendar-data>/i;
+  const etagRe = /<[a-z0-9]*:?getetag[^>]*>([\s\S]*?)<\/[a-z0-9]*:?getetag>/i;
   const out: CalendarEntry[] = [];
   const blocks = multistatusXml.match(respRe);
   if (!blocks) {
@@ -799,9 +1035,11 @@ export function parseCalendarEntries(multistatusXml: string): CalendarEntry[] {
     const data = dataRe.exec(block);
     if (!data?.[1]) continue;
     const href = hrefRe.exec(block)?.[1];
+    const etag = etagRe.exec(block)?.[1];
     out.push({
       ics: unescapeXml(data[1]).trim(),
       ...(href ? { href: unescapeXml(href).trim() } : {}),
+      ...(etag?.trim() ? { etag: unescapeXml(etag).trim() } : {}),
     });
   }
   return out;

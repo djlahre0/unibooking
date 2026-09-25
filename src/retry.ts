@@ -89,9 +89,47 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     ...(client.listStaff
       ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
       : {}),
-    // A read, so safe to retry.
+    // Reads, so safe to retry.
     ...(client.listCalendars
       ? { listCalendars: (query) => run(() => client.listCalendars!(query), true) }
+      : {}),
+    ...(client.listCategories
+      ? { listCategories: () => run(() => client.listCategories!(), true) }
+      : {}),
+    ...(client.getBusinessHours
+      ? { getBusinessHours: () => run(() => client.getBusinessHours!(), true) }
+      : {}),
+    ...(client.listClasses
+      ? { listClasses: (query) => run(() => client.listClasses!(query), true) }
+      : {}),
+    ...(client.getClass ? { getClass: (id) => run(() => client.getClass!(id), true) } : {}),
+    // An enrollment is a booking create: same rule as createBooking.
+    ...(client.enrollInClass
+      ? {
+          enrollInClass: (input) =>
+            run(
+              () => client.enrollInClass!(input),
+              options.unsafeRetryCreates === true || input.idempotencyKey !== undefined,
+            ),
+        }
+      : {}),
+    // A sync page is a read: re-asking with the same token returns the same
+    // changes, so it is safe to retry.
+    ...(client.syncBookings
+      ? { syncBookings: (query) => run(() => client.syncBookings!(query), true) }
+      : {}),
+    // Creating (or, on Google, renewing = re-creating) a watch is not
+    // idempotent: a retry after a watch that actually registered leaves a
+    // second channel delivering duplicate notifications until it expires.
+    ...(client.watchBookings
+      ? { watchBookings: (input) => run(() => client.watchBookings!(input), false) }
+      : {}),
+    ...(client.renewWatch
+      ? { renewWatch: (watch, input) => run(() => client.renewWatch!(watch, input), false) }
+      : {}),
+    // Stopping twice ends in the same state.
+    ...(client.stopWatch
+      ? { stopWatch: (watch) => run(() => client.stopWatch!(watch), true) }
       : {}),
     // Creates are NOT auto-retried: neither provider write takes an idempotency
     // key from the caller, so a network retry after a create that actually

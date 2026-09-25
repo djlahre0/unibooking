@@ -93,6 +93,22 @@ async function codeChallengeS256(verifier: string): Promise<string> {
   return base64Url(new Uint8Array(digest));
 }
 
+/**
+ * Token-endpoint `error` values that mean the grant itself is gone and only the
+ * user can bring it back by signing in again. RFC 6749 §5.2 answers every
+ * token-endpoint error with HTTP 400, and Google and Microsoft do exactly that
+ * for a revoked refresh token — so the status alone reads as INVALID_INPUT and a
+ * consumer cannot tell "reconnect" from "malformed request". These become AUTH.
+ * `interaction_required`/`login_required`/`consent_required` are Entra's answers
+ * when MFA, a conditional-access change or new consent needs the user present.
+ */
+const DEAD_GRANT = new Set([
+  'invalid_grant',
+  'interaction_required',
+  'login_required',
+  'consent_required',
+]);
+
 // --- token parsing ----------------------------------------------------------
 
 /** Seconds-from-now → RFC3339 instant. */
@@ -183,9 +199,10 @@ export function defineOAuth(config: DefineOAuthConfig): OAuthClient {
       // OAuth2 error bodies are `{ error, error_description }`. The request body
       // is never echoed into the message — it carries the client secret.
       const detail = parsed?.error_description ?? parsed?.message ?? parsed?.error;
+      const grantDead = typeof parsed?.error === 'string' && DEAD_GRANT.has(parsed.error);
       throw new UnibookingError({
         provider: config.provider,
-        code: codeForStatus(res.status),
+        code: grantDead ? 'AUTH' : codeForStatus(res.status),
         message: typeof detail === 'string' ? detail : `token endpoint returned ${res.status}`,
         httpStatus: res.status,
         ...(typeof parsed?.error === 'string' ? { providerCode: parsed.error } : {}),
@@ -274,9 +291,14 @@ export interface AutoRefreshConfig<TCreds extends ProviderCredentials> {
  * and cannot race a mid-request expiry. The library still stores nothing — the
  * `onRefresh` callback is how new tokens reach your database.
  *
- * Concurrent de-duplication is deliberately absent: an in-memory lock would be
- * per-process and would not dedupe across instances, which is misleading for
- * exactly the multi-instance deployments that would need it.
+ * Concurrent calls on the SAME returned function share one in-flight refresh
+ * (and one `onRefresh`): two parallel requests on one client would otherwise
+ * each spend the refresh token, and a provider with single-use refresh tokens
+ * (Calendly enforces rotation) refuses the second — the connection then looks
+ * revoked. That sharing is per function, not per process or per fleet: separate
+ * `withAutoRefresh` instances for the same grant (one per request, one per
+ * server) still refresh independently. Where that matters, serialize refreshes
+ * yourself — e.g. a row lock around loading the tokens and building the client.
  */
 export function withAutoRefresh<TCreds extends ProviderCredentials>(
   config: AutoRefreshConfig<TCreds>,
@@ -284,6 +306,23 @@ export function withAutoRefresh<TCreds extends ProviderCredentials>(
   const skewMs = config.skewMs ?? 60_000;
   const now = config.now ?? (() => Date.now());
   let current = config.tokens;
+  let inflight: Promise<OAuthTokens> | undefined;
+
+  async function refreshOnce(refreshToken: string): Promise<OAuthTokens> {
+    const next = await config.oauth.refresh(refreshToken);
+    // Google returns a refresh token only on first consent, so a refresh
+    // response that omits one must not erase the token we still need.
+    const merged: OAuthTokens = {
+      ...next,
+      ...(next.refreshToken ? {} : { refreshToken }),
+    };
+    // Persist BEFORE handing the credentials out. If the write fails the error
+    // propagates and the request does not proceed — continuing as though the
+    // token were saved is how a refresh token gets lost permanently.
+    await config.onRefresh(merged);
+    current = merged;
+    return merged;
+  }
 
   return async (): Promise<TCreds> => {
     const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : NaN;
@@ -292,18 +331,11 @@ export function withAutoRefresh<TCreds extends ProviderCredentials>(
     const stale = Number.isFinite(expiresAt) && now() >= expiresAt - skewMs;
     if (!stale || !current.refreshToken) return config.toCreds(current);
 
-    const next = await config.oauth.refresh(current.refreshToken);
-    // Google returns a refresh token only on first consent, so a refresh
-    // response that omits one must not erase the token we still need.
-    const merged: OAuthTokens = {
-      ...next,
-      ...(next.refreshToken ? {} : { refreshToken: current.refreshToken }),
-    };
-    // Persist BEFORE handing the credentials out. If the write fails the error
-    // propagates and the request does not proceed — continuing as though the
-    // token were saved is how a refresh token gets lost permanently.
-    await config.onRefresh(merged);
-    current = merged;
-    return config.toCreds(merged);
+    // Cleared on settle either way, so a failed refresh is retried by the next
+    // call instead of being replayed to every later one.
+    inflight ??= refreshOnce(current.refreshToken).finally(() => {
+      inflight = undefined;
+    });
+    return config.toCreds(await inflight);
   };
 }

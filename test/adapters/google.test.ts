@@ -17,10 +17,14 @@ const EVENT = {
 
 const RANGE = { start: '2026-07-20T15:00:00-07:00', end: '2026-07-20T15:45:00-07:00' };
 
+/** Availability drops slots that have already started, so the fixtures' July
+ *  windows are searched from a clock pinned before them. */
+const CLOCK = { now: () => new Date('2026-07-01T00:00:00Z') };
+
 runConformance({
   provider: 'google',
   origin: 'https://www.googleapis.com',
-  makeClient: () => google({ accessToken: 'token', calendarId: 'primary' }),
+  makeClient: () => google({ accessToken: 'token', calendarId: 'primary' }, CLOCK),
   errorProbe: {
     method: 'GET',
     path: '/calendar/v3/calendars/primary/events',
@@ -119,7 +123,7 @@ describe('google: freeBusy-derived availability', () => {
   });
 
   it('rejects a missing durationMinutes with INVALID_INPUT', async () => {
-    const client = google({ accessToken: 't', calendarId: 'primary' });
+    const client = google({ accessToken: 't', calendarId: 'primary' }, CLOCK);
     await expect(
       client.searchAvailability({
         range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
@@ -141,7 +145,10 @@ describe('google: freeBusy-derived availability', () => {
         { headers: { 'content-type': 'application/json' } },
       );
 
-    const slots = await google({ accessToken: 't', calendarId: 'primary' }).searchAvailability({
+    const slots = await google(
+      { accessToken: 't', calendarId: 'primary' },
+      CLOCK,
+    ).searchAvailability({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
       durationMinutes: 60,
     });
@@ -167,7 +174,7 @@ describe('google: freeBusy-derived availability', () => {
       );
 
     await expect(
-      google({ accessToken: 't', calendarId: 'primary' }).searchAvailability({
+      google({ accessToken: 't', calendarId: 'primary' }, CLOCK).searchAvailability({
         range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
         durationMinutes: 60,
       }),
@@ -190,7 +197,7 @@ describe('google: freeBusy-derived availability', () => {
         { headers: { 'content-type': 'application/json' } },
       );
 
-    const slots = await google({ accessToken: 't', calendarId: CAL }).searchAvailability({
+    const slots = await google({ accessToken: 't', calendarId: CAL }, CLOCK).searchAvailability({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T11:00:00Z' },
       durationMinutes: 60,
     });
@@ -213,7 +220,10 @@ describe('google: freeBusy-derived availability', () => {
         { headers: { 'content-type': 'application/json' } },
       );
 
-    const slots = await google({ accessToken: 't', calendarId: REQUESTED }).searchAvailability({
+    const slots = await google(
+      { accessToken: 't', calendarId: REQUESTED },
+      CLOCK,
+    ).searchAvailability({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
       durationMinutes: 60,
     });
@@ -237,7 +247,7 @@ describe('google: freeBusy-derived availability', () => {
       );
 
     await expect(
-      google({ accessToken: 't', calendarId: 'mine@example.com' }).searchAvailability({
+      google({ accessToken: 't', calendarId: 'mine@example.com' }, CLOCK).searchAvailability({
         range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
         durationMinutes: 60,
       }),
@@ -410,5 +420,175 @@ describe('google: calendars, event details and all-day events', () => {
       description: 'Bring laptops',
       location: 'HQ, Floor 3',
     });
+  });
+});
+
+describe('google: slot rules, the clock and the guest', () => {
+  const ORIGIN = 'https://www.googleapis.com';
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  function freeBusy(busy: Array<{ start: string; end: string }>) {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/freeBusy'), method: 'POST' })
+      .reply(200, JSON.stringify({ kind: 'calendar#freeBusy', calendars: { primary: { busy } } }), {
+        headers: JSON_HEADERS,
+      });
+  }
+
+  it('never offers a slot that has already started', async () => {
+    freeBusy([]);
+    // 10:20 now: 09:00 and 10:00 have started, 11:00 has not.
+    const client = google({ accessToken: 't' }, { now: () => new Date('2026-07-20T10:20:00Z') });
+    const slots = await client.searchAvailability({
+      range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+      durationMinutes: 60,
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-07-20T11:00:00Z']);
+  });
+
+  it('applies working hours, the start grid, buffers and minimum notice', async () => {
+    // Busy 10:00-10:40 Kolkata (04:30-05:10Z).
+    freeBusy([{ start: '2026-07-20T04:30:00Z', end: '2026-07-20T05:10:00Z' }]);
+    const client = google(
+      { accessToken: 't' },
+      // 08:00 Kolkata; with 60 minutes' notice nothing before 09:00 is offered.
+      { now: () => new Date('2026-07-20T02:30:00Z') },
+    );
+    const slots = await client.searchAvailability({
+      range: { start: '2026-07-20T00:00:00+05:30', end: '2026-07-21T00:00:00+05:30' },
+      durationMinutes: 30,
+      intervalMinutes: 30,
+      bufferAfterMinutes: 10,
+      minNoticeMinutes: 60,
+      workingHours: {
+        timezone: 'Asia/Kolkata',
+        periods: [{ dayOfWeek: 'MON', start: '09:00', end: '12:00' }],
+      },
+    });
+    // 09:30-10:00 ends as the 10:00 meeting starts, but its 10-minute buffer
+    // after would run to 10:10, so it goes. 10:00 and 10:30 overlap the
+    // meeting; 11:00 is after it (no buffer before is asked for).
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-07-20T09:00:00+05:30',
+      '2026-07-20T11:00:00+05:30',
+      '2026-07-20T11:30:00+05:30',
+    ]);
+  });
+
+  it('rejects unusable slot rules before any request', async () => {
+    // No intercept registered: a request would fail the test with a
+    // MockNotMatchedError instead of the INVALID_INPUT asserted here.
+    const client = google({ accessToken: 't' }, CLOCK);
+    await expect(
+      client.searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+        durationMinutes: 30,
+        workingHours: { timezone: 'Mars/Olympus', periods: [] },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      client.searchAvailability({
+        range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
+        durationMinutes: 30,
+        intervalMinutes: 0,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('takes the customer from the first guest, not the organizer', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events/ev1') })
+      .reply(
+        200,
+        JSON.stringify({
+          ...EVENT,
+          // An event created in Google Calendar's own UI: the organizer is
+          // listed first among the attendees, flagged organizer + self.
+          organizer: { email: 'owner@example.com', self: true },
+          attendees: [
+            { email: 'owner@example.com', organizer: true, self: true, responseStatus: 'accepted' },
+            {
+              email: 'room-1@resource.calendar.google.com',
+              resource: true,
+              responseStatus: 'accepted',
+            },
+            { email: 'jane@example.com', displayName: 'Jane Doe', responseStatus: 'needsAction' },
+          ],
+        }),
+        { headers: JSON_HEADERS },
+      );
+    const b = await google({ accessToken: 't' }).getBooking('ev1');
+    expect(b.customer).toEqual({ email: 'jane@example.com', name: 'Jane Doe' });
+  });
+
+  it('reports no customer when the only attendee is the organizer', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events/ev1') })
+      .reply(
+        200,
+        JSON.stringify({
+          ...EVENT,
+          attendees: [{ email: 'owner@example.com', organizer: true, self: true }],
+        }),
+        { headers: JSON_HEADERS },
+      );
+    const b = await google({ accessToken: 't' }).getBooking('ev1');
+    expect(b.customer).toBeUndefined();
+  });
+});
+
+describe('google: recurring instances', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('names the series of an expanded instance', async () => {
+    agent
+      .get('https://www.googleapis.com')
+      .intercept({ path: (p) => p.startsWith('/calendar/v3/calendars/primary/events?') })
+      .reply(
+        200,
+        JSON.stringify({
+          kind: 'calendar#events',
+          items: [
+            {
+              ...EVENT,
+              id: 'abc123_20260720T220000Z',
+              recurringEventId: 'abc123',
+              originalStartTime: { dateTime: '2026-07-20T15:00:00-07:00' },
+            },
+            EVENT,
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    const { bookings } = await google({ accessToken: 't' }).listBookings({
+      range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
+    });
+    expect(bookings.map((b) => b.seriesId)).toEqual(['abc123', undefined]);
   });
 });

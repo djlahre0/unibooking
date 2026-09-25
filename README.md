@@ -56,6 +56,9 @@ Google Calendar • Outlook • Microsoft Bookings • Square • Calendly • W
   - [Dynamic Provider Selection](#dynamic-provider-selection)
 - [Booking Model](#booking-model)
 - [Time Handling](#time-handling)
+- [Group Classes](#group-classes)
+- [Staff, Services and Categories](#staff-services-and-categories)
+- [Business Hours](#business-hours)
 - [Supported Providers](#supported-providers)
 - [Unified Error Handling](#unified-error-handling)
 - [Webhooks](#webhooks)
@@ -206,6 +209,101 @@ or
 Every request gets fresh credentials.
 
 Perfect for OAuth refresh.
+
+---
+
+## Many Tenants
+
+`unibooking/connections` turns "one tenant, one provider" into "many tenants,
+any provider", without the library storing anything.
+
+You implement one interface against your own database. The library never
+persists a credential, and ships none — every client id, secret and key below
+is yours, supplied from your own environment.
+
+```ts
+import { connectionFor, type ConnectionStore } from "unibooking/connections";
+
+const store: ConnectionStore = {
+  async get(tenantId, provider) { /* your DB — decrypt here */ },
+  async put(tenantId, provider, record) { /* your DB — encrypt here */ },
+  async delete(tenantId, provider) { /* your DB */ },
+};
+
+const client = await connectionFor({
+  tenantId: "acme",
+  provider: "google",
+  store,
+  app: {
+    clientId: process.env.GOOGLE_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI!,
+  },
+});
+
+await client.listBookings({ range });
+```
+
+An expiring token is refreshed and written back through `store.put` **before**
+the request goes out. A failed write aborts the request rather than continuing
+with tokens your database never received — which is how a rotated refresh
+token gets lost permanently.
+
+A fresh client is returned per call. There is deliberately no cross-tenant
+cache: a cache keyed wrong hands one tenant another's credentials.
+
+> **Note**
+> This module is **server-only** — it imports `unibooking/oauth/*`. The
+> credential schema below is at the package root instead, because your connect
+> form needs it in the browser.
+
+### Storing credentials securely
+
+Encryption at rest is yours to implement, deliberately: your platform already
+has a key management story and the library guessing at one would be worse than
+none.
+
+- Encrypt `tokens` and `fields` before they reach disk. Use your platform's
+  KMS, or `node:crypto` AES-256-GCM with a key from your environment.
+- Keep the key out of your repository, and rotate it independently of the data.
+- Never log a record. `isSecretField(provider, key)` says which values must be
+  masked if you log anything at all.
+- The library puts no credential in an error message — errors name the missing
+  *field*, never the value.
+
+### What each provider requires
+
+Read it from the schema rather than this table, so it cannot go stale:
+
+```ts
+import { PROVIDER_CREDENTIALS, requiredCredentials } from "unibooking";
+
+requiredCredentials("square"); // [{ key: "accessToken", … }, { key: "locationId", … }]
+```
+
+| Provider | Required | Optional |
+| --- | --- | --- |
+| `google` | `accessToken` | `calendarId` |
+| `outlook` | `accessToken` | `userId`, `calendarId` |
+| `microsoft_bookings` | `accessToken`, `businessId` | — |
+| `square` | `accessToken`, `locationId` | — |
+| `acuity` | `userId`, `apiKey` | `currency` |
+| `bookeo` | `apiKey`, `secretKey` | — |
+| `booker` | `accessToken`, `subscriptionKey`, `locationId` | `timezone` |
+| `mindbody` | `apiKey`, `siteId`, `accessToken` | `locationId`, `timezone`, `utcOffset` |
+| `wix` | `accessToken` | — |
+| `calendly` | `token` | `user`, `organization`, `defaultTimezone` |
+| `vagaro` | `region`, `businessId`, `accessToken` | — |
+| `zenoti` | `apiKey`, `centerId` | — |
+| `boulevard` | `businessId`, `locationId`, `apiKey`, `apiSecret` | — |
+| `phorest` | `username`, `password`, `businessId`, `branchId` | `currency` |
+| `setmore` | `accessToken` | `currency` |
+| `mangomint` | `apiKey` | — |
+| `apple` | `username`, `appPassword` | `calendarUrl` |
+
+Acuity is the one provider with two alternatives — HTTP Basic (`userId` +
+`apiKey`) **or** an OAuth `accessToken`. `PROVIDER_CREDENTIALS.acuity` holds
+both sets; the table shows the first.
 
 ---
 
@@ -1217,28 +1315,189 @@ falling back to UTC.
 
 ---
 
+# Group Classes
+
+A class is a scheduled occurrence with finite capacity that many customers
+enroll into — a 6pm yoga session, not a one-to-one appointment. Providers model
+it in two parts, and so does unibooking: the **definition** is an ordinary
+`Service`, and the **occurrence** is a `ClassSession`.
+
+Available where `capabilities.classCatalog` is true (**Mindbody**, **Acuity**).
+Plain calendars have events, which carry no capacity or enrollment, so they
+report `false` and omit the methods entirely.
+
+```ts
+const client = mindbody({ apiKey, siteId, accessToken, timezone: 'America/Los_Angeles' });
+
+const { classes } = await client.listClasses!({
+  range: { start: '2026-06-11T00:00:00Z', end: '2026-06-18T00:00:00Z' },
+});
+
+for (const k of classes) {
+  console.log(k.title, k.range.start, `${k.booked}/${k.capacity}`, k.full ? 'FULL' : '');
+}
+```
+
+## Enrolling
+
+`enrollInClass` returns an ordinary `Booking` carrying `classId`. That is the
+whole integration: cancelling an enrollment is `cancelBooking`, and enrollments
+appear in `listBookings` beside appointments. There is no separate enrollment
+lifecycle to keep in sync.
+
+```ts
+const booking = await client.enrollInClass!({
+  classId: classes[0]!.id,
+  customer: { id: 'client-1', name: 'Dana Lee' },
+});
+
+await client.cancelBooking(booking.id); // same call as any other booking
+```
+
+## Full classes and waitlists
+
+A full class throws `CONFLICT` **before** the write, rather than letting the
+provider reject it with a message only that provider understands:
+
+```ts
+try {
+  await client.enrollInClass!({ classId, customer });
+} catch (err) {
+  if (err instanceof UnibookingError && err.code === 'CONFLICT') {
+    // full, cancelled, or already over
+  }
+}
+```
+
+Pass `allowWaitlist: true` to join the waitlist instead. This requires
+`capabilities.classWaitlist` — Mindbody has one, Acuity does not — and yields a
+booking with `status: 'waitlisted'`:
+
+```ts
+const booking = await client.enrollInClass!({ classId, customer, allowWaitlist: true });
+if (booking.status === 'waitlisted') { /* not enrolled yet */ }
+```
+
+Where the provider has no waitlist, `allowWaitlist` cannot rescue a full class —
+it still throws `CONFLICT`, with a message saying why.
+
+## Reading capacity
+
+`full` is authoritative and is **not** derived from `available`. Several
+providers can report that a class is closed to booking while spots remain
+(cancelled, already started, staff-only), so trust `full` for the yes/no and
+treat `capacity`/`booked`/`available` as display numbers that may be absent.
+
+| Field | Meaning |
+|---|---|
+| `capacity` | Total spots, when the provider caps and reports it |
+| `booked` | Spots taken |
+| `available` | `capacity - booked`, floored at 0 |
+| `full` | Whether enrollment is possible — the one to branch on |
+| `waitlistCapacity` / `waitlistCount` | Waitlist size and usage, where supported |
+
+## Class ids
+
+`ClassSession.id` is whatever that provider's enroll path accepts, exactly as
+`Service.id` is. It is opaque — pass it back verbatim and do not parse it.
+Acuity has no per-occurrence id, so its ids encode appointment type and start
+time; Mindbody enrollment ids encode the class and client, because its removal
+endpoint needs both.
+
+---
+
+# Staff, Services and Categories
+
+## Who performs what
+
+Where `capabilities.staffServiceAssignment` is true (**Square**, **Acuity**),
+services and staff carry each other's ids, so you never have to guess which
+member can perform which service:
+
+```ts
+const { services } = await client.listServices!();
+services[0]!.staffIds; // ['tm_1', 'tm_2'] -- these are Staff.id values
+```
+
+Both list queries take the matching filter:
+
+```ts
+await client.listServices!({ staffId: 'tm_1' });   // what can Ana do?
+await client.listStaff!({ serviceId: 'var_2' });   // who can do a colour?
+```
+
+`staffIds` distinguishes **"nobody"** from **"the provider did not say"**: an
+empty array means no one is assigned, `undefined` means the field was absent.
+Do not collapse the two — booking against a service with `staffIds: []` will
+fail, while `undefined` says nothing either way.
+
+## Categories
+
+`listCategories()` returns the catalog's own groupings, and every
+`ServiceCategory.id` joins straight onto `Service.categoryId`:
+
+```ts
+const { categories } = await client.listCategories!();
+const hair = categories.find((c) => c.name === 'Hair')!;
+const { services } = await client.listServices!({ categoryId: hair.id });
+```
+
+Providers differ in what a category *is*. Square has real catalog objects with
+their own ids. Acuity has only a name string on each appointment type, so the
+name **is** the id — which is exactly why `Service.categoryId` is set to that
+same string on Acuity. The join works either way, and that is the point.
+
+---
+
+# Business Hours
+
+`getBusinessHours()` returns the recurring **weekly** opening pattern, where
+`capabilities.businessHours` is true (**Square**):
+
+```ts
+const hours = await client.getBusinessHours!();
+hours.timezone; // 'America/Los_Angeles'
+hours.periods;  // [{ dayOfWeek: 'MON', start: '09:00', end: '17:30' }, ...]
+```
+
+These are **not instants**. `"09:00 on MON"` repeats every week and only becomes
+a moment once anchored to a date in `timezone` — use `zonedToInstant` for that.
+Without a `timezone` the periods cannot be anchored at all, so treat them as
+display-only.
+
+Periods are sorted Monday-first then by start time. A closed day simply has no
+period; two periods on one day are a split shift. A period the provider returns
+malformed is dropped rather than emitted as a window nobody can place — the
+original is still in `raw`.
+
+Opening hours are not availability. They say when the business is open;
+`searchAvailability` says whether a specific slot can actually be booked.
+
+---
+
 # Supported Providers
 
 unibooking currently supports the following providers.
 
-| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars |
-|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|:---------:|
-| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ |
-| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
-| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
-| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
-| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — |
-| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
-| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
-| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — | — |
-| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
-| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — |
-| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | ✅ |
-| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
-| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
+| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars | Classes | Assign | Categories | Hours | Sync | Push | Versions |
+|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|:---------:|:-------:|:------:|:----------:|:-----:|:----:|:----:|:--------:|
+| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ | — | — | — | — | ✅ | ✅ | ✅ |
+| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ | — | — | — | — | ⚠️ | ✅ | ✅ |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
+| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | — |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ | ✅ | ✅ | — | — | — | — |
+| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | — |
+| [Booker](https://developers.mindbodyonline.com/ui/documentation/booker-api) | ✅ | ✅ | — | ✅ | — | — | ✅ | ✅ | — | ✅ | ✅ | — | — | — | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ | — | — | — | — | — | — |
+| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | — | — |
+| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | ✅ | — | — | — | — | ⚠️ | — | ✅ |
+| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
 
 > **Note**
 >
@@ -1843,7 +2102,7 @@ npm run build
 ```text
 src/
 
-    adapters/          google.ts, square.ts, outlook.ts, ... (16)
+    adapters/          google.ts, square.ts, outlook.ts, ... (17)
 
     webhooks/          square.ts, calendly.ts, wix.ts, ... (10)
 

@@ -198,7 +198,10 @@ describe('AUDIT apple: update no longer destroys event data', () => {
     const { bookings } = await client.listBookings({
       range: { start: '2026-07-20T00:00:00Z', end: '2026-07-21T00:00:00Z' },
     });
-    expect(bookings[0]!.id).toBe('server-name-abc');
+    // A recurring event: the occurrence id is built on the href name too, and
+    // the series id is the href name itself.
+    expect(bookings[0]!.id).toBe('server-name-abc::20260720T220000Z');
+    expect(bookings[0]!.seriesId).toBe('server-name-abc');
 
     // …and that id addresses the real resource on a follow-up get.
     let hit = false;

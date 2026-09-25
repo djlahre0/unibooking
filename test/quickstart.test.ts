@@ -143,10 +143,12 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       timeoutMs: 10_000,
     });
 
-    // capabilities — every one true for Square, including enumeration.
-    // `services`/`staff` and `serviceCatalog`/`staffDirectory` are separate
-    // questions: the first pair says a booking can reference them, the second
-    // that they can be listed. Square happens to support both.
+    // capabilities — every appointment-side one is true for Square, including
+    // enumeration. `services`/`staff` and `serviceCatalog`/`staffDirectory` are
+    // separate questions: the first pair says a booking can reference them, the
+    // second that they can be listed. Square happens to support both. The
+    // class flags are false because Square Bookings has no group-class concept
+    // at all — only one-to-one appointments.
     expect(client.capabilities).toEqual({
       availability: true,
       staff: true,
@@ -159,6 +161,15 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       serviceCatalogWrite: true,
       staffDirectoryWrite: true,
       calendarList: false,
+      staffServiceAssignment: true,
+      serviceCategories: true,
+      businessHours: true,
+      classCatalog: false,
+      classEnrollment: false,
+      classWaitlist: false,
+      changeFeed: false,
+      changeNotifications: false,
+      versionedWrites: false,
     });
 
     const serviceId = 'SERVICE_VARIATION_ID';

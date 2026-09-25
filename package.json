@@ -69,6 +69,16 @@
         "default": "./dist/webhooks/*.cjs"
       }
     },
+    "./connections": {
+      "import": {
+        "types": "./dist/connections.d.ts",
+        "default": "./dist/connections.js"
+      },
+      "require": {
+        "types": "./dist/connections.d.cts",
+        "default": "./dist/connections.cjs"
+      }
+    },
     "./oauth": {
       "import": {
         "types": "./dist/oauth/index.d.ts",

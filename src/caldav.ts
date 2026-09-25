@@ -62,6 +62,106 @@ export function davProp(props: string, name: string): string | undefined {
   return element(name).exec(props)?.[1];
 }
 
+// --- sync-collection (RFC 6578) ----------------------------------------------
+
+/** The body of a DAV:sync-collection REPORT asking for each changed member's
+ *  ETag and iCalendar data. An empty token asks for every member. */
+export function syncCollectionBody(syncToken: string): string {
+  return (
+    `<?xml version="1.0" encoding="utf-8"?>` +
+    `<d:sync-collection ${NS}>` +
+    `<d:sync-token>${escapeXml(syncToken)}</d:sync-token>` +
+    `<d:sync-level>1</d:sync-level>` +
+    `<d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+    `</d:sync-collection>`
+  );
+}
+
+/** A calendar-multiget REPORT for members a sync reported without their data. */
+export function multigetBody(hrefs: string[]): string {
+  return (
+    `<?xml version="1.0" encoding="utf-8"?>` +
+    `<c:calendar-multiget ${NS}>` +
+    `<d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+    hrefs.map((h) => `<d:href>${escapeXml(h)}</d:href>`).join('') +
+    `</c:calendar-multiget>`
+  );
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export interface SyncEntry {
+  href: string;
+  /** 404 for a removed member (RFC 6578 §3.5.2); the propstat status otherwise. */
+  status: number;
+  etag?: string;
+  ics?: string;
+}
+
+export interface SyncCollectionResult {
+  entries: SyncEntry[];
+  syncToken?: string;
+  /** The server stopped early (507 on the request-URI, RFC 6578 §3.6): call
+   *  again with `syncToken` for the rest. */
+  truncated: boolean;
+}
+
+function statusCode(text: string | undefined): number {
+  const m = /\s(\d{3})\s?/.exec(text ?? '');
+  return m ? Number(m[1]) : 0;
+}
+
+/** Read a sync-collection multistatus. `collectionUrl` identifies the
+ *  request-URI's own response, which carries the 507 of a truncated result. */
+export function parseSyncCollection(xml: string, collectionUrl: string): SyncCollectionResult {
+  const entries: SyncEntry[] = [];
+  let truncated = false;
+  const selfPath = new URL(collectionUrl).pathname.replace(/\/+$/, '');
+  for (const block of xml.match(element('response', 'gi')) ?? []) {
+    const href = element('href').exec(block)?.[1];
+    if (!href) continue;
+    const decoded = unescapeXml(href.trim());
+    const propstats = block.match(element('propstat', 'gi')) ?? [];
+    // A removed member has a response-level status and no propstat; so does
+    // the truncation marker on the collection itself.
+    const outer = block.replace(element('propstat', 'gi'), '');
+    const outerStatus = statusCode(element('status').exec(outer)?.[1]);
+    let path = decoded;
+    try {
+      path = new URL(decoded, collectionUrl).pathname;
+    } catch {
+      // Keep the raw href.
+    }
+    if (path.replace(/\/+$/, '') === selfPath) {
+      if (outerStatus === 507) truncated = true;
+      continue;
+    }
+    if (propstats.length === 0) {
+      entries.push({ href: decoded, status: outerStatus || 404 });
+      continue;
+    }
+    const ok = propstats.find((ps) => statusCode(element('status').exec(ps)?.[1]) < 300);
+    const data = ok ? davProp(ok, 'calendar-data') : undefined;
+    const etag = ok ? davProp(ok, 'getetag') : undefined;
+    entries.push({
+      href: decoded,
+      status: ok ? 200 : statusCode(element('status').exec(propstats[0]!)?.[1]),
+      ...(etag?.trim() ? { etag: unescapeXml(etag.trim()) } : {}),
+      ...(data?.trim() ? { ics: unescapeXml(data).trim() } : {}),
+    });
+  }
+  // The new token is a direct child of the multistatus, after the responses.
+  const tail = xml.replace(element('response', 'gi'), '');
+  const token = element('sync-token').exec(tail)?.[1]?.trim();
+  return { entries, ...(token ? { syncToken: unescapeXml(token) } : {}), truncated };
+}
+
 async function propfind<T>(
   http: HttpContext<T>,
   creds: T,

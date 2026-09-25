@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { freeSlots, slotsWithinRange, sortSlots } from '../src/availability';
+import {
+  busyFromBookings,
+  computeSlots,
+  excludeBusy,
+  freeSlots,
+  slotsWithinRange,
+  sortSlots,
+} from '../src/availability';
 import { isInstant } from '../src/time';
 
 // A 3-hour window; most cases slice it at a 60-minute duration.
@@ -225,5 +232,208 @@ describe('sortSlots', () => {
       { start: '2026-07-20T09:00:00Z', end: '2026-07-20T10:00:00Z' },
     ]);
     expect(sorted.map((s) => s.start)).toEqual(['2026-07-20T09:00:00Z', 'not-a-time']);
+  });
+});
+
+describe('computeSlots', () => {
+  const MON = '2026-09-21'; // a Monday
+
+  it('keeps the historical back-to-back form without a grid or hours', () => {
+    const slots = computeSlots({
+      range: { start: '2026-09-21T09:10:00Z', end: '2026-09-21T11:10:00Z' },
+      durationMinutes: 60,
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-09-21T09:10:00Z', '2026-09-21T10:10:00Z']);
+  });
+
+  it('puts starts on the interval grid, counted from local midnight', () => {
+    const slots = computeSlots({
+      range: {
+        start: '2026-09-21T09:10:00+02:00',
+        end: '2026-09-21T11:00:00+02:00',
+        timezone: 'Europe/Berlin',
+      },
+      durationMinutes: 30,
+      intervalMinutes: 30,
+    });
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-09-21T09:30:00+02:00',
+      '2026-09-21T10:00:00+02:00',
+      '2026-09-21T10:30:00+02:00',
+    ]);
+  });
+
+  it('offers only times inside working hours, per weekday, in their zone', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T00:00:00Z`, end: '2026-09-23T00:00:00Z' },
+      durationMinutes: 60,
+      workingHours: {
+        timezone: 'America/New_York',
+        periods: [
+          { dayOfWeek: 'MON', start: '09:00', end: '11:00' },
+          { dayOfWeek: 'TUE', start: '13:00', end: '14:00' },
+        ],
+      },
+    });
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-09-21T09:00:00-04:00',
+      '2026-09-21T10:00:00-04:00',
+      '2026-09-22T13:00:00-04:00',
+    ]);
+  });
+
+  it('keeps wall-clock hours across a DST change', () => {
+    // US DST ends Sun 1 Nov 2026: 09:00 is -04:00 on Friday, -05:00 on Monday.
+    const slots = computeSlots({
+      range: { start: '2026-10-30T00:00:00Z', end: '2026-11-03T00:00:00Z' },
+      durationMinutes: 60,
+      workingHours: {
+        timezone: 'America/New_York',
+        periods: [
+          { dayOfWeek: 'FRI', start: '09:00', end: '10:00' },
+          { dayOfWeek: 'MON', start: '09:00', end: '10:00' },
+        ],
+      },
+    });
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-10-30T09:00:00-04:00',
+      '2026-11-02T09:00:00-05:00',
+    ]);
+  });
+
+  it('handles a period that runs past midnight', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T00:00:00Z`, end: '2026-09-23T00:00:00Z' },
+      durationMinutes: 60,
+      workingHours: {
+        timezone: 'UTC',
+        periods: [{ dayOfWeek: 'MON', start: '22:00', end: '01:00' }],
+      },
+    });
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-09-21T22:00:00Z',
+      '2026-09-21T23:00:00Z',
+      '2026-09-22T00:00:00Z',
+    ]);
+  });
+
+  it('accepts 24:00 as the end of the day', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T00:00:00Z`, end: '2026-09-22T06:00:00Z' },
+      durationMinutes: 60,
+      workingHours: {
+        timezone: 'UTC',
+        periods: [{ dayOfWeek: 'MON', start: '22:00', end: '24:00' }],
+      },
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-09-21T22:00:00Z', '2026-09-21T23:00:00Z']);
+  });
+
+  it('keeps busy time and its buffers clear', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T09:00:00Z`, end: `${MON}T13:00:00Z` },
+      durationMinutes: 60,
+      intervalMinutes: 30,
+      busy: [{ start: `${MON}T11:00:00Z`, end: `${MON}T11:30:00Z` }],
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 15,
+    });
+    // A slot needs 15 free minutes after it (so it must end by 10:45) and 15
+    // before it (so it may start at 11:45 at the earliest: 12:00 on the grid).
+    expect(slots.map((s) => s.start)).toEqual([
+      '2026-09-21T09:00:00Z',
+      '2026-09-21T09:30:00Z',
+      '2026-09-21T12:00:00Z',
+    ]);
+  });
+
+  it('drops slots before now plus minimum notice', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T09:00:00Z`, end: `${MON}T12:00:00Z` },
+      durationMinutes: 30,
+      intervalMinutes: 30,
+      now: `${MON}T09:05:00Z`,
+      minNoticeMinutes: 60,
+    });
+    expect(slots[0]?.start).toBe('2026-09-21T10:30:00Z');
+  });
+
+  it('never offers a slot already under way, even without notice', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T09:00:00Z`, end: `${MON}T11:00:00Z` },
+      durationMinutes: 60,
+      now: new Date(`${MON}T09:00:01Z`),
+    });
+    expect(slots.map((s) => s.start)).toEqual(['2026-09-21T10:00:00Z']);
+  });
+
+  it('stops at the limit', () => {
+    const slots = computeSlots({
+      range: { start: `${MON}T09:00:00Z`, end: `${MON}T17:00:00Z` },
+      durationMinutes: 30,
+      intervalMinutes: 15,
+      limit: 3,
+    });
+    expect(slots).toHaveLength(3);
+  });
+
+  it('rejects unusable rules with RangeError', () => {
+    const range = { start: `${MON}T09:00:00Z`, end: `${MON}T17:00:00Z` };
+    expect(() => computeSlots({ range, durationMinutes: 0 })).toThrow(RangeError);
+    expect(() => computeSlots({ range, durationMinutes: 30, intervalMinutes: -5 })).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      computeSlots({
+        range,
+        durationMinutes: 30,
+        workingHours: { timezone: 'Nowhere/Land', periods: [] },
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      computeSlots({
+        range,
+        durationMinutes: 30,
+        workingHours: {
+          timezone: 'UTC',
+          periods: [{ dayOfWeek: 'MON', start: '9:00', end: '17:00' }],
+        },
+      }),
+    ).toThrow(RangeError);
+    expect(() => computeSlots({ range, durationMinutes: 30, minNoticeMinutes: 10 })).toThrow(
+      RangeError,
+    );
+  });
+});
+
+describe('excludeBusy and busyFromBookings', () => {
+  it('removes provider slots that clash with calendar busy time', () => {
+    const slots = [
+      { start: '2026-09-21T09:00:00Z', end: '2026-09-21T09:30:00Z', staffId: 'a' },
+      { start: '2026-09-21T09:30:00Z', end: '2026-09-21T10:00:00Z', staffId: 'a' },
+      { start: '2026-09-21T10:00:00Z', end: '2026-09-21T10:30:00Z', staffId: 'a' },
+    ];
+    const kept = excludeBusy(
+      slots,
+      [{ start: '2026-09-21T09:40:00Z', end: '2026-09-21T09:50:00Z' }],
+      { bufferAfterMinutes: 5 },
+    );
+    // 09:30 overlaps; 09:00 ends at 09:30, and its 5-minute buffer after
+    // (to 09:35) still clears the 09:40 event; 10:00 starts after it ends.
+    expect(kept.map((s) => s.start)).toEqual(['2026-09-21T09:00:00Z', '2026-09-21T10:00:00Z']);
+    expect(kept[0]).toBe(slots[0]); // extra fields and identity survive
+  });
+
+  it('treats cancelled, declined and waitlisted items as not busy', () => {
+    const range = { start: '2026-09-21T09:00:00Z', end: '2026-09-21T10:00:00Z' };
+    const busy = busyFromBookings([
+      { range, status: 'confirmed' },
+      { range, status: 'cancelled' },
+      { range, status: 'declined' },
+      { range, status: 'waitlisted' },
+      { range, status: 'scheduled' }, // a ClassSession
+      { range },
+    ]);
+    expect(busy).toHaveLength(3);
   });
 });

@@ -6,94 +6,123 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Fixed
-
-- **Square catalog writes were broken outright.** `createService`,
-  `updateService` and `setServiceActive` read the upsert reply from `object`,
-  but Square's `UpsertCatalogObject` answers with `catalog_object` (only
-  `RetrieveCatalogObject` uses `object`). Every catalog write therefore threw
-  `UPSTREAM: catalog.object: expected an object, got undefined` *after* the
-  write had already succeeded upstream — so the service really was created or
-  edited, and the caller got an error and no id for it.
-
-  Caught by running the adapter against a live Square account. The unit tests
-  had mocked the upsert with the retrieve's envelope, so they passed against a
-  shape Square never returns; they now use the real one.
-
-- **Square `createService` produced services that could never be booked.**
-  Square's `team_member_ids` — the staff who perform a service — lives on the
-  catalog VARIATION, but `providerOptions` was spread onto the ITEM, so there was
-  no way to set it short of replacing the whole `variations` array. A service
-  created without it is accepted by the catalog and then rejected by every
-  availability search with "Search did not find a team member who performs the
-  selected service variation".
-
-  `team_member_ids` is now pulled out of `providerOptions` and routed to the
-  variation on both `createService` and `updateService` — the same treatment
-  `service_variation_version` already gets in `createBooking`.
-
-- **Square `Service.active` ignored `available_for_booking`.** It was derived
-  from `is_deleted` alone, while `setServiceActive` writes
-  `available_for_booking` — so the method contradicted itself:
-  `setServiceActive(id, false)` returned a Service still reporting
-  `active: true`, and `listServices` reported unbookable services as active.
-  Both now agree. A variation that omits the flag is unaffected.
-
-- **Square `customers.findOrCreate` could duplicate a customer.** Square's
-  customer search index is eventually consistent — a record created now is not
-  findable via `customers/search` for a second or two (measured live: a miss at
-  0.9s, a hit at 2.3s). Two calls for the same person inside that window both
-  missed the lookup and both created, leaving duplicate customers attached to
-  different bookings.
-
-  The create now carries an idempotency key derived from the identity being
-  deduped on (email, else phone), so Square collapses the repeat server-side
-  where the race actually is. Verified live: three *concurrent* `findOrCreate`
-  calls for one email now return a single customer id, which the previous
-  lookup-then-create could not do at all. A name-only customer deliberately
-  keeps a random key — "John Smith" is not an identity, and collapsing two
-  walk-ins of that name would attach a booking to the wrong person.
-
-### Changed
-
-- **Square now reports Appointments *plan* limits as `UNSUPPORTED` rather than
-  `AUTH`/`FORBIDDEN`.** Two Square failures are about the seller's subscription,
-  not their credentials, and both were observed live:
-
-  - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
-    Bookings call, when the seller has no Appointments subscription.
-  - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
-    on booking creates/updates/cancels, when the seller is on the **free**
-    Appointments plan. Availability search and booking reads still work.
-
-  Read literally those became `AUTH` and `FORBIDDEN` — two of the three codes
-  this library treats as "these credentials no longer work" — so a merchant on
-  the wrong plan would have a healthy integration torn down and be sent through
-  a re-auth that could not possibly fix it. Both now report `UNSUPPORTED`, with
-  a message naming the cause and the remedy. A genuinely bad or revoked token is
-  untouched and still reports `AUTH`.
-
-- `HttpConfig.parseError` may now return a canonical `code` to override the one
-  the HTTP status implies, for the cases where a provider's status is actively
-  misleading. Additive and optional — omitting it keeps the status-derived
-  default, so no other adapter changes behaviour.
-
-- **BREAKING — `Capabilities` gains the required `calendarList` field.** Only
-  custom adapters built with `defineAdapter` are affected: add
-  `calendarList: false` (or `true` alongside a `listCalendars` method). Every
-  shipped adapter already declares it.
-
-- **Outlook writes honor `range.timezone`.** When the zone resolves, `start`/`end`
-  are sent as wall-clock time plus that zone (Graph accepts IANA and Windows
-  names), so Outlook shows the event in the zone the user picked instead of
-  UTC. An unresolvable zone keeps the previous UTC write. Outlook event requests
-  also ask for plain-text bodies (`Prefer: outlook.body-content-type="text"`),
-  so `description` never carries Outlook's HTML wrapper.
-
-- `HttpRequest.onResponse` now also receives the response `url` (after
-  redirects, falling back to the requested URL). Additive.
-
 ### Added
+
+- **Multi-tenant connections** — `unibooking/connections`, a new server-only
+  subpath for consumers running many tenants against many providers.
+
+  - `ConnectionStore` is an interface you implement against your own database.
+    The library defines the port and ships no implementation: it still stores
+    nothing, and still supplies no credential of its own.
+  - `connectionFor({ tenantId, provider, store, app })` returns a ready
+    `BookingClient` for one tenant's stored connection, wiring the per-provider
+    OAuth client and credential mapping that every consumer previously
+    hand-wrote for all 17 providers.
+  - A refreshed token is persisted through `store.put` **before** the request
+    goes out, so a failed write aborts the request instead of continuing with
+    tokens your database never received — which is how a rotated refresh token
+    gets lost permanently. A rejected refresh leaves the stored token untouched.
+  - A fresh client per call, with no cross-tenant cache: a cache keyed wrong
+    hands one tenant another's credentials.
+
+  The module is server-only because it imports `unibooking/oauth/*`. A test
+  asserts the package root has no transitive `oauth` import, so the root stays
+  usable in a browser.
+
+- **Credential schema at the package root** — `PROVIDER_CREDENTIALS`,
+  `requiredCredentials()`, `matchCredentialSet()`, `isSecretField()` and
+  `authKinds()`. Declares, per provider, which fields are required, which are
+  optional and which are secret, so a consumer can render their own connect
+  form without re-deriving it from the README. Metadata only; no values.
+
+  `required` mirrors each adapter's own credential type and is tested against
+  it. Acuity is the one provider with two alternatives (HTTP Basic **or** an
+  OAuth token), which `PROVIDER_CREDENTIALS` expresses as two credential sets.
+
+  The README gains a generated required-credentials table, checked by
+  `test/readme-credentials.test.ts`, and guidance on encrypting credentials at
+  rest — which remains the consumer's responsibility, by design.
+
+- **New provider: Booker** (Mindbody Booker, booker.com) — a distinct product
+  from the already-supported **Bookeo** (bookeo.com), despite the near-identical
+  name. Bookings (create, read, cancel, list), treatments as services, employees
+  as staff, categories, business hours, and group classes with enrollment.
+
+  Two time hazards drive its implementation, and both are load-bearing:
+
+  1. Booker serialises datetimes in .NET form, `/Date(1758067200000-0500)/`.
+  2. **Booker's server always speaks Eastern Time.** That epoch, rendered in
+     `America/New_York`, is the *business's local wall clock* — not the real
+     instant. Recovering a true instant means rendering in Eastern, taking those
+     wall-clock digits, and re-anchoring them in the location's own zone; writes
+     invert the same transform. Pass the location's IANA `timezone` or every
+     time is out by the Eastern offset difference.
+
+  `searchAvailability` reports `UNSUPPORTED`: Booker's appointment (non-class)
+  slot endpoint is not publicly documented, and guessing at it would be worse
+  than saying so. **Class** availability works — use `listClasses()`.
+  `updateBooking` likewise reports `UNSUPPORTED`; Booker documents only confirm
+  and cancel, and silently confirming an appointment the caller asked to move
+  would be a worse answer than refusing. Cancel and rebook instead.
+
+- **Staff ↔ service assignments.** Where
+  `capabilities.staffServiceAssignment` is true (Square, Acuity), `Service`
+  carries `staffIds` — the `Staff.id` values that can perform it — and both list
+  queries take the matching filter: `listServices({ staffId })` and
+  `listStaff({ serviceId })`.
+
+  `staffIds` distinguishes "nobody is assigned" (`[]`) from "the provider did
+  not say" (`undefined`); collapsing the two would turn an unanswered question
+  into a definite no.
+
+- **`listCategories()` and the canonical `ServiceCategory` type**
+  (`capabilities.serviceCategories`) on Square and Acuity, plus a
+  `categoryId` filter on `listServices`. Every `ServiceCategory.id` joins onto
+  `Service.categoryId`. Square has real catalog category objects; Acuity names
+  categories without ids, so there the name *is* the id — and `categoryId` is
+  set to the same string so the join holds on both.
+
+- **`getBusinessHours()` and the canonical `BusinessHours` type**
+  (`capabilities.businessHours`) on Square: the recurring weekly opening
+  pattern as `{ dayOfWeek, start, end }` wall-clock periods plus the location's
+  IANA zone.
+
+  These are weekly patterns, not instants — anchor them with `zonedToInstant`.
+  Periods are sorted Monday-first then by start time, a closed day has no
+  period, and two on one day are a split shift. A malformed period is dropped
+  rather than emitted as a window nobody can place, with the original left in
+  `raw`. Opening hours are not availability: they say when the business is
+  open, while `searchAvailability` says whether a slot is bookable.
+
+- **Group classes: `listClasses()`, `getClass()` and `enrollInClass()`** on
+  Mindbody and Acuity, behind the new `classCatalog` / `classEnrollment` /
+  `classWaitlist` capability flags. A `ClassSession` is one scheduled occurrence
+  of a class — capacity, spots taken, waitlist counts and an authoritative
+  `full` flag; the class *definition* stays an ordinary `Service`.
+
+  ```ts
+  const { classes } = await client.listClasses!({ range });
+  const booking = await client.enrollInClass!({ classId: classes[0]!.id, customer });
+  await client.cancelBooking(booking.id);
+  ```
+
+  Enrolling returns an ordinary `Booking` carrying `classId`, so cancelling,
+  listing, retrying and paginating all reuse the booking lifecycle rather than a
+  parallel one. Providers with no group-class concept (Google, Outlook, Apple,
+  Square, Calendly, Microsoft Bookings and the rest) declare the flags false and
+  omit the methods.
+
+  `full` is deliberately not derived from `capacity - booked`: a provider can
+  report a class as closed while spots remain (cancelled, already started,
+  staff-only), and only its own flag knows.
+
+- **Conflict prevention on enrollment.** A full, cancelled or finished class
+  throws `CONFLICT` *before* the write, instead of surfacing whatever the
+  provider says after the fact. `allowWaitlist: true` joins the waitlist where
+  `capabilities.classWaitlist` is true (Mindbody), yielding
+  `status: 'waitlisted'`; where it is false (Acuity), a full class still throws
+  and the message says the provider has no waitlist.
+
 
 - **`listCalendars()` and the canonical `Calendar` type** on Google, Outlook and
   Apple (`capabilities.calendarList`). Each `Calendar.id` is exactly what that
@@ -145,6 +174,110 @@ All notable changes to this project are documented here. The format is based on
   app credentials once through environment variables (see
   `demo/.env.example`); without them the tab explains what is missing and the
   explorer tabs keep working.
+
+### Changed
+
+- **BREAKING — `Capabilities` gains the required `staffServiceAssignment`,
+  `serviceCategories` and `businessHours` fields.** Custom `defineAdapter`
+  consumers add all three as `false`; every shipped adapter declares them.
+
+- **BREAKING — `Capabilities` gains the required `classCatalog`,
+  `classEnrollment` and `classWaitlist` fields.** Only custom adapters built
+  with `defineAdapter` are affected: add all three as `false`. Every shipped
+  adapter already declares them.
+
+- **BREAKING — `BookingStatus` gains `'waitlisted'`.** The union widened, so an
+  exhaustive `switch` over booking statuses no longer compiles until the new arm
+  is handled. Only `enrollInClass` produces it.
+
+- `Booking` gains an optional `classId`, set only on class enrollments.
+
+
+
+- **Square now reports Appointments *plan* limits as `UNSUPPORTED` rather than
+  `AUTH`/`FORBIDDEN`.** Two Square failures are about the seller's subscription,
+  not their credentials, and both were observed live:
+
+  - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
+    Bookings call, when the seller has no Appointments subscription.
+  - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
+    on booking creates/updates/cancels, when the seller is on the **free**
+    Appointments plan. Availability search and booking reads still work.
+
+  Read literally those became `AUTH` and `FORBIDDEN` — two of the three codes
+  this library treats as "these credentials no longer work" — so a merchant on
+  the wrong plan would have a healthy integration torn down and be sent through
+  a re-auth that could not possibly fix it. Both now report `UNSUPPORTED`, with
+  a message naming the cause and the remedy. A genuinely bad or revoked token is
+  untouched and still reports `AUTH`.
+
+- `HttpConfig.parseError` may now return a canonical `code` to override the one
+  the HTTP status implies, for the cases where a provider's status is actively
+  misleading. Additive and optional — omitting it keeps the status-derived
+  default, so no other adapter changes behaviour.
+
+- **BREAKING — `Capabilities` gains the required `calendarList` field.** Only
+  custom adapters built with `defineAdapter` are affected: add
+  `calendarList: false` (or `true` alongside a `listCalendars` method). Every
+  shipped adapter already declares it.
+
+- **Outlook writes honor `range.timezone`.** When the zone resolves, `start`/`end`
+  are sent as wall-clock time plus that zone (Graph accepts IANA and Windows
+  names), so Outlook shows the event in the zone the user picked instead of
+  UTC. An unresolvable zone keeps the previous UTC write. Outlook event requests
+  also ask for plain-text bodies (`Prefer: outlook.body-content-type="text"`),
+  so `description` never carries Outlook's HTML wrapper.
+
+- `HttpRequest.onResponse` now also receives the response `url` (after
+  redirects, falling back to the requested URL). Additive.
+
+### Fixed
+
+- **Square catalog writes were broken outright.** `createService`,
+  `updateService` and `setServiceActive` read the upsert reply from `object`,
+  but Square's `UpsertCatalogObject` answers with `catalog_object` (only
+  `RetrieveCatalogObject` uses `object`). Every catalog write therefore threw
+  `UPSTREAM: catalog.object: expected an object, got undefined` *after* the
+  write had already succeeded upstream — so the service really was created or
+  edited, and the caller got an error and no id for it.
+
+  Caught by running the adapter against a live Square account. The unit tests
+  had mocked the upsert with the retrieve's envelope, so they passed against a
+  shape Square never returns; they now use the real one.
+
+- **Square `createService` produced services that could never be booked.**
+  Square's `team_member_ids` — the staff who perform a service — lives on the
+  catalog VARIATION, but `providerOptions` was spread onto the ITEM, so there was
+  no way to set it short of replacing the whole `variations` array. A service
+  created without it is accepted by the catalog and then rejected by every
+  availability search with "Search did not find a team member who performs the
+  selected service variation".
+
+  `team_member_ids` is now pulled out of `providerOptions` and routed to the
+  variation on both `createService` and `updateService` — the same treatment
+  `service_variation_version` already gets in `createBooking`.
+
+- **Square `Service.active` ignored `available_for_booking`.** It was derived
+  from `is_deleted` alone, while `setServiceActive` writes
+  `available_for_booking` — so the method contradicted itself:
+  `setServiceActive(id, false)` returned a Service still reporting
+  `active: true`, and `listServices` reported unbookable services as active.
+  Both now agree. A variation that omits the flag is unaffected.
+
+- **Square `customers.findOrCreate` could duplicate a customer.** Square's
+  customer search index is eventually consistent — a record created now is not
+  findable via `customers/search` for a second or two (measured live: a miss at
+  0.9s, a hit at 2.3s). Two calls for the same person inside that window both
+  missed the lookup and both created, leaving duplicate customers attached to
+  different bookings.
+
+  The create now carries an idempotency key derived from the identity being
+  deduped on (email, else phone), so Square collapses the repeat server-side
+  where the race actually is. Verified live: three *concurrent* `findOrCreate`
+  calls for one email now return a single customer id, which the previous
+  lookup-then-create could not do at all. A name-only customer deliberately
+  keeps a random key — "John Smith" is not an identity, and collapsing two
+  walk-ins of that name would attach a booking to the wrong person.
 
 ## [0.4.0] - 2026-08-12
 

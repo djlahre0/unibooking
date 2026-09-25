@@ -137,7 +137,11 @@ describe('oauth: token exchange', () => {
   });
 
   it('maps a rejected refresh token to AUTH and never echoes the secret', async () => {
-    const { fn } = stubFetch(401, {
+    // Google's real answer to a revoked or expired refresh token: HTTP 400, as
+    // RFC 6749 §5.2 prescribes for every token-endpoint error. Keyed on the
+    // status alone this was INVALID_INPUT, so a consumer could not tell "your
+    // user must reconnect" from "your request was malformed".
+    const { fn } = stubFetch(400, {
       error: 'invalid_grant',
       error_description: 'Token has been expired or revoked.',
     });
@@ -146,10 +150,41 @@ describe('oauth: token exchange', () => {
       .catch((e) => e);
 
     expect(err.code).toBe('AUTH');
+    expect(err.httpStatus).toBe(400);
     expect(err.providerCode).toBe('invalid_grant');
     expect(err.message).toContain('expired or revoked');
     // The request body carries the client secret; it must never reach the error.
     expect(err.message).not.toContain('secret-do-not-leak');
+  });
+
+  it('maps Microsoft re-sign-in errors to AUTH', async () => {
+    // Entra answers a refresh that now needs the user present (MFA, a
+    // conditional-access change) with 400 interaction_required.
+    const { fn } = stubFetch(400, {
+      error: 'interaction_required',
+      error_description:
+        'AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication.',
+      error_codes: [50076],
+      timestamp: '2026-09-22 10:00:00Z',
+      trace_id: 't',
+      correlation_id: 'c',
+    });
+    const err = await outlookOAuth({ ...CONFIG, fetch: fn })
+      .refresh('rt')
+      .catch((e) => e);
+    expect(err.code).toBe('AUTH');
+    expect(err.providerCode).toBe('interaction_required');
+  });
+
+  it('keeps a genuinely malformed token request as INVALID_INPUT', async () => {
+    const { fn } = stubFetch(400, {
+      error: 'invalid_request',
+      error_description: 'Missing required parameter: code',
+    });
+    const err = await googleOAuth({ ...CONFIG, fetch: fn })
+      .exchangeCode('')
+      .catch((e) => e);
+    expect(err.code).toBe('INVALID_INPUT');
   });
 
   it('throws UPSTREAM when a 200 carries no access_token', async () => {
@@ -345,6 +380,76 @@ describe('withAutoRefresh', () => {
     await (creds as any)();
     await (creds as any)();
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one in-flight refresh between concurrent resolutions', async () => {
+    // Two requests on one client (Promise.all over listBookings and
+    // searchAvailability) used to each spend the refresh token. With
+    // single-use refresh tokens (Calendly enforces rotation) the second
+    // refresh is refused and the connection looks revoked.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const refresh = vi.fn(async (): Promise<OAuthTokens> => {
+      await gate;
+      return {
+        accessToken: 'new-at',
+        refreshToken: 'rt2',
+        expiresAt: new Date(FIXED + 3600_000).toISOString(),
+        raw: {},
+      };
+    });
+    const onRefresh = vi.fn();
+    const creds = withAutoRefresh({
+      oauth: { provider: 'calendly', refresh } as unknown as OAuthClient,
+      tokens: {
+        accessToken: 'old',
+        refreshToken: 'rt',
+        expiresAt: new Date(FIXED).toISOString(),
+        raw: {},
+      },
+      onRefresh,
+      toCreds: (t) => ({ accessToken: t.accessToken }),
+      now: () => FIXED,
+    });
+
+    const pending = [(creds as any)(), (creds as any)(), (creds as any)()];
+    release();
+    expect(await Promise.all(pending)).toEqual([
+      { accessToken: 'new-at' },
+      { accessToken: 'new-at' },
+      { accessToken: 'new-at' },
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not remember a failed refresh', async () => {
+    let calls = 0;
+    const refresh = vi.fn(async (): Promise<OAuthTokens> => {
+      calls += 1;
+      if (calls === 1) throw new Error('token endpoint blip');
+      return {
+        accessToken: 'new-at',
+        expiresAt: new Date(FIXED + 3600_000).toISOString(),
+        raw: {},
+      };
+    });
+    const creds = withAutoRefresh({
+      oauth: { provider: 'google', refresh } as unknown as OAuthClient,
+      tokens: {
+        accessToken: 'old',
+        refreshToken: 'rt',
+        expiresAt: new Date(FIXED).toISOString(),
+        raw: {},
+      },
+      onRefresh: vi.fn(),
+      toCreds: (t) => ({ accessToken: t.accessToken }),
+      now: () => FIXED,
+    });
+
+    await expect((creds as any)()).rejects.toThrow('token endpoint blip');
+    expect(await (creds as any)()).toEqual({ accessToken: 'new-at' });
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 });
 

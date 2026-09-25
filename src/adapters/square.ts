@@ -1,4 +1,13 @@
-import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  Booking,
+  BookingStatus,
+  Customer,
+  HoursPeriod,
+  Service,
+  ServiceCategory,
+  Staff,
+  Weekday,
+} from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { sha256Hex } from '../crypto';
 import { UnibookingError, type ErrorCode } from '../errors';
@@ -353,6 +362,22 @@ async function upsertItem(
  * variation id, not the item id. Returning the item id would enumerate fine and
  * then fail at booking time with an opaque rejection.
  */
+/** Monday-first, matching `HoursPeriod` ordering and Square's own day codes. */
+const WEEKDAYS: Weekday[] = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
+/** Square sends `HH:MM:SS` (occasionally `HH:MM`); the canonical form is `HH:MM`.
+ *  Returns undefined for anything else so a malformed period is dropped rather
+ *  than emitted as a window nobody can place on a calendar. */
+function hhmm(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(v.trim());
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return undefined;
+  return `${m[1]}:${m[2]}`;
+}
+
 function itemToServices(raw: unknown): Service[] {
   const obj = asRecord(raw, 'square', 'catalog.item');
   const data = asRecord(obj.item_data ?? {}, 'square', 'catalog.item_data');
@@ -393,6 +418,16 @@ function itemToServices(raw: unknown): Service[] {
           // services as active. Compared against `false` rather than truth-
           // tested so a variation that simply omits the flag is unaffected.
           active: !deleted && variation.is_deleted !== true && vd.available_for_booking !== false,
+          // Square puts the staff link on the VARIATION, which is what
+          // `Service.id` already is -- so the two join up directly. Undefined
+          // when Square omits the field (it did not say), vs [] (it said none).
+          ...(Array.isArray(vd.team_member_ids)
+            ? {
+                staffIds: vd.team_member_ids.filter(
+                  (t: unknown): t is string => typeof t === 'string',
+                ),
+              }
+            : {}),
           // The owning item stays reachable for consumers that need to regroup.
           raw: { item: obj, variation },
         },
@@ -428,6 +463,15 @@ export const square = defineAdapter<SquareCredentials>({
     serviceCatalogWrite: true,
     staffDirectoryWrite: true,
     calendarList: false,
+    staffServiceAssignment: true,
+    serviceCategories: true,
+    businessHours: true,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -673,6 +717,60 @@ export const square = defineAdapter<SquareCredentials>({
       });
     },
 
+    async listCategories() {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        path: 'catalog/search-catalog-objects',
+        body: { object_types: ['CATEGORY'], include_deleted_objects: false },
+      });
+      const categories = asArray(res?.objects ?? [], 'square', 'catalog.objects').flatMap(
+        (raw): ServiceCategory[] => {
+          const o = asRecord(raw, 'square', 'catalog.category');
+          const data = asRecord(o.category_data ?? {}, 'square', 'catalog.category_data');
+          const id = typeof o.id === 'string' ? o.id : '';
+          const name = typeof data.name === 'string' ? data.name : '';
+          if (!id) return [];
+          return [{ id, name: name || id, provider: 'square' as const, raw: o }];
+        },
+      );
+      return {
+        categories,
+        ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+      };
+    },
+
+    async getBusinessHours() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: `locations/${encodeURIComponent(c.locationId)}` });
+      const location = asRecord(res?.location, 'square', 'location');
+      const hours = asRecord(location.business_hours ?? {}, 'square', 'location.business_hours');
+      const periods = asArray(hours.periods ?? [], 'square', 'business_hours.periods')
+        .flatMap((raw): HoursPeriod[] => {
+          const p = asRecord(raw, 'square', 'business_hours.period');
+          const day = WEEKDAYS.find((d) => d === String(p.day_of_week ?? '').toUpperCase());
+          const start = hhmm(p.start_local_time);
+          const end = hhmm(p.end_local_time);
+          // A period missing any of the three cannot be placed on a calendar;
+          // drop it rather than emit a half-formed window. It stays in `raw`.
+          if (!day || start === undefined || end === undefined) return [];
+          return [{ dayOfWeek: day, start, end }];
+        })
+        .sort(
+          (a, b) =>
+            WEEKDAYS.indexOf(a.dayOfWeek) - WEEKDAYS.indexOf(b.dayOfWeek) ||
+            a.start.localeCompare(b.start),
+        );
+      return {
+        provider: 'square' as const,
+        ...(typeof location.timezone === 'string' && location.timezone
+          ? { timezone: location.timezone }
+          : {}),
+        periods,
+        raw: location,
+      };
+    },
+
     async listServices(query) {
       const c = await http.resolve();
       const res = await http.request(c, {
@@ -687,7 +785,18 @@ export const square = defineAdapter<SquareCredentials>({
           ...(query?.pageToken ? { cursor: query.pageToken } : {}),
         },
       });
-      const services = asArray(res?.items, 'square', 'catalog.items').flatMap(itemToServices);
+      let services = asArray(res?.items, 'square', 'catalog.items').flatMap(itemToServices);
+      // Filtered here rather than upstream: search-catalog-items has no
+      // team-member filter, and its category filter keys on the ITEM while
+      // `Service.categoryId` is carried per variation.
+      if (query?.staffId) {
+        const want = query.staffId;
+        services = services.filter((sv) => sv.staffIds?.includes(want) ?? false);
+      }
+      if (query?.categoryId) {
+        const want = query.categoryId;
+        services = services.filter((sv) => sv.categoryId === want);
+      }
       return {
         services,
         ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
@@ -708,7 +817,25 @@ export const square = defineAdapter<SquareCredentials>({
           ...(query?.pageToken ? { cursor: query.pageToken } : {}),
         },
       });
-      const staff = asArray(res?.team_members, 'square', 'team_members').map(toStaff);
+      let staff = asArray(res?.team_members, 'square', 'team_members').map(toStaff);
+      if (query?.serviceId) {
+        // Square models the link on the catalog variation, not the team member,
+        // so answering "who performs this service" means reading it from there.
+        // One extra call, and only when the filter is actually used.
+        const svc = await http.request(c, {
+          path: `catalog/object/${enc(query.serviceId)}`,
+        });
+        const variation = asRecord(svc?.object ?? {}, 'square', 'catalog.object');
+        const vd = asRecord(
+          variation.item_variation_data ?? {},
+          'square',
+          'catalog.item_variation_data',
+        );
+        const ids = Array.isArray(vd.team_member_ids)
+          ? vd.team_member_ids.filter((t: unknown): t is string => typeof t === 'string')
+          : [];
+        staff = staff.filter((m) => ids.includes(m.id));
+      }
       return {
         staff,
         ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),

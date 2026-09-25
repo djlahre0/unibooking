@@ -13,6 +13,7 @@ export type ProviderId =
   | 'acuity'
   | 'mindbody'
   | 'bookeo'
+  | 'booker' // Mindbody Booker (booker.com) -- distinct from Bookeo
   | 'wix' // Wix Bookings (headless REST v2)
   | 'calendly'
   // gated / tier-2 providers implement the same interface, they just require
@@ -56,6 +57,42 @@ export interface Capabilities {
    *  and one picked to target. Plain calendar providers only — booking
    *  platforms have one schedule per business, not a list of calendars. */
   calendarList: boolean;
+  /** `listClasses()` / `getClass()` are available. False for every provider
+   *  with no group-class concept — the plain calendars (Google, Outlook,
+   *  Apple) have events, which carry no capacity or enrollment. */
+  classCatalog: boolean;
+  /** `enrollInClass()` is available. Distinct from `classCatalog` for the same
+   *  reason `serviceCatalogWrite` is distinct from `serviceCatalog`: a provider
+   *  can publish its schedule without letting third parties enroll into it. */
+  classEnrollment: boolean;
+  /** Services and staff carry each other's ids — `Service.staffIds` and/or
+   *  `Staff.serviceIds` — so a caller can tell who performs what without
+   *  guessing. Also enables the `staffId`/`serviceId` filters on the list
+   *  queries. */
+  staffServiceAssignment: boolean;
+  /** `listCategories()` is available: the catalog's own service groupings. */
+  serviceCategories: boolean;
+  /** `getBusinessHours()` is available: the recurring weekly opening hours of
+   *  the business or location. Distinct from availability, which answers "is
+   *  this specific slot bookable" — opening hours are the weekly pattern. */
+  businessHours: boolean;
+  /** A full class can be joined via `enrollInClass({ allowWaitlist: true })`,
+   *  yielding a booking with `status: 'waitlisted'`. When false, a full class
+   *  always throws `CONFLICT`. */
+  classWaitlist: boolean;
+  /** `syncBookings()` is available: what changed since the last sync, from a
+   *  sync token, instead of re-listing everything. */
+  changeFeed: boolean;
+  /** `watchBookings()` / `renewWatch()` / `stopWatch()` are available: the
+   *  provider notifies a URL you host when bookings change. Distinct from
+   *  `webhooks`, which says a signature verifier exists — a provider can sign
+   *  webhooks you configure in its dashboard without offering an API to
+   *  subscribe. */
+  changeNotifications: boolean;
+  /** `Booking.version` is reported, and `updateBooking` / `cancelBooking`
+   *  honour `ifVersion`: the write fails with `CONFLICT` instead of
+   *  overwriting a change made since the booking was read. */
+  versionedWrites: boolean;
 }
 
 /** An absolute time span. `start`/`end` are RFC3339 timestamps **with offset**
@@ -77,7 +114,17 @@ export interface Customer {
 }
 
 export type BookingStatus =
-  'confirmed' | 'pending' | 'cancelled' | 'declined' | 'no_show' | 'completed' | 'unknown';
+  | 'confirmed'
+  | 'pending'
+  | 'cancelled'
+  | 'declined'
+  | 'no_show'
+  | 'completed'
+  /** Enrolled onto a class waitlist rather than into the class itself. Only
+   *  produced by `enrollInClass({ allowWaitlist: true })` against a provider
+   *  whose `capabilities.classWaitlist` is true. */
+  | 'waitlisted'
+  | 'unknown';
 
 export interface Booking {
   id: string;
@@ -87,6 +134,10 @@ export interface Booking {
   customer?: Customer;
   staffId?: string;
   serviceId?: string;
+  /** Set when this booking is an enrollment in a group class — the
+   *  `ClassSession.id` it was created against. Only `enrollInClass` sets it;
+   *  ordinary appointments leave it unset. */
+  classId?: string;
   status: BookingStatus;
   createdAt?: string;
   updatedAt?: string;
@@ -99,6 +150,16 @@ export interface Booking {
    *  event's calendar dates, end exclusive (`2026-09-21T00:00:00Z` ..
    *  `2026-09-22T00:00:00Z` is the single day 21 Sep). */
   allDay?: boolean;
+  /** Set on one occurrence of a recurring series: the id that addresses the
+   *  whole series. `id` itself addresses only this occurrence — updating or
+   *  cancelling by `id` changes this one; by `seriesId`, all of them. Calendar
+   *  providers (google, outlook, apple) set it; booking platforms leave it
+   *  unset. */
+  seriesId?: string;
+  /** Opaque version of the booking as read (the provider's ETag). Pass it
+   *  back as `ifVersion` to write only if nothing changed since. Reported
+   *  where `capabilities.versionedWrites` is true. */
+  version?: string;
   /** Everything the provider returned that doesn't map to a canonical field.
    *  Always present so you never lose information. */
   raw: unknown;
@@ -151,6 +212,10 @@ export interface UpdateBookingInput {
    *  in the chosen form (same date rule as `CreateBookingInput.allDay`). When
    *  `range` is given without `allDay`, the event is written as timed. */
   allDay?: boolean;
+  /** A `Booking.version`: apply the update only if the booking still has it,
+   *  else throw `CONFLICT`. Requires `capabilities.versionedWrites`; other
+   *  providers throw `UNSUPPORTED` rather than write unguarded. */
+  ifVersion?: string;
   providerOptions?: Record<string, unknown>;
 }
 
@@ -158,6 +223,8 @@ export interface CancelOptions {
   reason?: string;
   /** Whether the provider should notify the customer. Provider default when omitted. */
   notify?: boolean;
+  /** Same as `UpdateBookingInput.ifVersion`. */
+  ifVersion?: string;
   /** Escape hatch for provider-specific cancel fields (e.g. Square's
    *  `booking_version` for optimistic concurrency). Shallow-merged into the
    *  outgoing request body, same role as `CreateBookingInput.providerOptions`. */
@@ -179,15 +246,105 @@ export interface ListBookingsResult {
   nextPageToken?: string;
 }
 
+// --- Change sync and notifications -------------------------------------------
+
+export interface SyncBookingsQuery {
+  /** The `syncToken` of the previous completed round. Omit for the first,
+   *  full sync — which returns every booking as an upsert. */
+  syncToken?: string;
+  /** Continue a round: the previous page's `nextPageToken`. Send the same
+   *  `syncToken` and `range` as the round's first page. */
+  pageToken?: string;
+  /** Window of the first full sync. Google applies it to the full sync only
+   *  (later rounds report changes anywhere); Outlook requires it and keeps it
+   *  for every round; Apple syncs the whole collection and ignores it. */
+  range?: TimeRange;
+}
+
+export type BookingChange =
+  | { type: 'upsert'; booking: Booking }
+  /** Gone: deleted, or cancelled where the provider drops cancelled events.
+   *  `id` is what `Booking.id` was. */
+  | { type: 'delete'; id: string };
+
+export interface SyncBookingsResult {
+  changes: BookingChange[];
+  /** More changes in this round: call again with it. */
+  nextPageToken?: string;
+  /** Round complete: store it and pass it as `syncToken` next time. */
+  syncToken?: string;
+  /** The `syncToken` was refused as expired or invalid. Discard what you
+   *  synced and start again with no `syncToken`. An expected answer, so it is
+   *  returned rather than thrown. */
+  fullSyncRequired?: boolean;
+}
+
+export interface WatchInput {
+  /** HTTPS URL of your notification endpoint. */
+  address: string;
+  /** A secret the provider echoes on every notification (Google
+   *  `X-Goog-Channel-Token`, Graph `clientState`); verify it with
+   *  `unibooking/webhooks/<id>`. Graph caps it at 128 characters. */
+  token: string;
+  /** Requested lifetime. Providers cap it (Graph: just under 7 days for
+   *  events) and may shorten it; read `Watch.expiresAt` for the real end.
+   *  Default: 7 days, or the provider's cap if lower. */
+  ttlSeconds?: number;
+  /** Graph only: HTTPS URL for lifecycle notifications
+   *  (`reauthorizationRequired`, `subscriptionRemoved`, `missed`). */
+  lifecycleAddress?: string;
+}
+
+/** An active change subscription. Store it: renewing and stopping need it. */
+export interface Watch {
+  /** Google channel id / Graph subscription id. */
+  id: string;
+  provider: ProviderId;
+  /** Google's `resourceId`, needed to stop the channel. */
+  resourceId?: string;
+  /** When notifications stop unless renewed. RFC3339. */
+  expiresAt?: string;
+  raw: unknown;
+}
+
 export interface AvailabilityQuery {
   range: TimeRange;
   serviceId?: string;
   staffId?: string;
   durationMinutes?: number;
+  // --- Slot rules --------------------------------------------------------
+  // Honored by the providers that derive slots from busy time themselves
+  // (google, outlook). Booking platforms compute slots server-side from their
+  // own configured rules, so they ignore these, like `description` on a
+  // booking. `computeSlots` applies the same rules to data you combine yourself.
+  /** Minutes between candidate starts (a 30-minute service on a 15-minute grid
+   *  can start at :00, :15, :30, :45). Default: back-to-back slots of
+   *  `durationMinutes`. */
+  intervalMinutes?: number;
+  /** Only offer slots inside these weekly hours — the staff member's schedule
+   *  or the business's opening hours (`getBusinessHours()` returns this shape).
+   *  Without it, any free time in `range` is offered, including the night. */
+  workingHours?: WorkingHours;
+  /** Free time required before each slot (travel, preparation). */
+  bufferBeforeMinutes?: number;
+  /** Free time required after each slot (cleanup). */
+  bufferAfterMinutes?: number;
+  /** Do not offer slots starting sooner than this many minutes from now. Slots
+   *  that have already started are never offered. */
+  minNoticeMinutes?: number;
   /** Escape hatch for provider-specific availability inputs (e.g. Zenoti's
    *  `guestId`, whose slots are booking-scoped). Same role as
    *  `CreateBookingInput.providerOptions`. */
   providerOptions?: Record<string, unknown>;
+}
+
+/** Recurring weekly hours, anchored in a zone — a staff schedule or opening
+ *  hours. `BusinessHours` from `getBusinessHours()` fits whenever it carries a
+ *  timezone. */
+export interface WorkingHours {
+  /** IANA zone the periods are wall-clock times in. */
+  timezone: string;
+  periods: HoursPeriod[];
 }
 
 export interface AvailabilitySlot {
@@ -221,6 +378,10 @@ export interface Service {
   price?: Money;
   categoryId?: string;
   categoryName?: string;
+  /** Staff who can perform this service, as `Staff.id` values. Present only
+   *  where `capabilities.staffServiceAssignment` is true. An empty array means
+   *  the provider said "nobody"; undefined means it did not say. */
+  staffIds?: string[];
   /** False only when the provider explicitly says so; true when it has no
    *  active/inactive concept (everything it returns is bookable). */
   active: boolean;
@@ -234,10 +395,137 @@ export interface Staff {
   email?: string;
   phone?: string;
   active: boolean;
+  /** Services this member can perform, as `Service.id` values. Present only
+   *  where `capabilities.staffServiceAssignment` is true, and only on the
+   *  providers that report it from the staff side — several model the link on
+   *  the service instead, where it surfaces as `Service.staffIds`. */
+  serviceIds?: string[];
   raw: unknown;
 }
 
+/** A grouping of services, as the provider's own catalog defines it. */
+export interface ServiceCategory {
+  /** Matches `Service.categoryId`. Providers with no category *id* (Acuity
+   *  names them only) use the name here, so the two still join up. */
+  id: string;
+  name: string;
+  provider: ProviderId;
+  raw: unknown;
+}
+
+export interface ListCategoriesResult {
+  categories: ServiceCategory[];
+  nextPageToken?: string;
+}
+
+// --- Business hours --------------------------------------------------------
+// When the business is open, as recurring weekly wall-clock windows. These are
+// NOT instants: "09:00 on Monday" repeats every week and only becomes a moment
+// once anchored in `timezone` on a specific date (see `zonedToInstant`).
+
+export type Weekday = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN';
+
+export interface HoursPeriod {
+  dayOfWeek: Weekday;
+  /** Local wall-clock `HH:MM` (24h) in `BusinessHours.timezone`. */
+  start: string;
+  /** Local wall-clock `HH:MM`. May be less than or equal to `start` for a
+   *  window that runs past midnight — compare dates, not strings. */
+  end: string;
+}
+
+export interface BusinessHours {
+  provider: ProviderId;
+  /** IANA zone the periods are expressed in, when the provider reports one.
+   *  Without it the periods cannot be anchored to real instants, so treat them
+   *  as display-only. */
+  timezone?: string;
+  /** Sorted Monday-first, then by start time. A day the business is closed
+   *  simply has no period; several periods on one day mean a split shift. */
+  periods: HoursPeriod[];
+  raw: unknown;
+}
+
+// --- Group classes ---------------------------------------------------------
+// Providers split a class in two: the *definition* ("Vinyasa Flow", 60 min) and
+// the scheduled *occurrence* ("Tuesday 6pm, 12 of 20 taken"). `Service` already
+// models the definition, so only the occurrence is new here.
+
+export type ClassStatus = 'scheduled' | 'cancelled' | 'completed' | 'unknown';
+
+/** One scheduled occurrence of a group class. */
+export interface ClassSession {
+  /** The id that `EnrollInClassInput.classId` accepts for this provider. */
+  id: string;
+  provider: ProviderId;
+  /** The class definition this occurrence belongs to, where the provider
+   *  exposes one as a catalog entry. Matches a `Service.id`. */
+  serviceId?: string;
+  title: string;
+  description?: string;
+  range: TimeRange;
+  /** Instructor. Matches a `Staff.id`. */
+  staffId?: string;
+  location?: string;
+  /** Total spots. Undefined when the provider does not cap the class or does
+   *  not report the cap. */
+  capacity?: number;
+  /** Spots already taken. */
+  booked?: number;
+  /** `capacity - booked`, floored at 0. Undefined when either input is. */
+  available?: number;
+  /** Whether the class can still be enrolled into. Deliberately NOT derived
+   *  from `available`: several providers report bookability without exposing
+   *  either number, so arithmetic would be wrong exactly when it matters. */
+  full: boolean;
+  status: ClassStatus;
+  /** Total waitlist spots, when the provider has a waitlist at all. */
+  waitlistCapacity?: number;
+  waitlistCount?: number;
+  price?: Money;
+  raw: unknown;
+}
+
+export interface ListClassesQuery {
+  /** Return occurrences overlapping this window. Providers that require a
+   *  window get a provider-specific default when this is omitted. */
+  range?: TimeRange;
+  /** Only classes taught by this instructor. */
+  staffId?: string;
+  /** Only occurrences of this class definition. */
+  serviceId?: string;
+  /** Maximum entries to return. Same terminal-page backstop as
+   *  `listServices` — see `ListServicesQuery.limit`. */
+  limit?: number;
+  /** Opaque, provider-defined. Pass the previous result's `nextPageToken`. */
+  pageToken?: string;
+}
+
+export interface ListClassesResult {
+  classes: ClassSession[];
+  nextPageToken?: string;
+}
+
+export interface EnrollInClassInput {
+  /** A `ClassSession.id`. */
+  classId: string;
+  customer: Customer;
+  /** When the class is full, join the waitlist instead of throwing. Requires
+   *  `capabilities.classWaitlist`; without it a full class throws `CONFLICT`
+   *  whatever this says. Defaults to false. */
+  allowWaitlist?: boolean;
+  /** Honored when `capabilities.idempotency` is true. */
+  idempotencyKey?: string;
+  notes?: string;
+}
+
 export interface ListServicesQuery {
+  /** Only services this staff member can perform. Requires
+   *  `capabilities.staffServiceAssignment`; ignored by providers without it,
+   *  since they cannot answer the question. */
+  staffId?: string;
+  /** Only services in this category (a `ServiceCategory.id`). */
+  categoryId?: string;
   /** Maximum entries to return. Forwarded to providers that support a page
    *  size; for the several that do not, the page is trimmed locally instead —
    *  but only when it is the LAST page, since trimming a page that carries a
@@ -253,6 +541,9 @@ export interface ListServicesResult {
 }
 
 export interface ListStaffQuery {
+  /** Only staff who can perform this service (a `Service.id`). Requires
+   *  `capabilities.staffServiceAssignment`; ignored by providers without it. */
+  serviceId?: string;
   /** Same semantics as `ListServicesQuery.limit`. */
   limit?: number;
   pageToken?: string;
@@ -396,6 +687,37 @@ export interface BookingClient {
   listStaff?(query?: ListStaffQuery): Promise<ListStaffResult>;
   /** Present when `capabilities.calendarList` is true. */
   listCalendars?(query?: ListCalendarsQuery): Promise<ListCalendarsResult>;
+  /** Present when `capabilities.serviceCategories` is true. */
+  listCategories?(): Promise<ListCategoriesResult>;
+  /** Present when `capabilities.businessHours` is true. */
+  getBusinessHours?(): Promise<BusinessHours>;
+  /** Present when `capabilities.classCatalog` is true. */
+  listClasses?(query?: ListClassesQuery): Promise<ListClassesResult>;
+  /** Present when `capabilities.classCatalog` is true. */
+  getClass?(id: string): Promise<ClassSession>;
+  /** What changed since the last sync. Present when `capabilities.changeFeed`
+   *  is true. */
+  syncBookings?(query?: SyncBookingsQuery): Promise<SyncBookingsResult>;
+  /** Ask the provider to notify `input.address` when bookings change. Present
+   *  when `capabilities.changeNotifications` is true. */
+  watchBookings?(input: WatchInput): Promise<Watch>;
+  /** Extend a watch before `expiresAt`. Returns the watch to store from now on
+   *  — Google replaces the channel (new `id`), Graph extends the subscription.
+   *  Pass the same `input` the watch was created with. */
+  renewWatch?(watch: Watch, input: WatchInput): Promise<Watch>;
+  /** Stop notifications. A watch that already ended is not an error. */
+  stopWatch?(watch: Watch): Promise<void>;
+  /** Enroll a customer into a group class. Present when
+   *  `capabilities.classEnrollment` is true.
+   *
+   *  Returns an ordinary `Booking` carrying `classId`, so cancelling an
+   *  enrollment is just `cancelBooking(booking.id)` and enrollments show up in
+   *  `listBookings` alongside appointments — there is deliberately no parallel
+   *  enrollment lifecycle to keep in sync.
+   *
+   *  Throws `CONFLICT` when the class is full and the waitlist is either not
+   *  requested or not supported. */
+  enrollInClass?(input: EnrollInClassInput): Promise<Booking>;
 
   // --- Writes. Present when the matching `*Write` capability is true. --------
   //

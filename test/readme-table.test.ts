@@ -11,6 +11,7 @@ import { calendly } from '../src/adapters/calendly';
 import { wix } from '../src/adapters/wix';
 import { acuity } from '../src/adapters/acuity';
 import { bookeo } from '../src/adapters/bookeo';
+import { booker } from '../src/adapters/booker';
 import { mindbody } from '../src/adapters/mindbody';
 import { setmore } from '../src/adapters/setmore';
 import { vagaro } from '../src/adapters/vagaro';
@@ -40,6 +41,7 @@ const ROWS: Array<[string, { id: ProviderId; capabilities: Capabilities }]> = [
   ['Wix Bookings', wix],
   ['Acuity', acuity],
   ['Bookeo', bookeo],
+  ['Booker', booker],
   ['Mindbody', mindbody],
   ['Setmore', setmore],
   ['Vagaro', vagaro],
@@ -49,7 +51,7 @@ const ROWS: Array<[string, { id: ProviderId; capabilities: Capabilities }]> = [
   ['Boulevard', boulevard],
 ];
 
-// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars |
+// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars | Classes | Assign | Categories | Hours | Sync | Push | Versions |
 // Enumeration columns are appended rather than inserted so the existing indices
 // stay put — a shifted index here silently checks the wrong column.
 const COLUMNS: Array<[keyof Capabilities, number]> = [
@@ -63,6 +65,13 @@ const COLUMNS: Array<[keyof Capabilities, number]> = [
   ['serviceCatalogWrite', 11],
   ['staffDirectoryWrite', 12],
   ['calendarList', 13],
+  ['classCatalog', 14],
+  ['staffServiceAssignment', 15],
+  ['serviceCategories', 16],
+  ['businessHours', 17],
+  ['changeFeed', 18],
+  ['changeNotifications', 19],
+  ['versionedWrites', 20],
 ];
 
 const YES = '✅';

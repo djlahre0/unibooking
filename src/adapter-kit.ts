@@ -7,6 +7,7 @@ import type {
   CredsInput,
   CustomerOps,
   ListCalendarsQuery,
+  ListClassesQuery,
   ListServicesQuery,
   ListStaffQuery,
   ProviderCredentials,
@@ -29,6 +30,15 @@ export interface AdapterMethods {
   listServices?: NonNullable<BookingClient['listServices']>;
   listStaff?: NonNullable<BookingClient['listStaff']>;
   listCalendars?: NonNullable<BookingClient['listCalendars']>;
+  listCategories?: NonNullable<BookingClient['listCategories']>;
+  getBusinessHours?: NonNullable<BookingClient['getBusinessHours']>;
+  listClasses?: NonNullable<BookingClient['listClasses']>;
+  getClass?: NonNullable<BookingClient['getClass']>;
+  enrollInClass?: NonNullable<BookingClient['enrollInClass']>;
+  syncBookings?: NonNullable<BookingClient['syncBookings']>;
+  watchBookings?: NonNullable<BookingClient['watchBookings']>;
+  renewWatch?: NonNullable<BookingClient['renewWatch']>;
+  stopWatch?: NonNullable<BookingClient['stopWatch']>;
   createService?: NonNullable<BookingClient['createService']>;
   updateService?: NonNullable<BookingClient['updateService']>;
   setServiceActive?: NonNullable<BookingClient['setServiceActive']>;
@@ -45,8 +55,17 @@ export interface AdapterDef<TCreds extends ProviderCredentials> {
   auth: AuthFn<TCreds>;
   requestIdHeader?: string;
   parseError?: HttpConfig<TCreds>['parseError'];
-  /** Build the method implementations against a ready HTTP context. */
-  build: (http: HttpContext<TCreds>) => AdapterMethods;
+  /** Build the method implementations against a ready HTTP context. `env`
+   *  carries the client's clock (`ClientOptions.now`), for adapters whose
+   *  answer depends on the current time — never read `Date.now()` directly,
+   *  or tests cannot pin it. */
+  build: (http: HttpContext<TCreds>, env: AdapterEnv) => AdapterMethods;
+}
+
+/** What an adapter may read about the client it is building for. */
+export interface AdapterEnv {
+  /** Epoch milliseconds, from `ClientOptions.now` when given. */
+  now(): number;
 }
 
 /** Wire an adapter definition into a callable `AdapterFactory`. */
@@ -63,14 +82,24 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       ...(def.requestIdHeader !== undefined ? { requestIdHeader: def.requestIdHeader } : {}),
       ...(def.parseError !== undefined ? { parseError: def.parseError } : {}),
     });
-    const m = def.build(http);
+    const clock = options?.now;
+    const m = def.build(http, { now: () => (clock ? clock().getTime() : Date.now()) });
     return {
       id: def.id,
       capabilities: def.capabilities,
       createBooking: m.createBooking,
       getBooking: m.getBooking,
-      updateBooking: m.updateBooking,
-      cancelBooking: m.cancelBooking,
+      // A version guard the provider cannot enforce must not be dropped: the
+      // caller asked for "only if unchanged", and writing anyway is exactly
+      // the lost update they were guarding against.
+      updateBooking: async (id, input) => {
+        if (input.ifVersion !== undefined) assertVersioned(def);
+        return m.updateBooking(id, input);
+      },
+      cancelBooking: async (id, options) => {
+        if (options?.ifVersion !== undefined) assertVersioned(def);
+        return m.cancelBooking(id, options);
+      },
       // `ListBookingsQuery.status` is documented without caveat, but most
       // providers have no status filter to forward it to — Google, Square,
       // Mindbody, Setmore, Acuity and Vagaro all returned cancelled bookings
@@ -125,6 +154,22 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
             },
           }
         : {}),
+      ...(m.listClasses
+        ? {
+            listClasses: async (query?: ListClassesQuery) => {
+              const result = await m.listClasses!(query);
+              return capPage(result, 'classes', query?.limit);
+            },
+          }
+        : {}),
+      ...(m.listCategories ? { listCategories: m.listCategories } : {}),
+      ...(m.getBusinessHours ? { getBusinessHours: m.getBusinessHours } : {}),
+      ...(m.getClass ? { getClass: m.getClass } : {}),
+      ...(m.enrollInClass ? { enrollInClass: m.enrollInClass } : {}),
+      ...(m.syncBookings ? { syncBookings: m.syncBookings } : {}),
+      ...(m.watchBookings ? { watchBookings: m.watchBookings } : {}),
+      ...(m.renewWatch ? { renewWatch: m.renewWatch } : {}),
+      ...(m.stopWatch ? { stopWatch: m.stopWatch } : {}),
       ...(m.createService ? { createService: m.createService } : {}),
       ...(m.updateService ? { updateService: m.updateService } : {}),
       ...(m.setServiceActive ? { setServiceActive: m.setServiceActive } : {}),
@@ -135,6 +180,16 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
     };
   };
   return Object.assign(impl, { id: def.id, capabilities: def.capabilities });
+}
+
+function assertVersioned(def: { id: ProviderId; capabilities: Capabilities }): void {
+  if (!def.capabilities.versionedWrites) {
+    throw new UnibookingError({
+      provider: def.id,
+      code: 'UNSUPPORTED',
+      message: `${def.id} does not support ifVersion (no versioned writes)`,
+    });
+  }
 }
 
 /**

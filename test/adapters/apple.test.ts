@@ -245,10 +245,14 @@ describe('apple: update does GET then PUT', () => {
       '2026-07-13T09:00:00Z',
       '2026-07-20T09:00:00Z',
     ]);
-    // All occurrences of one resource share its re-fetchable id (the href name);
-    // they are told apart by their distinct per-week start.
-    expect(bookings.every((b) => b.id === 'series-weekly')).toBe(true);
-    expect(new Set(bookings.map((b) => b.range.start)).size).toBe(bookings.length);
+    // Each occurrence is addressable on its own (resource + original start),
+    // and names the series resource it belongs to.
+    expect(bookings.map((b) => b.id)).toEqual([
+      'series-weekly::20260706T090000Z',
+      'series-weekly::20260713T090000Z',
+      'series-weekly::20260720T090000Z',
+    ]);
+    expect(bookings.every((b) => b.seriesId === 'series-weekly')).toBe(true);
     // raw stays the honest master (still carries the RRULE) — there is no
     // per-occurrence server payload to attribute to each instance.
     expect(bookings.every((b) => String(b.raw).includes('RRULE:FREQ=WEEKLY'))).toBe(true);
