@@ -22,7 +22,7 @@ import {
 } from '../../lib/calendar/types';
 import Agenda from './Agenda';
 import CalendarList from './CalendarList';
-import ConnectCards from './ConnectCards';
+import { NoCalendarConnected, SetupNotice } from './CalendarEmptyStates';
 import CopyField from './CopyField';
 import EventDetails from './EventDetails';
 import EventForm from './EventForm';
@@ -157,7 +157,7 @@ function remember(provider: CalendarProvider, id: string): void {
   }
 }
 
-export default function CalendarTab() {
+export default function CalendarTab({ onOpenConnect }: { onOpenConnect?: () => void } = {}) {
   const [status, setStatus] = useState<CalendarStatus | null>(null);
   const [banner, setBanner] = useState<Banner | null>(bannerFromUrl);
   const [calendars, setCalendars] = useState<Calendar[]>([]);
@@ -374,23 +374,18 @@ export default function CalendarTab() {
   }
 
   if (!connection || !provider) {
+    // This tab is the user's own calendar, so with nothing connected there is
+    // nothing to show. Provider cards and OAuth app setup both live on the
+    // Connect tab -- one place to connect anything, rather than two that
+    // drift apart.
     return (
       <div className="fade-in">
         {bannerView}
-        <ConnectCards
-          status={status}
-          onConnected={() => {
-            setBanner({ kind: 'success', text: `Connected to ${PROVIDER_LABELS.apple}.` });
-            void loadStatus();
-          }}
-          onAppSaved={(provider) => {
-            setBanner({
-              kind: 'success',
-              text: `${PROVIDER_LABELS[provider]} sign-in is now set up for this deployment.`,
-            });
-            void loadStatus();
-          }}
-        />
+        {!status.enabled ? (
+          <SetupNotice {...(status.problem ? { problem: status.problem } : {})} />
+        ) : (
+          <NoCalendarConnected {...(onOpenConnect ? { onOpenConnect } : {})} />
+        )}
       </div>
     );
   }

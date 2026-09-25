@@ -7,7 +7,7 @@ import {
   isUnibookingError,
   UnibookingError,
 } from 'unibooking';
-import type { ProviderId } from 'unibooking';
+import type { Capabilities, ProviderId } from 'unibooking';
 
 /* ── Webhook verifiers (pure crypto — run client-side) ── */
 import { verifySquareSignature } from 'unibooking/webhooks/square';
@@ -86,6 +86,14 @@ export async function getCapabilities(providerId: string): Promise<ActionResult>
   }
   const adapter = ADAPTERS[providerId];
   return { ok: true, data: { id: adapter.id, capabilities: adapter.capabilities } };
+}
+
+/** Capabilities for a provider, synchronously — tabs gate their UI on these
+ *  before any call is made. Returns null for an unknown id. */
+export function providerCapabilities(providerId: string): Capabilities | null {
+  if (isLocal(providerId)) return SAMPLE_CAPABILITIES;
+  if (!Object.hasOwn(ADAPTERS, providerId)) return null;
+  return ADAPTERS[providerId].capabilities;
 }
 
 export async function demoRegistry(): Promise<ActionResult> {
@@ -304,10 +312,60 @@ export function callCheckConnection(providerId: string, conn: Connection): Promi
   return run(providerId, conn, 'checkConnection', {});
 }
 
+export function callListCategories(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'listCategories', {});
+}
+
+export function callGetBusinessHours(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'getBusinessHours', {});
+}
+
+export function callListCalendars(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'listCalendars', {});
+}
+
+export function callListClasses(
+  providerId: string,
+  conn: Connection,
+  query: {
+    start?: string;
+    end?: string;
+    staffId?: string;
+    serviceId?: string;
+    limit?: number;
+  } = {},
+): Promise<ActionResult> {
+  return run(providerId, conn, 'listClasses', query);
+}
+
+export function callGetClass(
+  providerId: string,
+  conn: Connection,
+  classId: string,
+): Promise<ActionResult> {
+  return run(providerId, conn, 'getClass', { classId });
+}
+
+export function callEnrollInClass(
+  providerId: string,
+  conn: Connection,
+  args: {
+    classId: string;
+    customerId?: string;
+    customerName?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    allowWaitlist?: boolean;
+    notes?: string;
+  },
+): Promise<ActionResult> {
+  return run(providerId, conn, 'enrollInClass', args);
+}
+
 export function callListServices(
   providerId: string,
   conn: Connection,
-  query: { limit?: number; pageToken?: string } = {},
+  query: { limit?: number; pageToken?: string; staffId?: string; categoryId?: string } = {},
 ): Promise<ActionResult> {
   return run(providerId, conn, 'listServices', query);
 }
@@ -315,7 +373,7 @@ export function callListServices(
 export function callListStaff(
   providerId: string,
   conn: Connection,
-  query: { limit?: number; pageToken?: string } = {},
+  query: { limit?: number; pageToken?: string; serviceId?: string } = {},
 ): Promise<ActionResult> {
   return run(providerId, conn, 'listStaff', query);
 }

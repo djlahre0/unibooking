@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ConnectPanel from './ConnectPanel';
@@ -7,6 +7,7 @@ import * as api from '../lib/calendar/api';
 import type { CalendarStatus } from '../lib/calendar/types';
 
 const saveOAuthApp = vi.mocked(api.saveOAuthApp);
+const resetOAuthApp = vi.mocked(api.resetOAuthApp);
 
 // ConnectPanel only calls connectUrl (pure, reproduced here), disconnect (a
 // POST) and saveOAuthApp (the operator's one-time OAuth app setup, localhost
@@ -16,13 +17,26 @@ vi.mock('../lib/calendar/api', () => ({
   connectUrl: (p: string) => `/api/calendar/connect/${p}`,
   disconnect: vi.fn().mockResolvedValue({ ok: true, data: { disconnected: true } }),
   saveOAuthApp: vi.fn().mockResolvedValue({ ok: true, data: { saved: true } }),
+  // Apple's connect form and the operator's reset both live on this tab now:
+  // My Calendar shows only already-connected calendars.
+  connectApple: vi.fn().mockResolvedValue({ ok: true, data: { connected: true } }),
+  resetOAuthApp: vi.fn().mockResolvedValue({ ok: true, data: { reset: true } }),
 }));
 
 // vitest.config.ts runs without `globals: true`, so cleanup is not automatic
 // between tests in this file (see EventForm.test.tsx / CalendarTab.test.tsx
 // for the same pattern) -- without it, the sample provider's chip stays
 // "selected" in the DOM from an earlier test and pollutes later assertions.
-afterEach(cleanup);
+// restoreAllMocks clears the module factory's implementations too, so the
+// defaults are re-armed per test rather than set once at import.
+beforeEach(() => {
+  saveOAuthApp.mockReset().mockResolvedValue({ ok: true, data: { saved: true } });
+  resetOAuthApp.mockReset().mockResolvedValue({ ok: true, data: { reset: true } });
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const base = {
   onSelectProvider: () => {},
@@ -226,6 +240,31 @@ describe('ConnectPanel: operator OAuth app setup', () => {
     await waitFor(() => expect(onCalendarConfigChanged).toHaveBeenCalledOnce());
   });
 
+  it('never re-renders the client secret after saving it', async () => {
+    // Relocated here when My Calendar stopped offering OAuth app setup: this
+    // is the security property of that form, and it must not have moved out
+    // of coverage along with the form itself. The secret travels in the POST
+    // body and must never come back out into rendered text.
+    const secret = 'super-secret-value-9f3-not-a-real-secret';
+    saveOAuthApp.mockResolvedValue({ ok: true, data: { saved: true } });
+    render(
+      <ConnectPanel
+        {...base}
+        selectedProvider="google"
+        calendarStatus={{ ...googleNotConfigured, isLocalhost: true }}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText(/client id/i), 'my-client-id');
+    await userEvent.type(screen.getByLabelText(/client secret/i), secret);
+    await userEvent.click(screen.getByRole('button', { name: /save google app/i }));
+
+    expect(saveOAuthApp).toHaveBeenLastCalledWith('google', 'my-client-id', secret, '');
+    await waitFor(() => expect(screen.queryByText(secret)).toBeNull());
+    // Not merely absent from text -- absent from the DOM the user could read
+    // back, including any value attribute left behind on the input.
+    expect(document.body.innerHTML).not.toContain(secret);
+  });
+
   it('passes an empty tenant when left blank -- saveOAuthApp (api.ts) then omits it from the request body entirely', async () => {
     render(
       <ConnectPanel
@@ -255,8 +294,24 @@ describe('ConnectPanel: "Advanced" disclosure', () => {
   });
 
   it('shows a provider with no advanced fields exactly as before -- no empty disclosure', () => {
-    render(<ConnectPanel {...base} selectedProvider="acuity" />);
+    // Bookeo, not Acuity: every Bookeo credential is required, so there is
+    // genuinely nothing to put behind the disclosure. Acuity used to serve as
+    // this example and no longer can -- see the next test.
+    render(<ConnectPanel {...base} selectedProvider="bookeo" />);
     expect(screen.queryByText('Advanced')).toBeNull();
+  });
+
+  it("puts Acuity's optional currency behind the disclosure", () => {
+    // AcuityCredentials has `currency?`, which the demo's own hand-written
+    // field list omitted entirely. Deriving the fields from the library
+    // schema surfaced it, and optional means Advanced -- so it is offered
+    // without crowding the two fields that are actually required.
+    render(<ConnectPanel {...base} selectedProvider="acuity" />);
+    expect(screen.getByText('Advanced')).toBeDefined();
+    expect(screen.getByLabelText(/currency/i)).toBeDefined();
+    // The required pair stays up front.
+    expect(screen.getByLabelText(/user id/i)).toBeDefined();
+    expect(screen.getByLabelText(/api key/i)).toBeDefined();
   });
 });
 
@@ -289,5 +344,186 @@ describe('TrustBanner: the security claim is accurate in every state', () => {
     render(<ConnectPanel {...base} selectedProvider="sample" />);
     expect(screen.getByText(/never leaves this browser/i)).toBeDefined();
     expect(screen.getByText(/no account needed/i)).toBeDefined();
+  });
+});
+
+describe('every provider is selectable in the Connect picker', () => {
+  it('renders a chip for all 18 providers, Bookeo and Booker included', () => {
+    render(<ConnectPanel {...base} selectedProvider="" />);
+    // A provider missing from PROVIDER_META silently vanishes here, however
+    // complete its adapter is — which is exactly how "Bookeo is missing" would
+    // look to a visitor.
+    const chips = screen.getAllByRole('button').map((b) => b.textContent?.trim());
+    for (const label of [
+      'Bookeo',
+      'Booker',
+      'Google Calendar',
+      'Outlook / M365',
+      'MS Bookings',
+      'Square',
+      'Acuity',
+      'Mindbody',
+      'Wix Bookings',
+      'Calendly',
+      'Vagaro',
+      'Zenoti',
+      'Boulevard',
+      'Phorest',
+      'Setmore',
+      'Mangomint',
+      'Apple / CalDAV',
+      'Sample Data',
+    ]) {
+      expect(chips, `${label} chip is missing from the picker`).toContain(label);
+    }
+  });
+
+  it('shows Bookeo its two credential fields once selected', () => {
+    render(<ConnectPanel {...base} selectedProvider="bookeo" />);
+    expect(screen.getByText(/Connect Bookeo/i)).toBeTruthy();
+    expect(screen.getByLabelText(/API Key/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Secret Key/i)).toBeTruthy();
+  });
+
+  it('puts the persistence bar above the steps, not buried inside one', () => {
+    // What this browser has saved belongs before anything is typed into it.
+    // DOCUMENT_POSITION_FOLLOWING: steps come after the bar.
+    const { container } = render(
+      <ConnectPanel {...base} selectedProvider="bookeo">
+        <div data-testid="persistence-slot" />
+      </ConnectPanel>,
+    );
+    const bar = screen.getByTestId('persistence-slot');
+    const steps = container.querySelector('.connect-steps');
+    expect(steps).toBeTruthy();
+    expect(bar.compareDocumentPosition(steps!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(steps!.contains(bar)).toBe(false);
+  });
+
+  it('renders the persistence bar for the sample provider too', () => {
+    // It used to sit inside the non-local branch, so the sample provider --
+    // whose data really is in localStorage -- never got a clear-all.
+    render(
+      <ConnectPanel {...base} selectedProvider="sample">
+        <div data-testid="persistence-slot" />
+      </ConnectPanel>,
+    );
+    expect(screen.getByTestId('persistence-slot')).toBeTruthy();
+  });
+});
+
+const appleAvailable: CalendarStatus = {
+  enabled: true,
+  providers: { google: false, outlook: false, apple: true },
+  isLocalhost: false,
+  connection: null,
+};
+
+describe('ConnectPanel: Apple', () => {
+  it('offers the app-specific-password form, since Apple has no OAuth to offer instead', () => {
+    render(<ConnectPanel {...base} selectedProvider="apple" calendarStatus={appleAvailable} />);
+    expect(screen.getByLabelText('Apple ID')).toBeDefined();
+    expect(screen.getByLabelText('App-specific password')).toBeDefined();
+    expect(screen.getByRole('button', { name: /connect icloud/i })).toBeDefined();
+  });
+
+  // Moved here with the form itself. Regression test for the autofill
+  // cross-contamination bug: the browser's password manager was filling
+  // Google's client ID into Apple's fields because they shared generic
+  // name/id attributes and opted into saved-credential offers.
+  it('gives the Apple fields their own name/id and opts the password out of autofill', () => {
+    render(<ConnectPanel {...base} selectedProvider="apple" calendarStatus={appleAvailable} />);
+    const appleId = screen.getByLabelText('Apple ID') as HTMLInputElement;
+    const password = screen.getByLabelText('App-specific password') as HTMLInputElement;
+    expect(appleId.name).toBe('apple-appleid');
+    expect(appleId.getAttribute('autocomplete')).toBe('off');
+    expect(password.name).toBe('apple-password');
+    expect(password.getAttribute('autocomplete')).toBe('new-password');
+    expect(password.type).toBe('password');
+  });
+
+  it('offers nothing once Apple is already connected', () => {
+    render(
+      <ConnectPanel
+        {...base}
+        selectedProvider="apple"
+        calendarStatus={{
+          ...appleAvailable,
+          connection: { provider: 'apple', account: { email: 'pat@icloud.com' } },
+        }}
+      />,
+    );
+    expect(screen.queryByLabelText('App-specific password')).toBeNull();
+  });
+});
+
+describe('ConnectPanel: resetting a configured OAuth app (localhost only)', () => {
+  const configuredLocal: CalendarStatus = { ...configuredNotSignedIn, isLocalhost: true };
+
+  it('offers no reset to a remote visitor, who could otherwise break sign-in for everyone', () => {
+    render(
+      <ConnectPanel {...base} selectedProvider="google" calendarStatus={configuredNotSignedIn} />,
+    );
+    expect(screen.getByRole('link', { name: /continue with google/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /change setup/i })).toBeNull();
+  });
+
+  it('offers it alongside the sign-in button from localhost', () => {
+    render(<ConnectPanel {...base} selectedProvider="google" calendarStatus={configuredLocal} />);
+    expect(screen.getByRole('button', { name: /change setup/i })).toBeDefined();
+  });
+
+  it('resets and tells the parent to refetch status', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onCalendarConfigChanged = vi.fn();
+    render(
+      <ConnectPanel
+        {...base}
+        selectedProvider="google"
+        calendarStatus={configuredLocal}
+        onCalendarConfigChanged={onCalendarConfigChanged}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /change setup/i }));
+    expect(resetOAuthApp).toHaveBeenCalledWith('google');
+    await waitFor(() => expect(onCalendarConfigChanged).toHaveBeenCalledOnce());
+  });
+
+  it('does nothing when the confirm is declined', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<ConnectPanel {...base} selectedProvider="google" calendarStatus={configuredLocal} />);
+    await userEvent.click(screen.getByRole('button', { name: /change setup/i }));
+    expect(resetOAuthApp).not.toHaveBeenCalled();
+  });
+
+  it('shows the server error and keeps the sign-in button when the reset is refused', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    resetOAuthApp.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'INVALID_INPUT',
+        message: 'This provider is configured by environment variables, which take precedence.',
+      },
+    });
+    render(<ConnectPanel {...base} selectedProvider="google" calendarStatus={configuredLocal} />);
+    await userEvent.click(screen.getByRole('button', { name: /change setup/i }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/environment variables/i);
+    expect(screen.getByRole('link', { name: /continue with google/i })).toBeDefined();
+  });
+});
+
+describe('step 3 tests the connection for real', () => {
+  it('offers Test connection, held back until the required fields are filled', () => {
+    render(<ConnectPanel {...base} selectedProvider="square" conn={{ creds: {} }} env="sandbox" />);
+    const button = screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/^Fill in .+ first\.$/)).toBeDefined();
+  });
+
+  it('enables it once every required field has a value', () => {
+    const creds = { accessToken: 'tok', locationId: 'L1' };
+    render(<ConnectPanel {...base} selectedProvider="square" creds={creds} conn={{ creds }} />);
+    const button = screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
   });
 });

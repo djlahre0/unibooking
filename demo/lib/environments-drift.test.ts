@@ -21,6 +21,12 @@ const CREDS: Record<string, Record<string, string>> = {
   square: { accessToken: 'x', locationId: 'L1' },
   acuity: { userId: '1', apiKey: 'k' },
   bookeo: { apiKey: 'k', secretKey: 's' },
+  booker: {
+    accessToken: 'x',
+    subscriptionKey: 'sub',
+    locationId: 'L1',
+    timezone: 'America/Chicago',
+  },
   mindbody: { apiKey: 'k', siteId: '-99', accessToken: 't', timezone: 'America/Los_Angeles' },
   wix: { accessToken: 'x' },
   calendly: { token: 't' },

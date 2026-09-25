@@ -13,22 +13,20 @@ vi.mock('../../lib/calendar/api', () => ({
   connectApple: vi.fn(),
   disconnect: vi.fn(),
   connectUrl: (p: string) => `/api/calendar/connect/${p}`,
-  // Used by the shared CustomAppForm (app/calendar/CustomAppForm.tsx), which
-  // ConnectCards renders inline for a localhost visitor when a provider isn't
-  // configured yet -- the operator's one-time OAuth app setup.
+  // Kept on the mock although nothing in this tree calls it any more: My
+  // Calendar no longer offers OAuth app setup (that lives on the Connect tab,
+  // see ConnectPanel.test.tsx). The module factory replaces the whole module,
+  // so leaving it out would break any import added back later.
   saveOAuthApp: vi.fn(),
+  // Used by ResetSetupButton (app/calendar/ResetSetupButton.tsx), which
+  // ConnectCards renders on a CONFIGURED card for a localhost visitor so the
+  // operator can swap in a different client id/secret.
+  resetOAuthApp: vi.fn(),
 }));
 
 const getStatus = vi.mocked(api.getStatus);
 const calendarCall = vi.mocked(api.calendarCall);
-const saveOAuthApp = vi.mocked(api.saveOAuthApp);
 
-/** The Google/Microsoft card, scoped by its heading -- both cards render a
- *  "Client ID"/"Client Secret" pair via the shared form, so an unscoped
- *  `getByLabelText` would be ambiguous once both are unconfigured. */
-function cardFor(title: string): HTMLElement {
-  return screen.getByText(title).closest('.cal-connect-card') as HTMLElement;
-}
 
 // An hour from now always falls inside the default 7-day window from today.
 const soon = new Date(Date.now() + 60 * 60 * 1000);
@@ -90,7 +88,7 @@ describe('CalendarTab', () => {
     expect(await screen.findByText(/not set up on this deployment/)).toBeTruthy();
   });
 
-  it('offers sign-in buttons for configured providers', async () => {
+  it('shows the empty state, not provider cards, when nothing is connected', async () => {
     getStatus.mockResolvedValue({
       ok: true,
       data: {
@@ -101,43 +99,35 @@ describe('CalendarTab', () => {
       },
     });
     render(<CalendarTab />);
-    const google = await screen.findByRole('link', { name: 'Continue with Google' });
-    expect(google.getAttribute('href')).toBe('/api/calendar/connect/google');
-    // Microsoft isn't configured (by env or by the operator's saved setup),
-    // and this visitor isn't local, so the deployment offers no working
-    // one-click button for it and no way to configure one either -- just a
-    // plain notice, with no credential fields (see the "operator OAuth app
-    // setup" tests below for the localhost-only setup form itself).
-    expect(screen.queryByRole('button', { name: 'Continue with Microsoft' })).toBeNull();
-    const outlook = cardFor('Outlook / Microsoft 365');
-    expect(within(outlook).queryByLabelText('Client ID')).toBeNull();
-    expect(within(outlook).getByText(/hasn.t set up microsoft sign-in yet/i)).toBeTruthy();
-    expect(screen.getByLabelText('App-specific password')).toBeTruthy();
+    // This tab is the user's own calendar. Even with Google configured and
+    // Apple always available, connecting happens on the Connect tab -- here
+    // there is simply nothing connected yet.
+    expect(await screen.findByText(/no calendar connected/i)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Continue with Google' })).toBeNull();
+    expect(screen.queryByLabelText('App-specific password')).toBeNull();
+    expect(screen.queryByText('Google Calendar')).toBeNull();
+  });
+
+  it('sends the visitor to the Connect tab to add one', async () => {
+    const onOpenConnect = vi.fn();
+    getStatus.mockResolvedValue({
+      ok: true,
+      data: {
+        enabled: true,
+        providers: { google: true, outlook: false, apple: true },
+        isLocalhost: false,
+        connection: null,
+      },
+    });
+    render(<CalendarTab onOpenConnect={onOpenConnect} />);
+    await userEvent.click(await screen.findByRole('button', { name: /connect a calendar/i }));
+    expect(onOpenConnect).toHaveBeenCalledOnce();
   });
 
   // Regression test for the autofill cross-contamination bug: the Apple
   // card's fields must carry their own provider-scoped name/id (distinct from
   // Google's/Outlook's, via CustomAppForm.test.tsx) and the password field
   // must opt out of a saved-credential offer.
-  it('gives the Apple card its own name/id attributes and autoComplete="new-password" on the password field', async () => {
-    getStatus.mockResolvedValue({
-      ok: true,
-      data: {
-        enabled: true,
-        providers: { google: true, outlook: true, apple: true },
-        isLocalhost: false,
-        connection: null,
-      },
-    });
-    render(<CalendarTab />);
-    const appleId = (await screen.findByLabelText('Apple ID')) as HTMLInputElement;
-    const applePassword = screen.getByLabelText('App-specific password') as HTMLInputElement;
-    expect(appleId.name).toBe('apple-appleid');
-    expect(appleId.id).toBe('apple-appleid');
-    expect(appleId.getAttribute('autocomplete')).toBe('off');
-    expect(applePassword.name).toBe('apple-password');
-    expect(applePassword.getAttribute('autocomplete')).toBe('new-password');
-  });
 
   it('shows the account, calendars and events, and deletes an event', async () => {
     getStatus.mockResolvedValue({
@@ -171,7 +161,7 @@ describe('CalendarTab', () => {
     expect(await screen.findByText('Event deleted.')).toBeTruthy();
   });
 
-  it('drops back to the connect screen when the connection is revoked', async () => {
+  it('drops back to the empty state when the connection is revoked', async () => {
     getStatus.mockResolvedValue({
       ok: true,
       data: {
@@ -186,8 +176,12 @@ describe('CalendarTab', () => {
       error: { code: 'AUTH', message: 'gone' },
     });
     render(<CalendarTab />);
+    // The banner still explains what happened -- the part that matters is
+    // that a revoked session does not leave the agenda on screen. Reconnecting
+    // happens on the Connect tab, so this lands on the empty state.
     expect(await screen.findByText(/expired or was revoked/)).toBeTruthy();
-    expect(await screen.findByRole('link', { name: 'Continue with Google' })).toBeTruthy();
+    expect(await screen.findByText(/no calendar connected/i)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Continue with Google' })).toBeNull();
   });
 });
 
@@ -217,72 +211,28 @@ describe('CalendarTab: operator OAuth app setup on a fresh clone (nothing config
     },
   };
 
-  it('offers the setup form on the Google card, for a localhost visitor, instead of a disabled "Not configured" button', async () => {
-    getStatus.mockResolvedValue(nothingConfiguredLocal);
-    render(<CalendarTab />);
-    await screen.findByText('Google Calendar');
-    const card = cardFor('Google Calendar');
-    expect(within(card).queryByText(/not configured on this deployment/i)).toBeNull();
-    expect(within(card).getByLabelText('Client ID')).toBeTruthy();
-    expect(within(card).getByLabelText('Client Secret')).toBeTruthy();
-  });
 
-  it('shows the exact redirect URL to register, derived from the page origin', async () => {
-    getStatus.mockResolvedValue(nothingConfiguredLocal);
-    render(<CalendarTab />);
-    await screen.findByText('Google Calendar');
-    const card = cardFor('Google Calendar');
-    const redirectInput = within(card).getByLabelText(
-      /redirect url to register/i,
-    ) as HTMLInputElement;
-    expect(redirectInput.value).toBe(`${window.location.origin}/api/calendar/callback/google`);
-  });
 
-  it('saves the typed client id/secret via saveOAuthApp and never re-renders the secret afterwards', async () => {
-    saveOAuthApp.mockResolvedValue({ ok: true, data: { saved: true } });
-    getStatus.mockResolvedValue(nothingConfiguredLocal);
-    render(<CalendarTab />);
-    await screen.findByText('Google Calendar');
-    const card = cardFor('Google Calendar');
-    const secret = 'super-secret-value-xyz';
-    await userEvent.type(within(card).getByLabelText('Client ID'), 'my-client-id');
-    await userEvent.type(within(card).getByLabelText('Client Secret'), secret);
-    await userEvent.click(within(card).getByRole('button', { name: /save google app/i }));
-    expect(saveOAuthApp).toHaveBeenCalledWith('google', 'my-client-id', secret, '');
-    // The secret travels only in the POST body above -- it must never come
-    // back out into rendered text, whether the call succeeded or not.
-    expect(screen.queryByText(secret)).toBeNull();
-  });
 
-  it('refetches status after a successful save, so the card can switch to the sign-in button', async () => {
-    saveOAuthApp.mockResolvedValue({ ok: true, data: { saved: true } });
-    getStatus.mockResolvedValueOnce(nothingConfiguredLocal).mockResolvedValue({
-      ok: true,
-      data: {
-        enabled: true,
-        providers: { google: true, outlook: false, apple: true },
-        isLocalhost: true,
-        connection: null,
-      },
-    });
-    render(<CalendarTab />);
-    await screen.findByText('Google Calendar');
-    const card = cardFor('Google Calendar');
-    await userEvent.type(within(card).getByLabelText('Client ID'), 'my-client-id');
-    await userEvent.type(within(card).getByLabelText('Client Secret'), 'my-secret');
-    await userEvent.click(within(card).getByRole('button', { name: /save google app/i }));
-    expect(await screen.findByRole('link', { name: 'Continue with Google' })).toBeTruthy();
-  });
 
-  it('tells a non-local visitor Google sign-in is not set up yet, and asks for no credentials at all', async () => {
+  it('asks a non-local visitor for no credentials at all', async () => {
     getStatus.mockResolvedValue(nothingConfiguredRemote);
     render(<CalendarTab />);
-    await screen.findByText('Google Calendar');
-    const card = cardFor('Google Calendar');
-    expect(within(card).getByText(/hasn.t set up google sign-in yet/i)).toBeTruthy();
-    expect(within(card).queryByLabelText('Client ID')).toBeNull();
-    expect(within(card).queryByLabelText('Client Secret')).toBeNull();
-    expect(within(card).queryByLabelText(/redirect url to register/i)).toBeNull();
+    await screen.findByText(/no calendar connected/i);
+    expect(screen.queryByLabelText('Client ID')).toBeNull();
+    expect(screen.queryByLabelText('Client Secret')).toBeNull();
+    expect(screen.queryByLabelText(/redirect url to register/i)).toBeNull();
+  });
+
+  it('offers no OAuth app setup here at all, even on localhost', async () => {
+    getStatus.mockResolvedValue(nothingConfiguredLocal);
+    render(<CalendarTab />);
+    // Registering an OAuth app is operator work and lives on the Connect tab
+    // (ConnectPanel.test.tsx covers that it is still reachable there), so
+    // this is a relocation rather than a removal.
+    await screen.findByText(/no calendar connected/i);
+    expect(screen.queryByLabelText('Client ID')).toBeNull();
+    expect(screen.queryByText(/set up .*sign-in/i)).toBeNull();
   });
 });
 

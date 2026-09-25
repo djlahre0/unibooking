@@ -1,5 +1,10 @@
-import { appOrigin, isSaneCred, readCalendarConfig } from '@/lib/calendar/config';
-import { writeOAuthApp } from '@/lib/calendar/oauth-apps';
+import {
+  appOrigin,
+  isConfiguredByEnv,
+  isSaneCred,
+  readCalendarConfig,
+} from '@/lib/calendar/config';
+import { removeOAuthApp, writeOAuthApp } from '@/lib/calendar/oauth-apps';
 import { isOAuthProvider } from '@/lib/calendar/types';
 import {
   clientIp,
@@ -99,4 +104,62 @@ export async function POST(
     );
   }
   return json({ ok: true, data: { saved: true } });
+}
+
+/**
+ * Removes the saved registration so the operator can register a different
+ * client id/secret from the setup form, instead of hand-editing
+ * `.oauth-apps.json` and restarting.
+ *
+ * Gated identically to the POST above, in the same order and for the same
+ * reason: on a reachable deployment an un-gated version of this would let a
+ * stranger knock out sign-in for every visitor. Unsetting is not a smaller
+ * privilege than setting, so it does not get a smaller gate.
+ */
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ provider: string }> },
+): Promise<Response> {
+  const { provider } = await params;
+  const config = readCalendarConfig();
+  const origin = appOrigin(req, config);
+  if (!sameOrigin(req, origin)) return forbidden();
+  if (process.env.NODE_ENV === 'production') return setupDisabled();
+  if (!isLoopbackRequest(req)) return localhostOnly();
+  if (!allow(clientIp(req))) return rateLimited();
+  if (!isOAuthProvider(provider)) {
+    return json({ ok: false, error: { code: 'INVALID_INPUT', message: 'Unknown provider.' } }, 400);
+  }
+
+  // Env vars outrank the saved file (see config.ts), so for an env-configured
+  // provider this would delete a file entry and leave the card exactly as it
+  // was. Say where the setting actually lives rather than report a success
+  // that changes nothing.
+  if (isConfiguredByEnv(provider)) {
+    return json(
+      {
+        ok: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message:
+            'This provider is configured by environment variables, which take precedence. Change them where this deployment sets them.',
+        },
+      },
+      409,
+    );
+  }
+
+  if (!removeOAuthApp(provider)) {
+    return json(
+      {
+        ok: false,
+        error: {
+          code: 'UPSTREAM',
+          message: "Could not reset — this deployment's filesystem is read-only.",
+        },
+      },
+      500,
+    );
+  }
+  return json({ ok: true, data: { reset: true } });
 }

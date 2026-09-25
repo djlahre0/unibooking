@@ -4,8 +4,11 @@ import {
   type ActionResult,
   type Connection,
   callCheckConnection,
+  callGetBusinessHours,
+  callListCategories,
   callListServices,
   callListStaff,
+  providerCapabilities,
 } from '../../lib/call';
 import type { ProviderMeta } from '../../lib/providers';
 import ResultBox from '../ResultBox';
@@ -36,6 +39,7 @@ export default function CatalogTab({
   busy,
   elapsedMs,
 }: CatalogTabProps) {
+  const caps = selectedProvider ? providerCapabilities(selectedProvider) : null;
   return (
     <div className="fade-in">
       {!selectedProvider ? (
@@ -110,7 +114,53 @@ export default function CatalogTab({
             >
               🧑‍🔧 List Staff
             </button>
+            {caps?.serviceCategories && (
+              <button
+                className="btn btn-sm btn-secondary"
+                disabled={busy('catalog')}
+                onClick={() =>
+                  wrap(
+                    'catalog',
+                    () => callListCategories(selectedProvider, conn),
+                    setCatalogResult,
+                  )
+                }
+              >
+                🗂️ List Categories
+              </button>
+            )}
+            {caps?.businessHours && (
+              <button
+                className="btn btn-sm btn-secondary"
+                disabled={busy('catalog')}
+                onClick={() =>
+                  wrap(
+                    'catalog',
+                    () => callGetBusinessHours(selectedProvider, conn),
+                    setCatalogResult,
+                  )
+                }
+              >
+                🕙 Business Hours
+              </button>
+            )}
           </div>
+
+          {caps?.staffServiceAssignment && (
+            <p
+              style={{
+                color: 'var(--text-secondary)',
+                fontSize: '0.82rem',
+                marginTop: '1rem',
+              }}
+            >
+              This provider links staff to services, so each <code>Service</code> carries{' '}
+              <code>staffIds</code> and you can filter either way —{' '}
+              <code>listServices({'{ staffId }'})</code> or{' '}
+              <code>listStaff({'{ serviceId }'})</code>. An empty <code>staffIds</code> means
+              nobody is assigned; <em>absent</em> means the provider did not say.
+            </p>
+          )}
 
           <p
             style={{

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   type ActionResult,
   type Connection,
@@ -11,9 +11,10 @@ import {
   callListBookings,
 } from '../../lib/call';
 import type { ProviderMeta } from '../../lib/providers';
-import { browserZone, toInstant } from '../../lib/datetime';
+import { browserZone, isTimeZone, toInstant } from '../../lib/datetime';
 import ResultBox from '../ResultBox';
 import PersistedForm from '../PersistedForm';
+import { useCalendarZone, type CalendarZone } from './useCalendarZone';
 
 export type BookingsTabProps = {
   selectedProvider: string;
@@ -39,6 +40,113 @@ export type BookingsTabProps = {
 const day = (instant: string): string => instant.slice(0, 10);
 const clock = (instant: string): string => instant.slice(11, 16);
 
+/**
+ * A date picker and a time picker for one end of a range, as two grid cells.
+ * Submitted as `<name>Date` / `<name>Time`; `pickedInstant` joins them.
+ */
+function DateTimePair({
+  idPrefix,
+  name,
+  label,
+  instant,
+  required,
+}: {
+  idPrefix: string;
+  name: string;
+  label: string;
+  /** Default value, as an RFC3339 instant. Omitted leaves both pickers blank. */
+  instant?: string;
+  required?: boolean;
+}) {
+  return (
+    <>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${idPrefix}-date`}>
+          {label} date
+        </label>
+        <input
+          id={`${idPrefix}-date`}
+          name={`${name}Date`}
+          type="date"
+          className="form-input"
+          defaultValue={instant ? day(instant) : undefined}
+          required={required}
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${idPrefix}-time`}>
+          {label} time
+        </label>
+        <input
+          id={`${idPrefix}-time`}
+          name={`${name}Time`}
+          type="time"
+          className="form-input"
+          defaultValue={instant ? clock(instant) : undefined}
+          required={required}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * The optional zone override plus a line saying which zone the pickers are
+ * actually read in. Blank means "the calendar's own zone" (or this browser's
+ * when the provider reports none). Named `zoneOverride`, not `timezone`: the
+ * browser zone that earlier versions auto-filled and saved must not silently
+ * pin every restored form to the laptop's zone.
+ */
+function ZoneField({ idPrefix, zone }: { idPrefix: string; zone: CalendarZone | null }) {
+  return (
+    <div className="form-group">
+      <label className="form-label" htmlFor={`${idPrefix}-zone`}>
+        Timezone override (IANA)
+      </label>
+      <input
+        id={`${idPrefix}-zone`}
+        name="zoneOverride"
+        className="form-input"
+        placeholder={zone ? zone.zone : 'Optional'}
+        aria-describedby={`${idPrefix}-zone-hint`}
+      />
+      <small id={`${idPrefix}-zone-hint`} className="form-hint">
+        {!zone
+          ? "Looking up the calendar's time zone..."
+          : zone.from === 'calendar'
+            ? `Times are in ${zone.zone}, the time zone of "${zone.calendarName}".`
+            : `Times are in ${zone.zone}, this browser's time zone.`}
+      </small>
+    </div>
+  );
+}
+
+/**
+ * A form's picked date + time for one end, as an instant in the effective
+ * zone; `''` when the date is blank (an optional end left empty).
+ *
+ * Throws on input that would otherwise be sent wrong without a word: a typo'd
+ * override zone (`toInstant` would fall back to an offset-less string) or a
+ * time with no date (it would simply be dropped). Called inside `wrap`, which
+ * shows the message as the call's result.
+ */
+function pickedInstant(
+  fd: FormData,
+  name: string,
+  label: string,
+  zone: CalendarZone | null,
+): string {
+  const str = (k: string): string => ((fd.get(k) as string) ?? '').trim();
+  const override = str('zoneOverride');
+  if (override && !isTimeZone(override)) {
+    throw new Error(`"${override}" is not an IANA time zone name, e.g. Europe/London.`);
+  }
+  const date = str(`${name}Date`);
+  const time = str(`${name}Time`);
+  if (time && !date) throw new Error(`${label}: pick a date as well as a time.`);
+  return toInstant(date, time, override || zone?.zone || browserZone());
+}
+
 export default function BookingsTab({
   selectedProvider,
   providerInfo,
@@ -51,19 +159,12 @@ export default function BookingsTab({
   elapsedMs,
 }: BookingsTabProps) {
   const [bookingOp, setBookingOp] = useState('create');
-  const root = useRef<HTMLDivElement>(null);
-
-  // The visitor's zone is unknown to the server render, so it cannot be a
-  // `defaultValue` without breaking hydration. Filled after mount, and only
-  // when blank so a restored or typed value always wins. Re-runs per op
-  // because each op renders its own form.
-  useEffect(() => {
-    const el = root.current?.querySelector<HTMLInputElement>('#bk-timezone');
-    if (el && !el.value) el.value = browserZone();
-  }, [bookingOp, selectedProvider]);
+  // Picked wall-clock times are anchored in the targeted calendar's zone, so
+  // "10:00" lands at 10:00 on that calendar, not in the laptop's zone.
+  const zone = useCalendarZone(selectedProvider, conn);
 
   return (
-    <div className="fade-in" ref={root}>
+    <div className="fade-in">
       {!selectedProvider ? (
         <div className="empty-state">
           <span className="icon">📅</span>
@@ -102,17 +203,15 @@ export default function BookingsTab({
               onSubmit={(e) => {
                 e.preventDefault();
                 const fd = new FormData(e.currentTarget);
-                const str = (k: string): string => ((fd.get(k) as string) ?? '').trim();
                 // One zone anchors both ends; the instants then carry the
                 // offset, so the provider gets an unambiguous range.
-                const tz = str('timezone') || browserZone();
                 wrap(
                   'booking',
                   () =>
                     callCreateBooking(selectedProvider, conn, {
                       title: fd.get('title') as string,
-                      start: toInstant(str('startDate'), str('startTime'), tz),
-                      end: toInstant(str('endDate'), str('endTime'), tz),
+                      start: pickedInstant(fd, 'start', 'Start', zone),
+                      end: pickedInstant(fd, 'end', 'End', zone),
                       serviceId: (fd.get('serviceId') as string) || undefined,
                       staffId: (fd.get('staffId') as string) || undefined,
                       customerName: (fd.get('customerName') as string) || undefined,
@@ -125,7 +224,9 @@ export default function BookingsTab({
             >
               <div className="two-col">
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-title">Title</label>
+                  <label className="form-label" htmlFor="bk-title">
+                    Title
+                  </label>
                   <input
                     id="bk-title"
                     name="title"
@@ -135,7 +236,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-service-id">Service ID</label>
+                  <label className="form-label" htmlFor="bk-service-id">
+                    Service ID
+                  </label>
                   <input
                     id="bk-service-id"
                     name="serviceId"
@@ -143,71 +246,25 @@ export default function BookingsTab({
                     placeholder="Optional"
                   />
                 </div>
+                <DateTimePair
+                  idPrefix="bk-start"
+                  name="start"
+                  label="Start"
+                  instant={defaultRange.slotStart}
+                  required
+                />
+                <DateTimePair
+                  idPrefix="bk-end"
+                  name="end"
+                  label="End"
+                  instant={defaultRange.slotEnd}
+                  required
+                />
+                <ZoneField idPrefix="bk-create" zone={zone} />
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-start-date">
-                    Start date
+                  <label className="form-label" htmlFor="bk-staff-id">
+                    Staff ID
                   </label>
-                  <input
-                    id="bk-start-date"
-                    name="startDate"
-                    type="date"
-                    className="form-input"
-                    defaultValue={day(defaultRange.slotStart)}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-start-time">
-                    Start time
-                  </label>
-                  <input
-                    id="bk-start-time"
-                    name="startTime"
-                    type="time"
-                    className="form-input"
-                    defaultValue={clock(defaultRange.slotStart)}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-end-date">
-                    End date
-                  </label>
-                  <input
-                    id="bk-end-date"
-                    name="endDate"
-                    type="date"
-                    className="form-input"
-                    defaultValue={day(defaultRange.slotEnd)}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-end-time">
-                    End time
-                  </label>
-                  <input
-                    id="bk-end-time"
-                    name="endTime"
-                    type="time"
-                    className="form-input"
-                    defaultValue={clock(defaultRange.slotEnd)}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-timezone">
-                    Timezone (IANA)
-                  </label>
-                  <input
-                    id="bk-timezone"
-                    name="timezone"
-                    className="form-input"
-                    placeholder="Detected from this browser"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-staff-id">Staff ID</label>
                   <input
                     id="bk-staff-id"
                     name="staffId"
@@ -216,7 +273,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-idempotency-key">Idempotency Key</label>
+                  <label className="form-label" htmlFor="bk-idempotency-key">
+                    Idempotency Key
+                  </label>
                   <input
                     id="bk-idempotency-key"
                     name="idempotencyKey"
@@ -225,7 +284,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-customer-name">Customer Name</label>
+                  <label className="form-label" htmlFor="bk-customer-name">
+                    Customer Name
+                  </label>
                   <input
                     id="bk-customer-name"
                     name="customerName"
@@ -234,7 +295,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-customer-email">Customer Email</label>
+                  <label className="form-label" htmlFor="bk-customer-email">
+                    Customer Email
+                  </label>
                   <input
                     id="bk-customer-email"
                     name="customerEmail"
@@ -269,7 +332,9 @@ export default function BookingsTab({
               }}
             >
               <div className="form-group">
-                <label className="form-label" htmlFor="bk-booking-id">Booking ID</label>
+                <label className="form-label" htmlFor="bk-booking-id">
+                  Booking ID
+                </label>
                 <input
                   id="bk-booking-id"
                   name="bookingId"
@@ -296,8 +361,8 @@ export default function BookingsTab({
                   () =>
                     callUpdateBooking(selectedProvider, conn, fd.get('bookingId') as string, {
                       title: (fd.get('title') as string) || undefined,
-                      start: (fd.get('start') as string) || undefined,
-                      end: (fd.get('end') as string) || undefined,
+                      start: pickedInstant(fd, 'start', 'New start', zone) || undefined,
+                      end: pickedInstant(fd, 'end', 'New end', zone) || undefined,
                       staffId: (fd.get('staffId') as string) || undefined,
                       serviceId: (fd.get('serviceId') as string) || undefined,
                     }),
@@ -307,7 +372,9 @@ export default function BookingsTab({
             >
               <div className="two-col">
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-booking-id-2">Booking ID</label>
+                  <label className="form-label" htmlFor="bk-booking-id-2">
+                    Booking ID
+                  </label>
                   <input
                     id="bk-booking-id-2"
                     name="bookingId"
@@ -317,7 +384,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-new-title">New Title</label>
+                  <label className="form-label" htmlFor="bk-new-title">
+                    New Title
+                  </label>
                   <input
                     id="bk-new-title"
                     name="title"
@@ -325,26 +394,13 @@ export default function BookingsTab({
                     placeholder="Optional"
                   />
                 </div>
+                <DateTimePair idPrefix="bk-new-start" name="start" label="New start" />
+                <DateTimePair idPrefix="bk-new-end" name="end" label="New end" />
+                <ZoneField idPrefix="bk-update" zone={zone} />
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-new-start">New Start</label>
-                  <input
-                    id="bk-new-start"
-                    name="start"
-                    className="form-input"
-                    placeholder="Optional RFC3339"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-new-end">New End</label>
-                  <input
-                    id="bk-new-end"
-                    name="end"
-                    className="form-input"
-                    placeholder="Optional RFC3339"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-new-staff-id">New Staff ID</label>
+                  <label className="form-label" htmlFor="bk-new-staff-id">
+                    New Staff ID
+                  </label>
                   <input
                     id="bk-new-staff-id"
                     name="staffId"
@@ -353,7 +409,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-new-service-id">New Service ID</label>
+                  <label className="form-label" htmlFor="bk-new-service-id">
+                    New Service ID
+                  </label>
                   <input
                     id="bk-new-service-id"
                     name="serviceId"
@@ -395,7 +453,9 @@ export default function BookingsTab({
             >
               <div className="two-col">
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-booking-id-3">Booking ID</label>
+                  <label className="form-label" htmlFor="bk-booking-id-3">
+                    Booking ID
+                  </label>
                   <input
                     id="bk-booking-id-3"
                     name="bookingId"
@@ -405,7 +465,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-reason">Reason</label>
+                  <label className="form-label" htmlFor="bk-reason">
+                    Reason
+                  </label>
                   <input
                     id="bk-reason"
                     name="reason"
@@ -436,8 +498,8 @@ export default function BookingsTab({
                   'booking',
                   () =>
                     callListBookings(selectedProvider, conn, {
-                      start: fd.get('start') as string,
-                      end: fd.get('end') as string,
+                      start: pickedInstant(fd, 'start', 'From', zone),
+                      end: pickedInstant(fd, 'end', 'To', zone),
                       limit: (fd.get('limit') as string) ? Number(fd.get('limit')) : undefined,
                       pageToken: (fd.get('pageToken') as string) || undefined,
                     }),
@@ -446,28 +508,25 @@ export default function BookingsTab({
               }}
             >
               <div className="two-col">
+                <DateTimePair
+                  idPrefix="bk-list-start"
+                  name="start"
+                  label="From"
+                  instant={defaultRange.start}
+                  required
+                />
+                <DateTimePair
+                  idPrefix="bk-list-end"
+                  name="end"
+                  label="To"
+                  instant={defaultRange.end}
+                  required
+                />
+                <ZoneField idPrefix="bk-list" zone={zone} />
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-start-rfc3339-2">Start (RFC3339)</label>
-                  <input
-                    id="bk-start-rfc3339-2"
-                    name="start"
-                    className="form-input"
-                    defaultValue={defaultRange.start}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-end-rfc3339-2">End (RFC3339)</label>
-                  <input
-                    id="bk-end-rfc3339-2"
-                    name="end"
-                    className="form-input"
-                    defaultValue={defaultRange.end}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="bk-limit">Limit</label>
+                  <label className="form-label" htmlFor="bk-limit">
+                    Limit
+                  </label>
                   <input
                     id="bk-limit"
                     name="limit"
@@ -476,7 +535,9 @@ export default function BookingsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="bk-page-token">Page Token</label>
+                  <label className="form-label" htmlFor="bk-page-token">
+                    Page Token
+                  </label>
                   <input
                     id="bk-page-token"
                     name="pageToken"

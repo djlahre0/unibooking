@@ -40,6 +40,18 @@ export const CAPABILITIES: Capabilities = {
   serviceCatalogWrite: true,
   staffDirectoryWrite: true,
   calendarList: false,
+  // The sample dataset models one-to-one appointments only; adding a fake class
+  // catalog here would let the demo show a capability no real adapter in this
+  // list has, which is exactly the drift the capability flags exist to prevent.
+  staffServiceAssignment: false,
+  serviceCategories: false,
+  businessHours: false,
+  classCatalog: false,
+  classEnrollment: false,
+  classWaitlist: false,
+  changeFeed: false,
+  changeNotifications: false,
+  versionedWrites: false,
 };
 
 const fail = (code: ErrorCode, message: string) =>

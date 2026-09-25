@@ -62,6 +62,7 @@ export const ENVIRONMENTS: Record<string, ProviderEnvironments> = {
 
   acuity: { prod: 'https://acuityscheduling.com/api/v1/' },
   bookeo: { prod: 'https://api.bookeo.com/v2/' },
+  booker: { prod: 'https://api.booker.com/' },
   mindbody: { prod: 'https://api.mindbodyonline.com/public/v6/' },
   wix: { prod: 'https://www.wixapis.com/' },
   calendly: { prod: 'https://api.calendly.com/' },

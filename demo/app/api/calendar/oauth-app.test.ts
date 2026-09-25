@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { POST as saveApp } from './oauth-app/[provider]/route';
+import { POST as saveApp, DELETE as resetApp } from './oauth-app/[provider]/route';
 import { GET as status } from './status/route';
 import { __resetOAuthAppsCache } from '@/lib/calendar/oauth-apps';
 import { __resetSessionSecretCache } from '@/lib/calendar/secret';
@@ -247,5 +247,144 @@ describe('POST /api/calendar/oauth-app/[provider] -- operator setup, localhost o
     expect(statusBody.data.providers.google).toBe(true);
     expect(JSON.stringify(statusBody)).not.toContain(SEKRIT);
     expect(JSON.stringify(statusBody)).not.toContain('my-client-id');
+  });
+});
+
+/** Same header shape as `post` above -- see its doc comment on why `host` is
+ *  set explicitly -- with no body, which a DELETE carries none of. */
+function del(
+  url: string,
+  init: { origin?: string; headers?: Record<string, string> } = {},
+): Request {
+  return new Request(url, {
+    method: 'DELETE',
+    headers: {
+      origin: init.origin ?? new URL(url).origin,
+      host: new URL(url).host,
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+const LOCAL_DELETE = 'http://localhost:3000/api/calendar/oauth-app/google';
+
+describe('DELETE /api/calendar/oauth-app/[provider] -- operator reset, localhost only', () => {
+  /** Puts a saved google app in the throwaway file for the reset to remove. */
+  async function seed(): Promise<void> {
+    await saveApp(
+      post('http://localhost:3000/api/calendar/oauth-app/google', {
+        clientId: 'cid',
+        clientSecret: 'csecret',
+      }),
+      params('google'),
+    );
+  }
+
+  it('removes the saved app from loopback, and status stops reporting it configured', async () => {
+    await seed();
+    const res = await resetApp(del(LOCAL_DELETE), params('google'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(savedFile().google).toBeUndefined();
+
+    const statusBody = await (
+      await status(new Request('http://localhost:3000/api/calendar/status'))
+    ).json();
+    expect(statusBody.data.providers.google).toBe(false);
+  });
+
+  it("leaves another provider's saved app alone", async () => {
+    await seed();
+    await saveApp(
+      post('http://localhost:3000/api/calendar/oauth-app/outlook', {
+        clientId: 'mid',
+        clientSecret: 'msecret',
+      }),
+      params('outlook'),
+    );
+    await resetApp(del(LOCAL_DELETE), params('google'));
+    const file = savedFile() as Record<string, unknown>;
+    expect(file.google).toBeUndefined();
+    expect(file.outlook).toEqual({ clientId: 'mid', clientSecret: 'msecret' });
+  });
+
+  it('refuses a reset from a non-loopback host', async () => {
+    await seed();
+    const res = await resetApp(
+      del('https://demo.example.com/api/calendar/oauth-app/google'),
+      params('google'),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('FORBIDDEN');
+    // The gate has to actually protect the file, not just the status code.
+    expect(savedFile().google).toEqual({ clientId: 'cid', clientSecret: 'csecret' });
+  });
+
+  it('a spoofed X-Forwarded-For: 127.0.0.1 does not grant a reset from a remote host', async () => {
+    await seed();
+    const res = await resetApp(
+      del('https://demo.example.com/api/calendar/oauth-app/google', {
+        headers: { 'x-forwarded-for': '127.0.0.1' },
+      }),
+      params('google'),
+    );
+    expect(res.status).toBe(403);
+    expect(savedFile().google).toEqual({ clientId: 'cid', clientSecret: 'csecret' });
+  });
+
+  it('refuses a reset from a foreign origin (CSRF) even on loopback', async () => {
+    await seed();
+    const res = await resetApp(
+      del(LOCAL_DELETE, { origin: 'https://evil.example.com' }),
+      params('google'),
+    );
+    expect(res.status).toBe(403);
+    expect(savedFile().google).toEqual({ clientId: 'cid', clientSecret: 'csecret' });
+  });
+
+  it('refuses a reset in production even from loopback -- Host is forgeable', async () => {
+    await seed();
+    // This request is loopback AND same-origin, so it clears both gates above
+    // -- the 403 can only come from the production check, never vacuously.
+    vi.stubEnv('NODE_ENV', 'production');
+    const res = await resetApp(del(LOCAL_DELETE), params('google'));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.message).toMatch(/only available when running locally/i);
+    expect(savedFile().google).toEqual({ clientId: 'cid', clientSecret: 'csecret' });
+  });
+
+  it('rejects an unknown provider', async () => {
+    const res = await resetApp(
+      del('http://localhost:3000/api/calendar/oauth-app/nope'),
+      params('nope'),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('INVALID_INPUT');
+  });
+
+  it('refuses when env vars configure the provider, because deleting the file would change nothing', async () => {
+    await seed();
+    vi.stubEnv('GOOGLE_CLIENT_ID', 'from-env');
+    vi.stubEnv('GOOGLE_CLIENT_SECRET', 'secret-from-env');
+    const res = await resetApp(del(LOCAL_DELETE), params('google'));
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toMatch(/environment variables/i);
+    // Nothing removed: the caller was told where the setting actually lives.
+    expect(savedFile().google).toEqual({ clientId: 'cid', clientSecret: 'csecret' });
+  });
+
+  it('never leaks the removed secret in the response body', async () => {
+    const SEKRIT = 'sekrit-test-value-9f3-not-a-real-secret';
+    await saveApp(
+      post('http://localhost:3000/api/calendar/oauth-app/google', {
+        clientId: 'cid',
+        clientSecret: SEKRIT,
+      }),
+      params('google'),
+    );
+    const res = await resetApp(del(LOCAL_DELETE), params('google'));
+    expect(JSON.stringify(await res.json())).not.toContain(SEKRIT);
   });
 });

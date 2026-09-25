@@ -82,4 +82,25 @@ describe('PersistenceControls', () => {
     render(<PersistenceControls {...base} onClearAll={() => {}} />);
     expect(screen.queryByText(/full or unavailable/i)).toBeNull();
   });
+
+  it('offers both the per-provider and the clear-all action', () => {
+    render(<PersistenceControls {...base} onClearAll={() => {}} />);
+    expect(screen.getByRole('button', { name: /clear square/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /clear all saved/i })).toBeTruthy();
+  });
+
+  it('warns that the clear covers every provider, and says what survives', async () => {
+    // A tester who reads "clear all" as "clear this one" loses every pasted
+    // credential; one who reads it as "clear everything" wrongly assumes the
+    // operator OAuth app went too. The prompt has to rule out both.
+    const user = userEvent.setup();
+    render(<PersistenceControls {...base} onClearAll={() => {}} />);
+
+    await user.click(screen.getByRole('button', { name: /clear all saved/i }));
+
+    const prompt = vi.mocked(window.confirm).mock.calls[0][0] as string;
+    expect(prompt).toMatch(/every provider/i);
+    expect(prompt).toMatch(/enter them all again/i);
+    expect(prompt).toMatch(/not affected|does not sign you out/i);
+  });
 });

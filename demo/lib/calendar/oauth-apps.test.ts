@@ -2,7 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { __resetOAuthAppsCache, readOAuthApps, writeOAuthApp } from './oauth-apps';
+import {
+  __resetOAuthAppsCache,
+  readOAuthApps,
+  removeOAuthApp,
+  writeOAuthApp,
+} from './oauth-apps';
 
 let tmpDir: string;
 beforeEach(() => {
@@ -110,6 +115,58 @@ describe('writeOAuthApp', () => {
     let ok: boolean | undefined;
     expect(() => {
       ok = writeOAuthApp('google', { clientId: 'a', clientSecret: 'b' }, { filePath });
+    }).not.toThrow();
+    expect(ok).toBe(false);
+  });
+});
+
+describe('removeOAuthApp', () => {
+  it('removes one provider and leaves the others', () => {
+    const filePath = path();
+    writeOAuthApp('google', { clientId: 'gid', clientSecret: 'gsecret' }, { filePath });
+    writeOAuthApp('outlook', { clientId: 'mid', clientSecret: 'msecret' }, { filePath });
+
+    expect(removeOAuthApp('google', { filePath })).toBe(true);
+
+    __resetOAuthAppsCache();
+    const apps = readOAuthApps({ filePath });
+    expect(apps.google).toBeUndefined();
+    expect(apps.outlook).toEqual({ clientId: 'mid', clientSecret: 'msecret' });
+  });
+
+  it('updates the in-process cache immediately, like writeOAuthApp does', () => {
+    const filePath = path();
+    writeOAuthApp('google', { clientId: 'gid', clientSecret: 'gsecret' }, { filePath });
+    removeOAuthApp('google', { filePath });
+    // No cache reset: a reset followed by a status check in the same process
+    // must see the removal, or the card would not flip back to the form.
+    expect(readOAuthApps({ filePath }).google).toBeUndefined();
+  });
+
+  it('keeps the file, with its owner-only mode, after the last entry goes', () => {
+    const filePath = path();
+    writeOAuthApp('google', { clientId: 'gid', clientSecret: 'gsecret' }, { filePath });
+    removeOAuthApp('google', { filePath });
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual({});
+    if (process.platform !== 'win32') {
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('removing a provider that was never saved is a no-op that still succeeds', () => {
+    const filePath = path();
+    writeOAuthApp('google', { clientId: 'gid', clientSecret: 'gsecret' }, { filePath });
+    expect(removeOAuthApp('outlook', { filePath })).toBe(true);
+    expect(readOAuthApps({ filePath }).google?.clientId).toBe('gid');
+  });
+
+  it("returns false, without throwing, when the file can't be written", () => {
+    const blockedParent = path('blocked-remove');
+    writeFileSync(blockedParent, 'i am a file, not a directory');
+    const filePath = join(blockedParent, 'nested', '.oauth-apps.json');
+    let ok: boolean | undefined;
+    expect(() => {
+      ok = removeOAuthApp('google', { filePath });
     }).not.toThrow();
     expect(ok).toBe(false);
   });

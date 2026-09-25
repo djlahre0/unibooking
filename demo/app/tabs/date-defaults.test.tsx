@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { describe, it, expect, afterEach } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import BookingsTab from './BookingsTab';
 import AvailabilityTab from './AvailabilityTab';
 import { todayIn, shiftDate } from '../../lib/calendar/agenda';
@@ -34,9 +34,9 @@ const shared = {
 afterEach(cleanup);
 
 function valuesOf(container: HTMLElement, type: 'date' | 'time'): string[] {
-  return Array.from(
-    container.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`),
-  ).map((el) => el.value);
+  return Array.from(container.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).map(
+    (el) => el.value,
+  );
 }
 
 /** Date pickers must be on or after today, and look like real dates. */
@@ -89,12 +89,7 @@ describe('explorer date defaults', () => {
         setBookingResult={() => {}}
       />,
     );
-    // The list op keeps RFC3339 text fields (a wide window, not a picked day).
-    const list = Array.from(
-      container.querySelectorAll<HTMLInputElement>('input[name="start"], input[name="end"]'),
-    ).map((el) => el.value);
-    for (const value of list) {
-      expect(value.endsWith('Z'), `${value} should be UTC`).toBe(true);
-    }
+    fireEvent.click(screen.getByRole('button', { name: /List/ }));
+    expect(valuesOf(container, 'date')).toEqual([shiftDate(today, -7), shiftDate(today, 21)]);
   });
 });

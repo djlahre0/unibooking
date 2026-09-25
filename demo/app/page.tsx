@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect, useSyncExternalStore } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react';
 import { type ActionResult, getCapabilities } from '../lib/call';
 import {
   PROVIDER_META as PROVIDERS,
@@ -40,6 +40,7 @@ import BookingsTab from './tabs/BookingsTab';
 import AvailabilityTab from './tabs/AvailabilityTab';
 import CustomersTab from './tabs/CustomersTab';
 import CatalogTab from './tabs/CatalogTab';
+import ClassesTab from './tabs/ClassesTab';
 import UtilitiesTab from './tabs/UtilitiesTab';
 import WebhooksTab from './tabs/WebhooksTab';
 
@@ -50,6 +51,7 @@ const TABS = [
   { id: 'bookings', label: 'Bookings' },
   { id: 'availability', label: 'Availability' },
   { id: 'customers', label: 'Customers' },
+  { id: 'classes', label: 'Classes' },
   { id: 'catalog', label: 'Catalog & Health' },
   { id: 'utilities', label: 'Utilities' },
   { id: 'webhooks', label: 'Webhooks' },
@@ -142,6 +144,24 @@ export default function Home() {
   // What the visitor was last doing. Never holds a credential — those stay in
   // cred-storage behind its opt-in toggle. See lib/ui-state.ts.
   const ui = useUiState();
+
+  // The header is pinned, and the provider rail sticks beneath it by offsetting
+  // itself with --app-header-h; measured rather than hardcoded because the
+  // tagline wraps at some widths.
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const root = document.documentElement;
+    const sync = () => root.style.setProperty('--app-header-h', `${el.offsetHeight}px`);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty('--app-header-h');
+    };
+  }, []);
   const activeTab = ui.activeTab;
   const setActiveTab = useCallback((tab: string) => {
     patchUiState({ activeTab: tab });
@@ -166,9 +186,7 @@ export default function Home() {
   const [credEdits, setCredEdits] = useState<Record<string, Record<string, string>>>({});
   const creds = useMemo(
     () =>
-      credEdits[selectedProvider] ??
-      loadState().providers[selectedProvider]?.creds ??
-      EMPTY_CREDS,
+      credEdits[selectedProvider] ?? loadState().providers[selectedProvider]?.creds ?? EMPTY_CREDS,
     [credEdits, selectedProvider],
   );
   const [loadingSection, setLoadingSection] = useState('');
@@ -203,7 +221,6 @@ export default function Home() {
     }
   }, []);
 
-
   /* Results — derived from the store, overridden by this session's live calls.
      Derived rather than held in `useState` + adopted in an effect for the same
      reason as `creds` above: the store's real values only arrive on the render
@@ -232,6 +249,7 @@ export default function Home() {
   const bookingResult = resultOf('booking');
   const availResult = resultOf('avail');
   const customerResult = resultOf('customer');
+  const classesResult = resultOf('classes');
   const catalogResult = resultOf('catalog');
   const utilResult = resultOf('util');
   const webhookResult = resultOf('webhook');
@@ -247,6 +265,10 @@ export default function Home() {
   );
   const setCustomerResult = useCallback(
     (r: ActionResult | null) => setResult('customer', r),
+    [setResult],
+  );
+  const setClassesResult = useCallback(
+    (r: ActionResult | null) => setResult('classes', r),
     [setResult],
   );
   const setCatalogResult = useCallback(
@@ -420,52 +442,53 @@ export default function Home() {
 
   return (
     <div className="app-container">
-      {/* ─── Header ─── */}
-      <header className="app-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      {/* ─── Header (pinned) ─── */}
+      <header className="app-header" ref={headerRef}>
+        <div className="app-header-brand">
           <h1>unibooking</h1>
-          <div
-            className="header-links"
-            style={{ display: 'flex', gap: '0.8rem', marginTop: '0.2rem' }}
-          >
+          <p>Unified CRUD for 17 booking &amp; calendar providers. Interactive API explorer.</p>
+        </div>
+        <div className="app-header-actions">
+          <nav className="header-links" aria-label="Project links">
             <a
+              className="header-link header-link-github"
               href="https://github.com/djlahre0/unibooking"
               target="_blank"
               rel="noreferrer"
-              title="GitHub Repository"
-              style={{
-                color: 'var(--text-secondary)',
-                textDecoration: 'none',
-                transition: 'color 0.2s',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
-              onMouseOut={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
+              title="GitHub repository"
+              aria-label="GitHub repository"
             >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
               </svg>
             </a>
             <a
+              className="header-link header-link-npm"
               href="https://www.npmjs.com/package/unibooking"
               target="_blank"
               rel="noreferrer"
-              title="npm Package"
-              style={{
-                color: 'var(--text-secondary)',
-                textDecoration: 'none',
-                transition: 'color 0.2s',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.color = '#cb3837')}
-              onMouseOut={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
+              title="npm package"
+              aria-label="npm package"
             >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm10.666 6.666H8v-4H6.666v4H2.667v-5.334h8v5.334zm10.667-1.334h-2.667v2.668H16v-2.668h-2.667v-4h8v4z" />
               </svg>
             </a>
-          </div>
+          </nav>
           <ThemeToggle />
         </div>
-        <p>Unified CRUD for 16 booking &amp; calendar providers. Interactive API explorer.</p>
       </header>
 
       {/* ─── Status Bar ─── */}
@@ -612,7 +635,9 @@ export default function Home() {
           </nav>
 
           {/* ═══ CONNECT TAB ═══ */}
-          {activeTab === 'calendar' && <CalendarTab />}
+          {activeTab === 'calendar' && (
+            <CalendarTab onOpenConnect={() => setActiveTab('connect')} />
+          )}
 
           {activeTab === 'connect' && (
             <ConnectPanel
@@ -627,6 +652,8 @@ export default function Home() {
               }
               busy={busy('caps')}
               capsElapsedMs={elapsedMs.caps}
+              conn={conn}
+              env={env}
               calendarStatus={calendarStatus}
               onDisconnected={refreshCalendarStatus}
               onCalendarConfigChanged={refreshCalendarStatus}
@@ -756,6 +783,21 @@ export default function Home() {
               wrap={wrap}
               busy={busy}
               elapsedMs={elapsedMs.customer}
+            />
+          )}
+
+          {/* ═══ CLASSES TAB ═══ */}
+          {activeTab === 'classes' && (
+            <ClassesTab
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              defaultRange={defaultRange}
+              classesResult={classesResult}
+              setClassesResult={setClassesResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.classes}
             />
           )}
 

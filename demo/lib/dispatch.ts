@@ -16,6 +16,12 @@ export type Op =
   | 'checkConnection'
   | 'listServices'
   | 'listStaff'
+  | 'listCategories'
+  | 'getBusinessHours'
+  | 'listCalendars'
+  | 'listClasses'
+  | 'getClass'
+  | 'enrollInClass'
   | 'findOrCreate'
   | 'withRetryList'
   | 'collectAll'
@@ -31,11 +37,20 @@ export const OPS: readonly Op[] = [
   'checkConnection',
   'listServices',
   'listStaff',
+  'listCategories',
+  'getBusinessHours',
+  'listCalendars',
+  'listClasses',
+  'getClass',
+  'enrollInClass',
   'findOrCreate',
   'withRetryList',
   'collectAll',
   'listAll',
 ];
+
+/** Upper bound on calendar-list pages fetched for one `listCalendars`. */
+const MAX_CALENDAR_PAGES = 5;
 
 // `timezone` is an IANA name for display, but some providers genuinely need it:
 // Setmore and Wix return offset-less slot times that cannot be anchored without
@@ -133,6 +148,8 @@ export async function dispatch(
         });
       }
       return client.listServices({
+        ...(args?.staffId ? { staffId: args.staffId } : {}),
+        ...(args?.categoryId ? { categoryId: args.categoryId } : {}),
         ...(args?.limit ? { limit: Number(args.limit) } : {}),
         ...(args?.pageToken ? { pageToken: args.pageToken } : {}),
       });
@@ -146,8 +163,97 @@ export async function dispatch(
         });
       }
       return client.listStaff({
+        ...(args?.serviceId ? { serviceId: args.serviceId } : {}),
         ...(args?.limit ? { limit: Number(args.limit) } : {}),
         ...(args?.pageToken ? { pageToken: args.pageToken } : {}),
+      });
+
+    case 'listCategories':
+      if (!client.listCategories) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider does not expose service categories.',
+        });
+      }
+      return client.listCategories();
+
+    case 'getBusinessHours':
+      if (!client.getBusinessHours) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider does not expose business hours.',
+        });
+      }
+      return client.getBusinessHours();
+
+    // Every page, capped: the explorer searches the result for the calendar
+    // a connection targets, which can sit on any page (providers don't
+    // promise to list the primary one first).
+    case 'listCalendars': {
+      if (!client.listCalendars) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider has no calendar list.',
+        });
+      }
+      const calendars = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < MAX_CALENDAR_PAGES; page++) {
+        const res = await client.listCalendars(pageToken ? { pageToken } : {});
+        calendars.push(...res.calendars);
+        pageToken = res.nextPageToken;
+        if (!pageToken) break;
+      }
+      return { calendars };
+    }
+
+    case 'listClasses':
+      if (!client.listClasses) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider has no group-class concept.',
+        });
+      }
+      return client.listClasses({
+        ...(args?.start && args?.end ? { range: { start: args.start, end: args.end } } : {}),
+        ...(args?.staffId ? { staffId: args.staffId } : {}),
+        ...(args?.serviceId ? { serviceId: args.serviceId } : {}),
+        ...(args?.limit ? { limit: Number(args.limit) } : {}),
+        ...(args?.pageToken ? { pageToken: args.pageToken } : {}),
+      });
+
+    case 'getClass':
+      if (!client.getClass) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider has no group-class concept.',
+        });
+      }
+      return client.getClass(args.classId);
+
+    case 'enrollInClass':
+      if (!client.enrollInClass) {
+        throw new UnibookingError({
+          provider: client.id,
+          code: 'UNSUPPORTED',
+          message: 'This provider does not support class enrollment.',
+        });
+      }
+      return client.enrollInClass({
+        classId: args.classId,
+        customer: {
+          ...(args?.customerId ? { id: args.customerId } : {}),
+          ...(args?.customerName ? { name: args.customerName } : {}),
+          ...(args?.customerEmail ? { email: args.customerEmail } : {}),
+          ...(args?.customerPhone ? { phone: args.customerPhone } : {}),
+        },
+        ...(args?.allowWaitlist ? { allowWaitlist: true } : {}),
+        ...(args?.notes ? { notes: args.notes } : {}),
       });
 
     case 'findOrCreate':

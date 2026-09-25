@@ -86,6 +86,33 @@ export function writeOAuthApp(
   }
 }
 
+/** Removes one provider's app, leaving any other provider's untouched, so the
+ *  operator can register a different client id/secret without hand-editing
+ *  the file. Returns false (never throws) on a read-only filesystem, exactly
+ *  like `writeOAuthApp` — the caller turns that into an ordinary error
+ *  response rather than a 500.
+ *
+ *  Removing the last entry rewrites `{}` rather than unlinking the file: the
+ *  file's existence is not what makes a provider configured (`readOAuthApps`
+ *  treats a missing and an empty file identically), and keeping it preserves
+ *  the 0600 mode for the next write. */
+export function removeOAuthApp(
+  provider: OAuthProvider,
+  overrides: OAuthAppsOverrides = {},
+): boolean {
+  const filePath = overrides.filePath ?? DEFAULT_PATH();
+  const next: OAuthApps = { ...readOAuthApps(overrides) };
+  delete next[provider];
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify(next, null, 2), { mode: 0o600 });
+    cached = next;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Test hook — clears the cached resolution so the next call re-resolves
  *  from scratch. Mirrors `__resetSessionSecretCache` in ./secret.ts. */
 export function __resetOAuthAppsCache(): void {

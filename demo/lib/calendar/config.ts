@@ -49,6 +49,27 @@ function value(env: Record<string, string | undefined>, key: string): string | u
   return v ? v : undefined;
 }
 
+/** The env var pair that outranks the saved file for each provider, below. */
+const ENV_KEYS: Record<OAuthProvider, readonly [string, string]> = {
+  google: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  outlook: ['MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'],
+};
+
+/**
+ * Whether this provider's credentials come from the environment rather than
+ * `.oauth-apps.json`. `readCalendarConfig` below prefers env over the saved
+ * file, so deleting the file entry for an env-configured provider would
+ * report success and change nothing the visitor can see — the reset route
+ * checks this first and says to change the env vars instead.
+ */
+export function isConfiguredByEnv(
+  provider: OAuthProvider,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const [idKey, secretKey] = ENV_KEYS[provider];
+  return !!value(env, idKey) && !!value(env, secretKey);
+}
+
 export function readCalendarConfig(
   env: Record<string, string | undefined> = process.env,
   secretOverrides: Pick<SecretOverrides, 'filePath'> = {},

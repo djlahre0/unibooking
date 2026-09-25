@@ -62,6 +62,17 @@ export function saveOAuthApp(
   });
 }
 
+/**
+ * Clears the saved registration so the setup form comes back and a different
+ * client id/secret can be entered. Localhost-only, enforced server-side by
+ * the same gate chain as `saveOAuthApp` — callers render the button that
+ * calls this only when `calendarStatus.isLocalhost`, but that is convenience,
+ * not the control.
+ */
+export function resetOAuthApp(provider: OAuthProvider): Promise<ActionResult> {
+  return request(`/api/calendar/oauth-app/${provider}`, { method: 'DELETE' });
+}
+
 export function connectApple(appleId: string, appPassword: string): Promise<ActionResult> {
   return post('/api/calendar/apple', { appleId, appPassword });
 }

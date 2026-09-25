@@ -21,6 +21,16 @@ export function browserZone(): string {
   }
 }
 
+/** True for a zone name this browser's Intl knows, e.g. `Europe/London`. */
+export function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `2026-09-22` + `10:00` + `Asia/Kolkata` → `2026-09-22T10:00:00+05:30`.
  *

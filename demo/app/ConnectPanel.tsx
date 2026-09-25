@@ -1,12 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import type { ActionResult } from '../lib/call';
+import type { ActionResult, Connection } from '../lib/call';
+import { ENVIRONMENTS } from '../lib/environments';
 import { PROVIDER_META as PROVIDERS, isDirect, isLocal, type CredField } from '../lib/providers';
 import { connectUrl, disconnect } from '../lib/calendar/api';
 import type { CalendarStatus } from '../lib/calendar/types';
 import CustomAppForm from './calendar/CustomAppForm';
+import AppleConnectCard from './calendar/AppleConnectCard';
+import ResetSetupButton from './calendar/ResetSetupButton';
 import ResultBox from './ResultBox';
+import ConnectionCheck from './ConnectionCheck';
 
 /* ─── Trust-model banner: shows where the visitor's token actually goes ───
    The three original states are kept byte-for-byte -- it is a security claim.
@@ -166,6 +170,12 @@ export type ConnectPanelProps = {
    *  instead of via `children` so it moves with the fields it belongs next
    *  to rather than always sitting in the open. */
   advancedChildren?: React.ReactNode;
+  /** The connection the explorer tabs will use. When given, step 3 offers a
+   *  real "Test connection" round trip; absent (e.g. older tests), only the
+   *  static capabilities lookup is shown. */
+  conn?: Connection;
+  /** The Environment control's value, for the sandbox/production hint. */
+  env?: string;
   children?: React.ReactNode;
 };
 
@@ -187,6 +197,8 @@ export default function ConnectPanel({
   onDisconnected,
   onCalendarConfigChanged,
   advancedChildren,
+  conn,
+  env = 'prod',
   children,
 }: ConnectPanelProps) {
   const providerInfo = selectedProvider ? PROVIDERS[selectedProvider] : null;
@@ -218,6 +230,12 @@ export default function ConnectPanel({
   const who = connection
     ? (connection.account.email ?? connection.account.name ?? 'Connected account')
     : '';
+  // Required fields still empty. Signed in via My Calendar, the session
+  // supplies the token, so only the ids count.
+  const missing = [...(signedInHere ? [] : tokenFields), ...idFields]
+    .filter((f) => !(creds[f.key] ?? '').trim())
+    .map((f) => f.label);
+  const hasSandbox = !!ENVIRONMENTS[selectedProvider]?.sandbox;
   const [disconnecting, setDisconnecting] = useState(false);
   async function handleDisconnect() {
     setDisconnecting(true);
@@ -294,9 +312,18 @@ export default function ConnectPanel({
               ) : oauthSignInAvailable ? (
                 <div style={{ margin: '0.9rem 0 0.4rem' }}>
                   {calendarConfigured ? (
-                    <a className="btn btn-primary" href={connectUrl(oauthProvider)}>
-                      Continue with {OAUTH_LABEL[oauthProvider]}
-                    </a>
+                    <div className="cal-signin-row">
+                      <a className="btn btn-primary" href={connectUrl(oauthProvider)}>
+                        Continue with {OAUTH_LABEL[oauthProvider]}
+                      </a>
+                      {calendarStatus?.isLocalhost ? (
+                        <ResetSetupButton
+                          provider={oauthProvider}
+                          label={OAUTH_LABEL[oauthProvider]}
+                          onReset={() => onCalendarConfigChanged?.()}
+                        />
+                      ) : null}
+                    </div>
                   ) : calendarStatus?.isLocalhost ? (
                     <>
                       <p className="cal-muted" style={{ marginTop: 0 }}>
@@ -323,6 +350,31 @@ export default function ConnectPanel({
                 </p>
               ) : null
             ) : null}
+
+            {/* Apple's connect form. Apple offers third parties no OAuth for
+                calendars, so there is no "Continue with…" button to show in
+                the branch above -- an app-specific password is the whole
+                flow. It renders here because connecting happens on this tab
+                for every provider; My Calendar only shows what is already
+                connected. Signed in already: nothing to offer. */}
+            {selectedProvider === 'apple' &&
+            calendarStatus?.enabled &&
+            connection?.provider !== 'apple' ? (
+              <div style={{ margin: '0.9rem 0 0.4rem' }}>
+                <AppleConnectCard
+                  onConnected={() => {
+                    onCalendarConfigChanged?.();
+                    onOpenCalendar?.();
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {/* Above the steps, and outside the isLocal branch below, so what
+                this browser has saved is stated before anything is typed into
+                it rather than discovered underneath the fields -- and so the
+                sample provider gets its "Clear all saved" too. */}
+            {children}
 
             {isLocal(selectedProvider) ? (
               <div className="creds-form">
@@ -419,16 +471,30 @@ export default function ConnectPanel({
                         {advancedChildren}
                       </details>
                     ) : null}
-                    {children}
                   </div>
                 </li>
                 <li className="connect-step">
                   <div className="connect-step-body">
-                    <h3 className="connect-step-title">Run a call</h3>
+                    <h3 className="connect-step-title">
+                      {conn ? 'Test the connection' : 'Run a call'}
+                    </h3>
+                    {conn ? (
+                      <ConnectionCheck
+                        providerId={selectedProvider}
+                        conn={conn}
+                        missing={missing}
+                        env={env}
+                        hasSandbox={hasSandbox}
+                      />
+                    ) : null}
+                    {/* Capabilities come from a static table and never touch
+                        the provider, so they prove nothing about the token;
+                        secondary once a real test is on offer. */}
                     <button
-                      className="btn btn-primary"
+                      className={`btn ${conn ? 'btn-secondary btn-sm' : 'btn-primary'}`}
                       onClick={onLoadCapabilities}
                       disabled={busy}
+                      style={conn ? { marginTop: '0.75rem' } : undefined}
                     >
                       {busy ? '...' : 'Load capabilities'}
                     </button>
