@@ -30,6 +30,9 @@ export interface AdapterMethods {
   listServices?: NonNullable<BookingClient['listServices']>;
   listStaff?: NonNullable<BookingClient['listStaff']>;
   listCalendars?: NonNullable<BookingClient['listCalendars']>;
+  createCalendar?: NonNullable<BookingClient['createCalendar']>;
+  updateCalendar?: NonNullable<BookingClient['updateCalendar']>;
+  deleteCalendar?: NonNullable<BookingClient['deleteCalendar']>;
   listCategories?: NonNullable<BookingClient['listCategories']>;
   getBusinessHours?: NonNullable<BookingClient['getBusinessHours']>;
   listClasses?: NonNullable<BookingClient['listClasses']>;
@@ -45,6 +48,12 @@ export interface AdapterMethods {
   createStaff?: NonNullable<BookingClient['createStaff']>;
   updateStaff?: NonNullable<BookingClient['updateStaff']>;
   setStaffActive?: NonNullable<BookingClient['setStaffActive']>;
+  getService?: NonNullable<BookingClient['getService']>;
+  getStaff?: NonNullable<BookingClient['getStaff']>;
+  deleteService?: NonNullable<BookingClient['deleteService']>;
+  deleteStaff?: NonNullable<BookingClient['deleteStaff']>;
+  assignStaffToService?: NonNullable<BookingClient['assignStaffToService']>;
+  unassignStaffFromService?: NonNullable<BookingClient['unassignStaffFromService']>;
   customers?: CustomerOps;
 }
 
@@ -171,15 +180,136 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       ...(m.renewWatch ? { renewWatch: m.renewWatch } : {}),
       ...(m.stopWatch ? { stopWatch: m.stopWatch } : {}),
       ...(m.createService ? { createService: m.createService } : {}),
-      ...(m.updateService ? { updateService: m.updateService } : {}),
+      ...(m.updateService
+        ? { updateService: withActive(def.id, 'service', m.updateService, m.setServiceActive) }
+        : {}),
       ...(m.setServiceActive ? { setServiceActive: m.setServiceActive } : {}),
       ...(m.createStaff ? { createStaff: m.createStaff } : {}),
-      ...(m.updateStaff ? { updateStaff: m.updateStaff } : {}),
+      ...(m.updateStaff
+        ? { updateStaff: withActive(def.id, 'staff member', m.updateStaff, m.setStaffActive) }
+        : {}),
       ...(m.setStaffActive ? { setStaffActive: m.setStaffActive } : {}),
-      ...(m.customers ? { customers: m.customers } : {}),
+      // Get-by-id everywhere there is a list: an adapter's own by-id endpoint
+      // when it has one, otherwise a bounded walk of the list.
+      ...(m.getService
+        ? { getService: m.getService }
+        : m.listServices
+          ? {
+              getService: (id: string) =>
+                findInPages(def.id, 'service', id, (pageToken) =>
+                  m.listServices!(pageToken ? { pageToken } : {}).then((r) => ({
+                    items: r.services,
+                    ...(r.nextPageToken ? { next: r.nextPageToken } : {}),
+                  })),
+                ),
+            }
+          : {}),
+      ...(m.getStaff
+        ? { getStaff: m.getStaff }
+        : m.listStaff
+          ? {
+              getStaff: (id: string) =>
+                findInPages(def.id, 'staff member', id, (pageToken) =>
+                  m.listStaff!(pageToken ? { pageToken } : {}).then((r) => ({
+                    items: r.staff,
+                    ...(r.nextPageToken ? { next: r.nextPageToken } : {}),
+                  })),
+                ),
+            }
+          : {}),
+      ...(m.deleteService ? { deleteService: m.deleteService } : {}),
+      ...(m.deleteStaff ? { deleteStaff: m.deleteStaff } : {}),
+      ...(m.assignStaffToService ? { assignStaffToService: m.assignStaffToService } : {}),
+      ...(m.unassignStaffFromService
+        ? { unassignStaffFromService: m.unassignStaffFromService }
+        : {}),
+      // Get-by-id for calendars: always the bounded walk, since no calendar
+      // provider needs more than its list to answer it.
+      ...(m.listCalendars
+        ? {
+            getCalendar: (id: string) =>
+              findInPages(def.id, 'calendar', id, (pageToken) =>
+                m.listCalendars!(pageToken ? { pageToken } : {}).then((r) => ({
+                  items: r.calendars,
+                  ...(r.nextPageToken ? { next: r.nextPageToken } : {}),
+                })),
+              ),
+          }
+        : {}),
+      ...(m.createCalendar ? { createCalendar: m.createCalendar } : {}),
+      ...(m.updateCalendar ? { updateCalendar: m.updateCalendar } : {}),
+      ...(m.deleteCalendar ? { deleteCalendar: m.deleteCalendar } : {}),
+      ...(m.customers ? { customers: withCustomerGet(def.id, m.customers) } : {}),
     };
   };
   return Object.assign(impl, { id: def.id, capabilities: def.capabilities });
+}
+
+/**
+ * `update*(id, { active })` for every adapter alike: the other fields are
+ * written by the adapter's own update, then the status by its `set*Active`.
+ * Fields first, so a status change never lands on a record whose edit was
+ * rejected. A provider without an inactive state refuses `active` outright;
+ * dropping it silently would report a deactivation that never happened.
+ */
+function withActive<TIn extends { active?: boolean }, TOut>(
+  provider: ProviderId,
+  what: string,
+  update: (id: string, input: TIn) => Promise<TOut>,
+  setActive: ((id: string, active: boolean) => Promise<TOut>) | undefined,
+): (id: string, input: TIn) => Promise<TOut> {
+  return async (id, input) => {
+    const { active, ...rest } = input;
+    if (active === undefined) return update(id, input);
+    if (!setActive) {
+      throw new UnibookingError({
+        provider,
+        code: 'UNSUPPORTED',
+        message: `${provider} has no inactive state for a ${what}; delete it instead`,
+      });
+    }
+    const other = Object.values(rest).some((v) => v !== undefined);
+    if (other) await update(id, rest as TIn);
+    return setActive(id, active);
+  };
+}
+
+/** `customers.get` wherever `customers.list` exists: the adapter's own by-id
+ *  endpoint, else a bounded walk of the list (same rule as getService). */
+function withCustomerGet(provider: ProviderId, ops: CustomerOps): CustomerOps {
+  if (ops.get || !ops.list) return ops;
+  const list = ops.list.bind(ops);
+  return {
+    ...ops,
+    get: (id: string) =>
+      findInPages(provider, 'customer', id, (pageToken) =>
+        list(pageToken ? { pageToken } : {}).then((r) => ({
+          items: r.customers,
+          ...(r.nextPageToken ? { next: r.nextPageToken } : {}),
+        })),
+      ),
+  };
+}
+
+/** Upper bound on list pages walked by the get-by-id fallback. */
+const FIND_MAX_PAGES = 20;
+
+/** Find one entry by id across a paged list, or throw `NOT_FOUND`. */
+async function findInPages<T extends { id: string }>(
+  provider: ProviderId,
+  what: string,
+  id: string,
+  page: (pageToken: string | undefined) => Promise<{ items: T[]; next?: string }>,
+): Promise<T> {
+  let token: string | undefined;
+  for (let i = 0; i < FIND_MAX_PAGES; i++) {
+    const { items, next } = await page(token);
+    const hit = items.find((x) => x.id === id);
+    if (hit) return hit;
+    if (!next) break;
+    token = next;
+  }
+  throw new UnibookingError({ provider, code: 'NOT_FOUND', message: `${what} ${id} not found` });
 }
 
 function assertVersioned(def: { id: ProviderId; capabilities: Capabilities }): void {

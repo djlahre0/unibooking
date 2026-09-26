@@ -805,8 +805,23 @@ Both results paginate like `listBookings`, so `listAll` works on them.
 
 ## Writing to the catalog
 
-Gated by `serviceCatalogWrite` / `staffDirectoryWrite`. **Square only** — most
-providers' catalogs are read-only to third parties.
+**Square** and **Microsoft Bookings** only. Most providers' catalogs are
+read-only to third parties. Each operation has its own flag, because the two
+providers genuinely differ:
+
+| Operation | Flag | Square | Microsoft Bookings |
+|---|---|---|---|
+| `createService` / `updateService` / `setServiceActive` | `serviceCatalogWrite` | ✅ | ✅ (inactive = hidden from customers) |
+| `deleteService` | `serviceDelete` | ✅ | ✅ |
+| `createStaff` / `updateStaff` | `staffDirectoryWrite` | ✅ | ✅ (email required) |
+| `setStaffActive` | `staffDeactivate` | ✅ | — (Graph has no inactive state) |
+| `deleteStaff` | `staffDelete` | — (Square cannot delete team members) | ✅ |
+| `assignStaffToService` / `unassignStaffFromService` | `staffServiceAssignmentWrite` | ✅ | ✅ |
+| `getService` / `getStaff` | `serviceCatalog` / `staffDirectory` | ✅ | ✅ |
+
+`getService` / `getStaff` exist wherever the list does: providers without a
+by-id endpoint page through the list for you and throw `NOT_FOUND` if it isn't
+there.
 
 ```ts
 const service = await client.createService!({
@@ -817,27 +832,29 @@ const service = await client.createService!({
 });
 
 await client.updateService!(service.id, { price: { amount: 5000, currency: "USD" } });
+await client.getService!(service.id);
 
-// Retire it without destroying it or its booking history.
+// Retire it without destroying it or its booking history...
 await client.setServiceActive!(service.id, false);
+// ...or change details and status in one call (same for updateStaff):
+await client.updateService!(service.id, { name: "Colour & gloss", active: true });
+// ...or remove it outright, where `serviceDelete` is true.
+await client.deleteService!(service.id);
 ```
 
 Updates are **partial** — omitted fields are left alone. On Square that means a
 read-modify-write internally, because its upsert *replaces* the object: anything
 not sent back is genuinely erased.
 
-### There is no `deleteService` or `deleteStaff`
+### Retire or delete
 
-Deliberate, not an oversight. Deletion isn't portable here:
+`setServiceActive(id, false)` / `setStaffActive(id, false)` make something
+unbookable and keep its history, so past bookings stay resolvable. Prefer it
+where it exists. `deleteService` / `deleteStaff` remove the one service or staff
+member named, never its siblings: on Square, where `Service.id` is a variation
+and deleting the parent item cascades, only the variation is deleted, unless it
+is the item's last one.
 
-- Square has **no team-member delete at all** — only `status: INACTIVE`.
-- Square's catalog delete **cascades**: removing an item removes every variation
-  under it, and `Service.id` *is* a variation id.
-
-A canonical `delete` would therefore mean something different, and something
-irreversible, on each provider. `setServiceActive(id, false)` expresses what
-callers actually want — make it unbookable, keep the history, keep past bookings
-resolvable.
 
 > **Scopes.** Square catalog writes need `ITEMS_WRITE` and staff writes need
 > `EMPLOYEES_WRITE`. `unibooking/oauth/square` does **not** request either by
@@ -1408,9 +1425,55 @@ endpoint needs both.
 
 # Staff, Services and Categories
 
+## Client records
+
+Where `customerDirectory` is true, a provider's existing clients can be read,
+which is what importing and linking them on your side needs.
+
+| | list / get | create / update | delete |
+|---|---|---|---|
+| Square | ✅ | ✅ | ✅ |
+| Microsoft Bookings | ✅ | ✅ | ✅ |
+| Wix | ✅ | ✅ | ✅ (not site members or subscribers) |
+| Phorest | ✅ | ✅ | — (Phorest only archives) |
+| Zenoti | ✅ | ✅ | — (no API) |
+| Boulevard | ✅ | — | — |
+| Setmore | — (lookup needs a first name; no list) | | | `CustomerRecord.id` is the provider's stable id: store
+it to link a record in your system to the provider's.
+
+```ts
+const page = await client.customers!.list!({ limit: 100 }); // pages like listBookings
+const byEmail = await client.customers!.list!({ email: "ana@example.com" });
+const ana = await client.customers!.get!(page.customers[0].id);
+
+// customerWrite / customerDelete
+const created = await client.customers!.create!({ name: "Ana Silva", email: "ana@example.com" });
+await client.customers!.update!(created.id, { phone: "+15550100" });
+await client.customers!.delete!(created.id);
+```
+
+`create` always creates; use `customers.findOrCreate` to reuse a match instead.
+The email/phone filters are exact: Square searches server-side, Microsoft
+Bookings filters each page after reading it.
+
+Calendars have a matching by-id read: `client.getCalendar!(id)` wherever
+`calendarList` is true. Where `calendarWrite` is true (**Google**, **Outlook**,
+**Apple**), the calendars themselves can be made, renamed and removed:
+
+```ts
+const cal = await client.createCalendar!({ name: "Salon", timezone: "Europe/Dublin", color: "#0F5C4A" });
+await client.updateCalendar!(cal.id, { name: "Salon — Front desk" });
+await client.deleteCalendar!(cal.id); // removes every event in it too
+```
+
+The primary (Google) / default (Outlook) calendar can't be deleted. On Apple a
+calendar id must be a calendar inside the account's own calendar home; any
+other URL is refused before a request (and the credentials) are sent.
+
 ## Who performs what
 
-Where `capabilities.staffServiceAssignment` is true (**Square**, **Acuity**),
+Where `capabilities.staffServiceAssignment` is true (**Square**, **Acuity**,
+**Booker**, **Microsoft Bookings**),
 services and staff carry each other's ids, so you never have to guess which
 member can perform which service:
 
@@ -1428,6 +1491,19 @@ await client.listStaff!({ serviceId: 'var_2' });   // who can do a colour?
 
 `staffIds` distinguishes **"nobody"** from **"the provider did not say"**: an
 empty array means no one is assigned, `undefined` means the field was absent.
+
+Where `staffServiceAssignmentWrite` is also true (**Square**, **Microsoft
+Bookings**), the link can be changed. Both calls are idempotent — assigning
+someone already assigned, or unassigning someone who isn't, is not an error —
+and return the service with its updated `staffIds`:
+
+```ts
+await client.assignStaffToService!('var_2', 'tm_1');   // Ana can now do colour
+await client.unassignStaffFromService!('var_2', 'tm_1');
+```
+
+On Square a team member must have a bookable profile (Appointments → Staff) to
+be offered in availability, even once assigned.
 Do not collapse the two — booking against a service with `staffIds: []` will
 fail, while `undefined` says nothing either way.
 
@@ -1483,7 +1559,7 @@ unibooking currently supports the following providers.
 |-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|:---------:|:-------:|:------:|:----------:|:-----:|:----:|:----:|:--------:|
 | [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ | — | — | — | — | ✅ | ✅ | ✅ |
 | [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — | ✅ | — | — | — | — | ⚠️ | ✅ | ✅ |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | — | — | — | — | — |
 | [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
 | [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | — |
 | [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — |
@@ -2187,7 +2263,11 @@ export const myAdapter = defineAdapter({
         staffDirectory: false,
         serviceCatalogWrite: false,
         staffDirectoryWrite: false,
+        staffDeactivate: false,
+        staffDelete: false,
+        serviceDelete: false,
         calendarList: false,
+        // …plus the remaining flags; the Capabilities type lists every one.
     },
 
     baseUrl: "https://api.example.com/",

@@ -161,7 +161,7 @@ describe('square staff/service assignment', () => {
 
 describe('square categories', () => {
   it('lists catalog categories', async () => {
-    on(SQ, '/v2/catalog/search-catalog-objects', 'POST').reply(
+    on(SQ, '/v2/catalog/search', 'POST').reply(
       200,
       JSON.stringify({
         objects: [

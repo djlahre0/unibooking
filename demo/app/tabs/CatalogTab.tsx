@@ -61,8 +61,8 @@ export default function CatalogTab({
             }}
           >
             <code>checkConnection()</code> is on every adapter and does <strong>not</strong> throw
-            when credentials are dead — it returns <code>{'{ ok: false, reason }'}</code>. A
-            network blip or 5xx still throws, so a transient fault is never mistaken for a revoked
+            when credentials are dead — it returns <code>{'{ ok: false, reason }'}</code>. A network
+            blip or 5xx still throws, so a transient fault is never mistaken for a revoked
             integration.
           </p>
           <p
@@ -157,8 +157,8 @@ export default function CatalogTab({
               This provider links staff to services, so each <code>Service</code> carries{' '}
               <code>staffIds</code> and you can filter either way —{' '}
               <code>listServices({'{ staffId }'})</code> or{' '}
-              <code>listStaff({'{ serviceId }'})</code>. An empty <code>staffIds</code> means
-              nobody is assigned; <em>absent</em> means the provider did not say.
+              <code>listStaff({'{ serviceId }'})</code>. An empty <code>staffIds</code> means nobody
+              is assigned; <em>absent</em> means the provider did not say.
             </p>
           )}
 
@@ -169,10 +169,8 @@ export default function CatalogTab({
               marginTop: '1rem',
             }}
           >
-            Catalog <strong>writes</strong> (<code>createService</code>,{' '}
-            <code>setStaffActive</code>, …) are supported by the library on Square but are
-            deliberately not exposed here — this playground talks to real accounts, and a demo
-            should not mutate a live salon&apos;s catalog.
+            To add, edit, deactivate or delete services and staff, or change who performs what,
+            use the <strong>Services</strong> and <strong>Staff</strong> tabs.
           </p>
 
           {catalogResult && (

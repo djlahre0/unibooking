@@ -10,6 +10,7 @@ import { outlook } from 'unibooking/adapters/outlook';
 import { apple } from 'unibooking/adapters/apple';
 import { withAutoRefresh, type OAuthClient, type OAuthTokens } from 'unibooking/oauth';
 import { assertSafeCalendarUrl } from '../validate-caldav';
+import { markCancelled, setEventStatus, type EventStatus } from '../cancel-event';
 import { customOAuthClient, oauthClient, redirectUri, type CalendarConfig } from './config';
 import type { CalendarSession, StoredTokens } from './session';
 import type { CalendarOp, EventInput } from './types';
@@ -163,6 +164,23 @@ function toUpdate(client: BookingClient, e: EventInput): UpdateBookingInput {
   };
 }
 
+const STATUSES: readonly EventStatus[] = ['confirmed', 'pending', 'cancelled'];
+
+/** Name / colour / zone from the request, validated. */
+function calendarFields(client: BookingClient, args: Args, create: boolean) {
+  const name = typeof args.name === 'string' ? args.name.trim() : undefined;
+  if (create && !name) throw invalid(client, 'a calendar needs a name');
+  if (name !== undefined && !name) throw invalid(client, 'name cannot be empty');
+  const color = typeof args.color === 'string' && args.color ? args.color : undefined;
+  if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw invalid(client, 'color must be #RRGGBB');
+  const timezone = typeof args.timezone === 'string' && args.timezone ? args.timezone : undefined;
+  return {
+    ...(name ? { name } : {}),
+    ...(color ? { color } : {}),
+    ...(timezone ? { timezone } : {}),
+  };
+}
+
 export async function runCalendarOp(
   client: BookingClient,
   op: CalendarOp,
@@ -180,6 +198,23 @@ export async function runCalendarOp(
         if (!pageToken) break;
       }
       return { calendars };
+    }
+
+    // The calendars themselves: the provider owns them; these ask it to make,
+    // rename or remove one. `calendarWrite` adapters only.
+    case 'createCalendar': {
+      if (!client.createCalendar) throw invalid(client, 'this provider cannot create calendars');
+      return client.createCalendar(calendarFields(client, args, true) as { name: string });
+    }
+    case 'updateCalendar': {
+      if (!client.updateCalendar) throw invalid(client, 'this provider cannot rename calendars');
+      return client.updateCalendar(text(client, args, 'calendarId'), calendarFields(client, args, false));
+    }
+    case 'deleteCalendar': {
+      if (!client.deleteCalendar) throw invalid(client, 'this provider cannot delete calendars');
+      const id = text(client, args, 'calendarId');
+      await client.deleteCalendar(id);
+      return { deleted: true, calendarId: id };
     }
 
     case 'listEvents': {
@@ -204,6 +239,19 @@ export async function runCalendarOp(
     case 'updateEvent': {
       const id = text(client, args, 'id');
       return client.updateBooking(id, toUpdate(client, eventOf(client, args)));
+    }
+
+    // Cancel keeps the event, marked cancelled; Delete (below) removes it.
+    case 'cancelEvent':
+      return markCancelled(client, text(client, args, 'id'));
+
+    // Confirmed / tentative / cancelled, including undoing a cancel.
+    case 'setEventStatus': {
+      const status = text(client, args, 'status');
+      if (!STATUSES.includes(status as EventStatus)) {
+        throw invalid(client, `status must be one of ${STATUSES.join(', ')}`);
+      }
+      return setEventStatus(client, text(client, args, 'id'), status as EventStatus);
     }
 
     case 'deleteEvent': {

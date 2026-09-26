@@ -260,12 +260,60 @@ export function runConformance(config: ConformanceConfig): void {
           `${m} presence matches capabilities.serviceCatalogWrite`,
         ).toBe(client.capabilities.serviceCatalogWrite);
       }
-      for (const m of ['createStaff', 'updateStaff', 'setStaffActive'] as const) {
+      for (const m of ['createStaff', 'updateStaff'] as const) {
         expect(
           typeof client[m] === 'function',
           `${m} presence matches capabilities.staffDirectoryWrite`,
         ).toBe(client.capabilities.staffDirectoryWrite);
       }
+      // Retire and remove are separate flags because providers genuinely
+      // differ: Square deactivates but cannot delete staff, Graph the reverse.
+      const single = [
+        ['setStaffActive', 'staffDeactivate'],
+        ['deleteStaff', 'staffDelete'],
+        ['deleteService', 'serviceDelete'],
+        ['assignStaffToService', 'staffServiceAssignmentWrite'],
+        ['unassignStaffFromService', 'staffServiceAssignmentWrite'],
+        // Get-by-id rides on the list: an adapter's own endpoint or the kit's
+        // bounded walk of the list.
+        ['getService', 'serviceCatalog'],
+        ['getStaff', 'staffDirectory'],
+      ] as const;
+      for (const [m, flag] of single) {
+        expect(typeof client[m] === 'function', `${m} presence matches capabilities.${flag}`).toBe(
+          client.capabilities[flag],
+        );
+      }
+      // Client records: each op behind its own flag, all on `customers`.
+      const cust = client.customers as unknown as Record<string, unknown> | undefined;
+      const custOps = [
+        ['list', 'customerDirectory'],
+        ['get', 'customerDirectory'],
+        ['create', 'customerWrite'],
+        ['update', 'customerWrite'],
+        ['delete', 'customerDelete'],
+      ] as const;
+      for (const [m, flag] of custOps) {
+        expect(
+          typeof cust?.[m] === 'function',
+          `customers.${m} presence matches capabilities.${flag}`,
+        ).toBe(client.capabilities[flag]);
+      }
+      if (client.capabilities.customerDirectory) expect(client.capabilities.customers).toBe(true);
+      expect(typeof client.getCalendar === 'function', 'getCalendar rides on calendarList').toBe(
+        client.capabilities.calendarList,
+      );
+      for (const m of ['createCalendar', 'updateCalendar', 'deleteCalendar'] as const) {
+        expect(typeof client[m] === 'function', `${m} presence matches calendarWrite`).toBe(
+          client.capabilities.calendarWrite,
+        );
+      }
+      if (client.capabilities.calendarWrite) expect(client.capabilities.calendarList).toBe(true);
+      // Each of these is meaningless without the thing it acts on.
+      const caps = client.capabilities;
+      if (caps.staffDeactivate || caps.staffDelete) expect(caps.staffDirectory).toBe(true);
+      if (caps.serviceDelete) expect(caps.serviceCatalog).toBe(true);
+      if (caps.staffServiceAssignmentWrite) expect(caps.staffServiceAssignment).toBe(true);
 
       // Writing implies reading. A catalog you can create into but not list is
       // not a coherent surface, and would leave the caller unable to discover
@@ -276,12 +324,6 @@ export function runConformance(config: ConformanceConfig): void {
       if (client.capabilities.staffDirectoryWrite) {
         expect(client.capabilities.staffDirectory, 'write implies read').toBe(true);
       }
-
-      // No provider may offer a delete: Square has no team-member delete at all
-      // and its catalog delete cascades, so the canonical surface omits it.
-      const surface = client as unknown as Record<string, unknown>;
-      expect(surface.deleteService, 'no canonical deleteService').toBeUndefined();
-      expect(surface.deleteStaff, 'no canonical deleteStaff').toBeUndefined();
     });
 
     it('capability↔method: unsupported availability throws UNSUPPORTED', async () => {

@@ -422,12 +422,166 @@ describe('catalog write capability contract', () => {
     expect(g.updateStaff).toBeUndefined();
   });
 
-  it('offers no delete on any provider', () => {
-    // Deliberate: Square has no team-member delete, and its catalog delete
-    // cascades from the item through every variation -- so a canonical
-    // `delete` would mean something different, and irreversible, per provider.
-    const sq = square({ accessToken: 't', locationId: 'L' }) as unknown as Record<string, unknown>;
-    expect(sq.deleteService).toBeUndefined();
+  it('deletes services but never staff on Square, each behind its own flag', () => {
+    // Square has no team-member delete at all (deactivation is the only
+    // removal), so `staffDelete` is false and the method absent -- while a
+    // service delete is scoped to the one variation (see the tests below).
+    const sq = square({ accessToken: 't', locationId: 'L' });
+    expect(sq.capabilities.serviceDelete).toBe(true);
+    expect(typeof sq.deleteService).toBe('function');
+    expect(sq.capabilities.staffDelete).toBe(false);
     expect(sq.deleteStaff).toBeUndefined();
+    expect(sq.capabilities.staffDeactivate).toBe(true);
+    expect(typeof sq.setStaffActive).toBe('function');
+  });
+});
+
+describe('square service delete, get and staff assignment', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  function mockReads(parent = item()) {
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: (p) => pathname(p) === '/v2/catalog/object/VAR_1', method: 'GET' })
+      .reply(200, JSON.stringify({ object: parent.item_data.variations[0] }), {
+        headers: JSON_HEADERS,
+      });
+    pool
+      .intercept({ path: (p) => pathname(p) === '/v2/catalog/object/ITEM_1', method: 'GET' })
+      .reply(200, JSON.stringify({ object: parent }), { headers: JSON_HEADERS });
+    return pool;
+  }
+
+  it('deleteService removes only the variation when the item has others', async () => {
+    const pool = mockReads();
+    let deleted = '';
+    pool
+      .intercept({ path: (p) => pathname(p).startsWith('/v2/catalog/object/'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts) => {
+          deleted = pathname(String(opts.path));
+          return JSON.stringify({ deleted_object_ids: ['VAR_1'] });
+        },
+        { headers: JSON_HEADERS },
+      );
+    await client().deleteService!('VAR_1');
+    // Deleting ITEM_1 would have taken VAR_2 (a different Service) with it.
+    expect(deleted).toBe('/v2/catalog/object/VAR_1');
+    agent.assertNoPendingInterceptors();
+  });
+
+  it("deleteService removes the item when it is the variation's last", async () => {
+    const single = item();
+    single.item_data.variations = [single.item_data.variations[0]!];
+    const pool = mockReads(single);
+    let deleted = '';
+    pool
+      .intercept({ path: (p) => pathname(p).startsWith('/v2/catalog/object/'), method: 'DELETE' })
+      .reply(
+        200,
+        (opts) => {
+          deleted = pathname(String(opts.path));
+          return JSON.stringify({ deleted_object_ids: ['ITEM_1', 'VAR_1'] });
+        },
+        { headers: JSON_HEADERS },
+      );
+    await client().deleteService!('VAR_1');
+    expect(deleted).toBe('/v2/catalog/object/ITEM_1');
+  });
+
+  it('getService returns the one variation asked for', async () => {
+    mockReads();
+    const sv = await client().getService!('VAR_1');
+    expect(sv.id).toBe('VAR_1');
+    expect(sv.name).toBe('Gel Nails');
+    assertCanonicalService(sv);
+  });
+
+  it('getStaff reads the team member directly', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: (p) => pathname(p) === '/v2/team-members/TM1', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({ team_member: { id: 'TM1', given_name: 'Ana', status: 'ACTIVE' } }),
+        { headers: JSON_HEADERS },
+      );
+    const st = await client().getStaff!('TM1');
+    expect(st).toMatchObject({ id: 'TM1', name: 'Ana', active: true });
+    assertCanonicalStaff(st);
+  });
+
+  function captureUpsert(pool: ReturnType<typeof mockReads>, teamIds: string[]) {
+    const sent: { ids?: string[] } = {};
+    pool.intercept({ path: (p) => pathname(p) === '/v2/catalog/object', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const body = JSON.parse(String(opts.body));
+        const v = body.object.item_data.variations.find((x: any) => x.id === 'VAR_1');
+        sent.ids = v.item_variation_data.team_member_ids;
+        const reply = item();
+        reply.item_data.variations[0]!.item_variation_data = {
+          ...reply.item_data.variations[0]!.item_variation_data,
+          team_member_ids: teamIds,
+        } as never;
+        return JSON.stringify({ catalog_object: reply });
+      },
+      { headers: JSON_HEADERS },
+    );
+    return sent;
+  }
+
+  it('assignStaffToService adds the member to the variation, once', async () => {
+    const withOne = item();
+    (withOne.item_data.variations[0]!.item_variation_data as any).team_member_ids = ['TM1'];
+    const pool = mockReads(withOne);
+    const sent = captureUpsert(pool, ['TM1', 'TM2']);
+    const sv = await client().assignStaffToService!('VAR_1', 'TM2');
+    expect(sent.ids).toEqual(['TM1', 'TM2']);
+    expect(sv.staffIds).toEqual(['TM1', 'TM2']);
+  });
+
+  it('assigning an already-assigned member does not duplicate it', async () => {
+    const withOne = item();
+    (withOne.item_data.variations[0]!.item_variation_data as any).team_member_ids = ['TM1'];
+    const sent = captureUpsert(mockReads(withOne), ['TM1']);
+    await client().assignStaffToService!('VAR_1', 'TM1');
+    expect(sent.ids).toEqual(['TM1']);
+  });
+
+  it('unassigning the last member reports [] even though Square omits the field', async () => {
+    // Verified live: Square drops `team_member_ids` from the upsert reply once
+    // it is empty, which would otherwise surface as "the provider did not say".
+    const withOne = item();
+    (withOne.item_data.variations[0]!.item_variation_data as any).team_member_ids = ['TM1'];
+    const pool = mockReads(withOne);
+    pool
+      .intercept({ path: (p) => pathname(p) === '/v2/catalog/object', method: 'POST' })
+      .reply(200, JSON.stringify({ catalog_object: item() }), { headers: JSON_HEADERS });
+    const sv = await client().unassignStaffFromService!('VAR_1', 'TM1');
+    expect(sv.staffIds).toEqual([]);
+  });
+
+  it('unassignStaffFromService removes only that member', async () => {
+    const withTwo = item();
+    (withTwo.item_data.variations[0]!.item_variation_data as any).team_member_ids = ['TM1', 'TM2'];
+    const sent = captureUpsert(mockReads(withTwo), ['TM2']);
+    const sv = await client().unassignStaffFromService!('VAR_1', 'TM1');
+    expect(sent.ids).toEqual(['TM2']);
+    expect(sv.staffIds).toEqual(['TM2']);
   });
 });

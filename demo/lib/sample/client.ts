@@ -8,13 +8,14 @@ import {
   type Booking,
   type BookingClient,
   type Capabilities,
+  type CustomerRecord,
   type ErrorCode,
   type Service,
   type Staff,
 } from 'unibooking';
 import { loadSample, saveSample } from './store';
 import { takeArmedFailure } from './failure';
-import { SAMPLE_ID, type SampleData } from './types';
+import { SAMPLE_ID, type SampleCustomer, type SampleData } from './types';
 import { shiftDate } from '../calendar/agenda';
 import { BUSINESS_HOURS, addClockMinutes, weekdayOf } from './seed';
 
@@ -35,15 +36,25 @@ export const CAPABILITIES: Capabilities = {
   webhooks: false,
   idempotency: true,
   customers: true,
+  customerDirectory: true,
+  customerWrite: true,
+  customerDelete: true,
   serviceCatalog: true,
   staffDirectory: true,
   serviceCatalogWrite: true,
   staffDirectoryWrite: true,
+  // A local store can do all of it, so the sample shows every staff/service
+  // operation without an account: retire or delete, and who performs what.
+  staffDeactivate: true,
+  staffDelete: true,
+  serviceDelete: true,
   calendarList: false,
+  calendarWrite: false,
   // The sample dataset models one-to-one appointments only; adding a fake class
   // catalog here would let the demo show a capability no real adapter in this
   // list has, which is exactly the drift the capability flags exist to prevent.
-  staffServiceAssignment: false,
+  staffServiceAssignment: true,
+  staffServiceAssignmentWrite: true,
   serviceCategories: false,
   businessHours: false,
   classCatalog: false,
@@ -58,6 +69,11 @@ const fail = (code: ErrorCode, message: string) =>
   new UnibookingError({ code, message, provider: SAMPLE_ID });
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+/** A stored sample customer as the library's client record. */
+function asRecord(c: SampleCustomer): CustomerRecord {
+  return { ...c, raw: { source: 'sample' } };
+}
 
 export function sampleClient(options: SampleClientOptions = {}): BookingClient {
   const { storage, latencyMs = 150 } = options;
@@ -361,7 +377,11 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
     async listServices(query) {
       await begin();
       const data = read();
-      const { slice, nextPageToken } = page(data.services, query?.limit, query?.pageToken, (m) =>
+      const want = query?.staffId;
+      const services = want
+        ? data.services.filter((sv) => sv.staffIds?.includes(want) ?? false)
+        : data.services;
+      const { slice, nextPageToken } = page(services, query?.limit, query?.pageToken, (m) =>
         fail('INVALID_INPUT', m),
       );
       return { services: slice, ...(nextPageToken ? { nextPageToken } : {}) };
@@ -370,7 +390,13 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
     async listStaff(query) {
       await begin();
       const data = read();
-      const { slice, nextPageToken } = page(data.staff, query?.limit, query?.pageToken, (m) =>
+      let staff = data.staff;
+      if (query?.serviceId) {
+        const sv = data.services.find((x) => x.id === query.serviceId);
+        if (!sv) throw fail('NOT_FOUND', `No service with id "${query.serviceId}".`);
+        staff = staff.filter((m) => sv.staffIds?.includes(m.id) ?? false);
+      }
+      const { slice, nextPageToken } = page(staff, query?.limit, query?.pageToken, (m) =>
         fail('INVALID_INPUT', m),
       );
       return { staff: slice, ...(nextPageToken ? { nextPageToken } : {}) };
@@ -414,6 +440,8 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
         ...(input.description !== undefined ? { description: input.description } : {}),
         ...(input.durationMinutes !== undefined ? { durationMinutes: input.durationMinutes } : {}),
         ...(input.price !== undefined ? { price: input.price } : {}),
+        // Status in the same call, as defineAdapter gives every real adapter.
+        ...(input.active !== undefined ? { active: input.active } : {}),
       });
       write(data);
       return service;
@@ -463,6 +491,7 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.email !== undefined ? { email: input.email } : {}),
         ...(input.phone !== undefined ? { phone: input.phone } : {}),
+        ...(input.active !== undefined ? { active: input.active } : {}),
       });
       write(data);
       return member;
@@ -476,6 +505,63 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
       member.active = active;
       write(data);
       return member;
+    },
+
+    async getService(id) {
+      await begin();
+      const service = read().services.find((s) => s.id === id);
+      if (!service) throw fail('NOT_FOUND', `No service with id "${id}".`);
+      return service;
+    },
+
+    async getStaff(id) {
+      await begin();
+      const member = read().staff.find((s) => s.id === id);
+      if (!member) throw fail('NOT_FOUND', `No staff member with id "${id}".`);
+      return member;
+    },
+
+    async deleteService(id) {
+      await begin();
+      const data = read();
+      const at = data.services.findIndex((s) => s.id === id);
+      if (at === -1) throw fail('NOT_FOUND', `No service with id "${id}".`);
+      data.services.splice(at, 1);
+      write(data);
+    },
+
+    async deleteStaff(id) {
+      await begin();
+      const data = read();
+      const at = data.staff.findIndex((s) => s.id === id);
+      if (at === -1) throw fail('NOT_FOUND', `No staff member with id "${id}".`);
+      data.staff.splice(at, 1);
+      // A deleted member performs nothing any more.
+      for (const sv of data.services) {
+        if (sv.staffIds) sv.staffIds = sv.staffIds.filter((t) => t !== id);
+      }
+      write(data);
+    },
+
+    async assignStaffToService(serviceId, staffId) {
+      await begin();
+      const data = read();
+      assertRefs(data, staffId, serviceId);
+      const service = data.services.find((s) => s.id === serviceId)!;
+      const current = service.staffIds ?? [];
+      service.staffIds = current.includes(staffId) ? current : [...current, staffId];
+      write(data);
+      return service;
+    },
+
+    async unassignStaffFromService(serviceId, staffId) {
+      await begin();
+      const data = read();
+      const service = data.services.find((s) => s.id === serviceId);
+      if (!service) throw fail('NOT_FOUND', `No service with id "${serviceId}".`);
+      service.staffIds = (service.staffIds ?? []).filter((t) => t !== staffId);
+      write(data);
+      return service;
     },
 
     customers: {
@@ -506,6 +592,74 @@ export function sampleClient(options: SampleClientOptions = {}): BookingClient {
         data.nextId += 1;
         write(data);
         return created.id;
+      },
+
+      async list(query) {
+        await begin();
+        const email = query?.email?.toLowerCase();
+        const all = read().customers.filter(
+          (c) =>
+            (!email || c.email?.toLowerCase() === email) &&
+            (!query?.phone || c.phone === query.phone),
+        );
+        const { slice, nextPageToken } = page(all, query?.limit, query?.pageToken, (m) =>
+          fail('INVALID_INPUT', m),
+        );
+        return { customers: slice.map(asRecord), ...(nextPageToken ? { nextPageToken } : {}) };
+      },
+
+      async get(id) {
+        await begin();
+        const c = read().customers.find((x) => x.id === id);
+        if (!c) throw fail('NOT_FOUND', `No customer with id "${id}".`);
+        return asRecord(c);
+      },
+
+      async create(input) {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw fail('INVALID_INPUT', 'A customer needs at least a name, email or phone.');
+        }
+        await begin();
+        const data = read();
+        const created: SampleCustomer = {
+          id: `cus_${data.nextId}`,
+          ...(input.name ? { name: input.name.trim() } : {}),
+          ...(input.email ? { email: input.email } : {}),
+          ...(input.phone ? { phone: input.phone } : {}),
+          ...(input.note ? { note: input.note } : {}),
+        };
+        data.customers.push(created);
+        data.nextId += 1;
+        write(data);
+        return asRecord(created);
+      },
+
+      async update(id, input) {
+        if (input.name !== undefined && !input.name.trim()) {
+          throw fail('INVALID_INPUT', 'name cannot be empty.');
+        }
+        await begin();
+        const data = read();
+        const c = data.customers.find((x) => x.id === id);
+        if (!c) throw fail('NOT_FOUND', `No customer with id "${id}".`);
+        Object.assign(c, {
+          ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+          ...(input.email !== undefined ? { email: input.email } : {}),
+          ...(input.phone !== undefined ? { phone: input.phone } : {}),
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        });
+        write(data);
+        return asRecord(c);
+      },
+
+      // Past bookings keep their customer details; only the record goes.
+      async delete(id) {
+        await begin();
+        const data = read();
+        const at = data.customers.findIndex((x) => x.id === id);
+        if (at === -1) throw fail('NOT_FOUND', `No customer with id "${id}".`);
+        data.customers.splice(at, 1);
+        write(data);
       },
     },
   };

@@ -104,3 +104,15 @@ describe('PersistenceControls', () => {
     expect(prompt).toMatch(/not affected|does not sign you out/i);
   });
 });
+
+describe('help text', () => {
+  it('says saving is on by default and names what is kept, with proper spacing', () => {
+    render(<PersistenceControls {...base} remember onClearAll={() => {}} />);
+    const help = document.querySelector('.persistence-help')!.textContent!.replace(/\s+/g, ' ');
+    // The old wording rendered as "for Squarein this browser".
+    expect(help).toContain('for Square (token, ids and environment)');
+    expect(help).toMatch(/^On by default/);
+    expect(screen.getByRole('button', { name: 'Clear Square' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Clear all saved' })).toBeDefined();
+  });
+});

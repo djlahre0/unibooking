@@ -8,7 +8,7 @@ import type { Booking, Customer, ProviderId, Service, Staff } from 'unibooking';
 export const SAMPLE_ID = 'sample' as unknown as ProviderId;
 
 /** A customer that has been through findOrCreate, so it always has an id. */
-export type SampleCustomer = Customer & { id: string };
+export type SampleCustomer = Customer & { id: string; note?: string };
 
 export interface SampleData {
   version: 1;

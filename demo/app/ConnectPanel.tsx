@@ -11,6 +11,7 @@ import AppleConnectCard from './calendar/AppleConnectCard';
 import ResetSetupButton from './calendar/ResetSetupButton';
 import ResultBox from './ResultBox';
 import ConnectionCheck from './ConnectionCheck';
+import { pickerGroups, providerHint } from '../lib/provider-picker';
 
 /* ─── Trust-model banner: shows where the visitor's token actually goes ───
    The three original states are kept byte-for-byte -- it is a security claim.
@@ -248,17 +249,27 @@ export default function ConnectPanel({
     <div className="fade-in">
       <div className="card">
         <div className="card-title">Select Provider</div>
-        <div className="provider-grid">
-          {Object.entries(PROVIDERS).map(([id, p]) => (
-            <button
-              key={id}
-              className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
-              onClick={() => onSelectProvider(id)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {pickerGroups().map((group) => (
+          <section key={group.heading} className="provider-group" aria-label={group.heading}>
+            <div className="provider-group-head">
+              <h3 className="provider-group-title">{group.heading}</h3>
+              {group.blurb ? <p className="provider-group-blurb">{group.blurb}</p> : null}
+            </div>
+            <div className="provider-grid">
+              {group.ids.map((id) => (
+                <button
+                  key={id}
+                  className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
+                  aria-pressed={selectedProvider === id}
+                  onClick={() => onSelectProvider(id)}
+                >
+                  <span className="provider-chip-name">{PROVIDERS[id]!.label}</span>
+                  <span className="provider-chip-hint">{providerHint(id)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
 
         {providerInfo && (
           <>

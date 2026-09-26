@@ -2,6 +2,8 @@
 
 import { clearUiState, persistenceEnabled } from '../lib/ui-state';
 import { SAMPLE_KEY } from '../lib/sample/store';
+import { clearProject } from '../lib/project';
+import { clearRecords } from '../lib/record-sync';
 
 export type PersistenceControlsProps = {
   remember: boolean;
@@ -26,7 +28,7 @@ const SAVED_NOTE_ID = 'persistence-saved-note';
 const CLEAR_ALL_CONFIRM = [
   'Clear everything this demo saved in this browser?',
   '',
-  'This removes the credentials you pasted for EVERY provider, what you were doing, and the sample data. You will have to enter them all again.',
+  'This removes the credentials you pasted for EVERY provider, what you were doing, the demo project (staff, services, bookings, calendar links), and the sample data. You will have to enter them all again.',
   '',
   'Your saved Google/Microsoft sign-in setup is not affected, and this does not sign you out of My Calendar.',
 ].join('\n');
@@ -54,8 +56,9 @@ export default function PersistenceControls({
         Remember credentials on this device
       </label>
       <p className="persistence-help">
-        Keeps what you typed for {providerLabel} in this browser, so you don&apos;t paste it again
-        after a reload. Turning it off wipes what was saved.
+        {`On by default: what you enter for ${providerLabel} (token, ids and environment) is kept
+        in this browser, so a reload doesn't lose it. Untick to stop saving and wipe what's
+        saved, or use the buttons below.`}
       </p>
 
       {!available && (
@@ -100,6 +103,8 @@ export default function PersistenceControls({
             } catch {
               // Blocked storage: there was nothing saved to clear.
             }
+            clearProject();
+            clearRecords();
             onClearAll();
           }}
           disabled={!available}

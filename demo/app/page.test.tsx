@@ -49,7 +49,10 @@ describe('page persistence', () => {
   it('restores the selected provider', () => {
     patchUiState({ selectedProvider: 'square' });
     render(<Home />);
-    expect(screen.getByText(/Selected: Square/)).toBeTruthy();
+    // Shown in the header, where it is always in view.
+    expect(
+      screen.getByRole('button', { name: 'Provider: Square. Change it in Connect.' }),
+    ).toBeTruthy();
   });
 
   it('persists a provider choice', async () => {
@@ -83,6 +86,45 @@ describe('page persistence', () => {
     await new Promise((r) => setTimeout(r, 500));
     const saved = JSON.parse(localStorage.getItem(CRED_KEY)!);
     expect(saved.providers.square?.creds.accessToken).toBe('keep-me');
+  });
+
+  it('keeps pasted credentials across a reload without ticking anything', async () => {
+    // Remembering is on by default: token and ids land in localStorage and
+    // come back after a reload.
+    patchUiState({ selectedProvider: 'square', activeTab: 'connect' });
+    const user = userEvent.setup();
+    render(<Home />);
+    await user.type(screen.getByLabelText('Access Token'), 'EAAA-test-token');
+    await user.type(screen.getByLabelText('Location ID'), 'L123');
+    await vi.waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(CRED_KEY) ?? '{}');
+      expect(saved.providers?.square?.creds).toEqual({
+        accessToken: 'EAAA-test-token',
+        locationId: 'L123',
+      });
+    });
+
+    cleanup(); // the "reload"
+    render(<Home />);
+    expect((screen.getByLabelText('Access Token') as HTMLInputElement).value).toBe(
+      'EAAA-test-token',
+    );
+    expect((screen.getByLabelText('Location ID') as HTMLInputElement).value).toBe('L123');
+  });
+
+  it('groups the tabs and dims the ones the provider cannot use', () => {
+    patchUiState({ selectedProvider: 'square' });
+    render(<Home />);
+    // Square has no classes: the tab stays reachable but says why.
+    expect(tab(/^Classes$/).className).toContain('tab-muted');
+    expect(tab(/^Classes$/).getAttribute('title')).toBe("Square doesn't support this");
+    expect(tab(/^Services$/).className).not.toContain('tab-muted');
+    expect(tab(/^Staff$/).className).not.toContain('tab-muted');
+    // Calendar Sync is your project <-> a calendar provider; Square has none.
+    expect(tab(/Calendar Sync/).className).toContain('tab-muted');
+    for (const label of ['Start', 'Work', 'Tools']) {
+      expect(document.querySelector('.tabs')!.textContent).toContain(label);
+    }
   });
 
   it('restores a saved result on load', () => {

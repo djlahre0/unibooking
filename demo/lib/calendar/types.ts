@@ -43,14 +43,29 @@ export interface CalendarStatus {
 }
 
 export type CalendarOp =
-  'listCalendars' | 'listEvents' | 'getEvent' | 'createEvent' | 'updateEvent' | 'deleteEvent';
+  | 'listCalendars'
+  | 'createCalendar'
+  | 'updateCalendar'
+  | 'deleteCalendar'
+  | 'listEvents'
+  | 'getEvent'
+  | 'createEvent'
+  | 'updateEvent'
+  | 'cancelEvent'
+  | 'setEventStatus'
+  | 'deleteEvent';
 
 export const CALENDAR_OPS: readonly CalendarOp[] = [
   'listCalendars',
+  'createCalendar',
+  'updateCalendar',
+  'deleteCalendar',
   'listEvents',
   'getEvent',
   'createEvent',
   'updateEvent',
+  'cancelEvent',
+  'setEventStatus',
   'deleteEvent',
 ];
 

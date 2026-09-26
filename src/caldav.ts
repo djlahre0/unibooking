@@ -208,15 +208,140 @@ export async function findPrincipal<T>(
   return hrefProperty(provider, xml, url, 'current-user-principal');
 }
 
+/** The account's calendar home: the collection new calendars are made in,
+ *  and the only place this library will change or delete one. */
+export async function findCalendarHome<T>(
+  http: HttpContext<T>,
+  creds: T,
+  provider: ProviderId,
+): Promise<string> {
+  const principal = await findPrincipal(http, creds, provider);
+  const home = await propfind(http, creds, principal, 0, '<c:calendar-home-set/>');
+  return hrefProperty(provider, home.xml, home.url, 'calendar-home-set');
+}
+
+/**
+ * Refuse a calendar URL outside the account's own calendar home. A caller-
+ * supplied id is an absolute URL, and requests carry the account's
+ * credentials, so an unchecked id could send them to any host; it would also
+ * let a delete reach a collection that is not one of the account's calendars.
+ */
+export async function assertOwnCalendar<T>(
+  http: HttpContext<T>,
+  creds: T,
+  provider: ProviderId,
+  calendarUrl: string,
+): Promise<string> {
+  const home = await findCalendarHome(http, creds, provider);
+  let url: URL;
+  try {
+    url = new URL(calendarUrl);
+  } catch {
+    throw new UnibookingError({
+      provider,
+      code: 'INVALID_INPUT',
+      message: 'calendar id must be the absolute URL from listCalendars()',
+    });
+  }
+  const h = new URL(home);
+  const homePath = h.pathname.endsWith('/') ? h.pathname : `${h.pathname}/`;
+  if (url.origin !== h.origin || !url.pathname.startsWith(homePath) || url.pathname === homePath) {
+    throw new UnibookingError({
+      provider,
+      code: 'INVALID_INPUT',
+      message: "calendar id is not a calendar in this account's calendar home",
+    });
+  }
+  return url.toString();
+}
+
+/** DAV props for a calendar's name / description / colour. */
+function calendarProps(input: { name?: string; description?: string; color?: string }): string {
+  const color = input.color ? hexColor(input.color) : undefined;
+  return (
+    (input.name !== undefined ? `<d:displayname>${escapeXml(input.name)}</d:displayname>` : '') +
+    (input.description !== undefined
+      ? `<c:calendar-description>${escapeXml(input.description)}</c:calendar-description>`
+      : '') +
+    // Apple's calendar-color is #RRGGBBAA.
+    (color ? `<a:calendar-color>${color.toUpperCase()}FF</a:calendar-color>` : '')
+  );
+}
+
+/** A 207 whose propstat reports a failure (e.g. a read-only property) is not
+ *  success: say so rather than returning as if the change landed. */
+function assertPropstatOk(provider: ProviderId, xml: string): void {
+  const bad = /<(?:[\w-]+:)?status>\s*HTTP\/[\d.]+\s+([45]\d\d)/i.exec(xml);
+  if (bad) {
+    throw new UnibookingError({
+      provider,
+      code: 'UPSTREAM',
+      message: `CalDAV refused the calendar change (HTTP ${bad[1]})`,
+    });
+  }
+}
+
+/** MKCALENDAR a new event calendar in the account's calendar home. */
+export async function makeCalendar<T>(
+  http: HttpContext<T>,
+  creds: T,
+  provider: ProviderId,
+  input: { name: string; description?: string; color?: string },
+): Promise<Calendar> {
+  const home = await findCalendarHome(http, creds, provider);
+  const url = new URL(`${globalThis.crypto.randomUUID()}/`, home.endsWith('/') ? home : `${home}/`);
+  await http.request<string>(creds, {
+    method: 'MKCALENDAR',
+    path: url.toString(),
+    headers: XML_HEADERS,
+    body:
+      `<?xml version="1.0" encoding="utf-8"?><c:mkcalendar ${NS}><d:set><d:prop>` +
+      calendarProps(input) +
+      '<c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set>' +
+      '</d:prop></d:set></c:mkcalendar>',
+    parse: 'text',
+  });
+  const color = input.color ? hexColor(input.color) : undefined;
+  return {
+    id: url.toString(),
+    name: input.name,
+    primary: false,
+    readOnly: false,
+    ...(color ? { color } : {}),
+    raw: { href: url.toString() },
+  };
+}
+
+/** PROPPATCH a calendar's name / description / colour. */
+export async function patchCalendar<T>(
+  http: HttpContext<T>,
+  creds: T,
+  provider: ProviderId,
+  calendarUrl: string,
+  input: { name?: string; description?: string; color?: string },
+): Promise<void> {
+  const props = calendarProps(input);
+  if (!props) return;
+  const xml = await http.request<string>(creds, {
+    method: 'PROPPATCH',
+    path: calendarUrl,
+    headers: XML_HEADERS,
+    body:
+      `<?xml version="1.0" encoding="utf-8"?><d:propertyupdate ${NS}><d:set><d:prop>` +
+      props +
+      '</d:prop></d:set></d:propertyupdate>',
+    parse: 'text',
+  });
+  assertPropstatOk(provider, xml ?? '');
+}
+
 /** Every event-capable calendar collection the credentials can see. */
 export async function discoverCalendars<T>(
   http: HttpContext<T>,
   creds: T,
   provider: ProviderId,
 ): Promise<Calendar[]> {
-  const principal = await findPrincipal(http, creds, provider);
-  const home = await propfind(http, creds, principal, 0, '<c:calendar-home-set/>');
-  const homeUrl = hrefProperty(provider, home.xml, home.url, 'calendar-home-set');
+  const homeUrl = await findCalendarHome(http, creds, provider);
   const list = await propfind(
     http,
     creds,

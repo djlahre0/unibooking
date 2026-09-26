@@ -4,6 +4,7 @@ import type {
   BookingStatus,
   CreateBookingInput,
   Customer,
+  CustomerRecord,
   Service,
   Staff,
   TimeRange,
@@ -275,6 +276,24 @@ async function findOrCreateGuest(
   return reqString(String(created?.id ?? ''), 'zenoti', 'guest.id');
 }
 
+/** A Zenoti guest -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'zenoti', 'guest');
+  const p = r.personal_info ?? {};
+  const name = [p.first_name, p.last_name]
+    .filter((x: unknown) => typeof x === 'string' && x)
+    .join(' ');
+  const phone = p.mobile_phone?.number;
+  return {
+    id: reqString(String(r.id ?? ''), 'zenoti', 'guest.id'),
+    ...(name ? { name } : {}),
+    ...(typeof p.email === 'string' && p.email ? { email: p.email } : {}),
+    ...(typeof phone === 'string' && phone ? { phone } : {}),
+    ...(typeof r.created_date === 'string' ? { createdAt: r.created_date } : {}),
+    raw: r,
+  };
+}
+
 async function resolveGuestId(
   http: HttpContext<ZenotiCredentials>,
   c: ZenotiCredentials,
@@ -382,12 +401,20 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: false,
+    calendarWrite: false,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -686,6 +713,105 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateGuest(http, c, customer);
+      },
+
+      // Guests of the configured center, 1-based pages of <= 100. An email
+      // filter uses guests/search (server-side); phone filters each page.
+      list: async (query) => {
+        const c = await http.resolve();
+        const page = query?.pageToken ? Number(query.pageToken) : 1;
+        if (!Number.isInteger(page) || page < 1) {
+          throw new UnibookingError({
+            provider: 'zenoti',
+            code: 'INVALID_INPUT',
+            message: 'pageToken must be a page number from a previous list',
+          });
+        }
+        const size = Math.min(query?.limit ?? 100, 100);
+        const res = query?.email
+          ? await http.request(c, {
+              path: 'guests/search',
+              query: { center_id: c.centerId, email: query.email, page, size },
+            })
+          : await http.request(c, {
+              path: 'guests',
+              query: { center_id: c.centerId, page, size },
+            });
+        const raw = asArray(res?.guests ?? [], 'zenoti', 'guests');
+        let customers = raw.map(toCustomerRecord);
+        if (query?.phone) customers = customers.filter((x) => x.phone === query.phone);
+        // page_info is not documented field-by-field; a full page means there
+        // may be another.
+        return {
+          customers,
+          ...(raw.length === size ? { nextPageToken: String(page + 1) } : {}),
+        };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        return toCustomerRecord(await http.request(c, { path: `guests/${enc(id)}` }));
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'zenoti',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        // Always a new guest (no search first), in findOrCreate's body shape.
+        const [firstName, ...rest] = (input.name?.trim() || 'Guest').split(/\s+/);
+        const countryCode = input.providerOptions?.countryCode;
+        const created = await http.request(c, {
+          method: 'POST',
+          path: 'guests',
+          body: {
+            center_id: c.centerId,
+            personal_info: {
+              first_name: firstName ?? 'Guest',
+              last_name: rest.join(' ') || 'Guest',
+              ...(input.email ? { email: input.email } : {}),
+              ...(input.phone
+                ? {
+                    mobile_phone: {
+                      number: input.phone,
+                      ...(countryCode !== undefined ? { country_code: countryCode } : {}),
+                    },
+                  }
+                : {}),
+            },
+          },
+        });
+        // The create response is flat with the new id; read the full guest.
+        const id = reqString(String(created?.id ?? ''), 'zenoti', 'guest.id');
+        return toCustomerRecord(await http.request(c, { path: `guests/${enc(id)}` }));
+      },
+
+      // PUT replaces the whole guest ("send all the fields obtained from
+      // Retrieve guest details"), so read it and change only personal_info.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = `guests/${enc(id)}`;
+        const current = asRecord(await http.request(c, { path }), 'zenoti', 'guest');
+        const info = { ...(current.personal_info ?? {}) };
+        if (input.name?.trim()) {
+          const [first, ...rest] = input.name.trim().split(/\s+/);
+          info.first_name = first;
+          info.last_name = rest.join(' ') || info.last_name || 'Guest';
+        }
+        if (input.email !== undefined) info.email = input.email;
+        if (input.phone !== undefined) {
+          info.mobile_phone = { ...(info.mobile_phone ?? {}), number: input.phone };
+        }
+        const res = await http.request(c, {
+          method: 'PUT',
+          path,
+          body: { ...current, personal_info: info, ...input.providerOptions },
+        });
+        return toCustomerRecord(res?.id ? res : { ...current, personal_info: info });
       },
     },
   }),

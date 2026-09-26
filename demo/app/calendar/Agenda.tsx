@@ -4,6 +4,7 @@ import type { Booking } from 'unibooking';
 import type { AgendaDay, WindowDays } from '../../lib/calendar/agenda';
 import { MAX_EVENTS_NOTICE } from './constants';
 import TimezoneField from './TimezoneField';
+import ApiHint from '../ApiHint';
 
 export default function Agenda({
   days,
@@ -86,6 +87,9 @@ export default function Agenda({
       <div className="cal-tz">
         <TimezoneField label="Display timezone" value={displayTz} onChange={onDisplayTz} />
       </div>
+      <ApiHint call="listAll(client, { range: { start, end } })">
+        Pages through client.listBookings for the whole window.
+      </ApiHint>
 
       {loading ? <div className="loading">Loading events…</div> : null}
       {!loading && days.length === 0 ? (

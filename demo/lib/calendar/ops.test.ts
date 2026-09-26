@@ -193,3 +193,36 @@ describe('runCalendarOp rejects a malformed event body', () => {
     ).rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringMatching(/event/i) });
   });
 });
+
+describe('runCalendarOp: the calendars themselves', () => {
+  it('createCalendar posts to Google and returns the new calendar', async () => {
+    net
+      .on('POST', `${GCAL}calendars`, { body: { id: 'c9', summary: 'Front desk' } })
+      .on('GET', `${GCAL}users/me/calendarList/c9`, {
+        body: { id: 'c9', summary: 'Front desk', accessRole: 'owner' },
+      });
+    const cal = (await runCalendarOp(google({ accessToken: 't' }), 'createCalendar', {
+      name: '  Front desk  ',
+    })) as { id: string; name: string; readOnly: boolean };
+    expect(cal).toMatchObject({ id: 'c9', name: 'Front desk', readOnly: false });
+  });
+
+  it('validates the name and colour before calling the provider', async () => {
+    const client = google({ accessToken: 't' });
+    await expect(runCalendarOp(client, 'createCalendar', { name: ' ' })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+    await expect(
+      runCalendarOp(client, 'createCalendar', { name: 'X', color: 'green' }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      runCalendarOp(client, 'updateCalendar', { calendarId: 'c9', name: '' }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('deleteCalendar needs the calendar id', async () => {
+    await expect(
+      runCalendarOp(google({ accessToken: 't' }), 'deleteCalendar', {}),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+});

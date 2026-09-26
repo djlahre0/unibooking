@@ -5,6 +5,7 @@ import { type ActionResult, type Connection, callSearchAvailability } from '../.
 import type { ProviderMeta } from '../../lib/providers';
 import { browserZone, toInstant } from '../../lib/datetime';
 import ResultBox from '../ResultBox';
+import ApiHint from '../ApiHint';
 import PersistedForm from '../PersistedForm';
 
 export type AvailabilityTabProps = {
@@ -87,12 +88,17 @@ export default function AvailabilityTab({
               // the provider receives an unambiguous range either way.
               const timezone = str('timezone') || browserZone();
               const duration = Number(str('durationMinutes'));
+              const range = {
+                start: toInstant(str('startDate'), str('startTime'), timezone),
+                end: toInstant(str('endDate'), str('endTime'), timezone),
+              };
+              // Only the selected provider's own availability: nothing from
+              // any other provider is mixed in.
               wrap(
                 'avail',
                 () =>
                   callSearchAvailability(selectedProvider, conn, {
-                    start: toInstant(str('startDate'), str('startTime'), timezone),
-                    end: toInstant(str('endDate'), str('endTime'), timezone),
+                    ...range,
                     timezone,
                     ...(Number.isFinite(duration) && duration > 0
                       ? { durationMinutes: duration }
@@ -218,6 +224,7 @@ export default function AvailabilityTab({
             >
               {busy('avail') ? '...' : '🔍 Search Slots'}
             </button>
+            <ApiHint call="client.searchAvailability({ range, serviceId, staffId, durationMinutes })" />
           </PersistedForm>
           <ResultBox result={availResult} label="Availability" elapsedMs={elapsedMs} />
         </div>

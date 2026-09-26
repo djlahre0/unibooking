@@ -353,7 +353,9 @@ describe('every provider is selectable in the Connect picker', () => {
     // A provider missing from PROVIDER_META silently vanishes here, however
     // complete its adapter is — which is exactly how "Bookeo is missing" would
     // look to a visitor.
-    const chips = screen.getAllByRole('button').map((b) => b.textContent?.trim());
+    const chips = Array.from(document.querySelectorAll('.provider-chip-name')).map((b) =>
+      b.textContent?.trim(),
+    );
     for (const label of [
       'Bookeo',
       'Booker',
@@ -525,5 +527,20 @@ describe('step 3 tests the connection for real', () => {
     render(<ConnectPanel {...base} selectedProvider="square" creds={creds} conn={{ creds }} />);
     const button = screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
+  });
+});
+
+describe('provider picker groups', () => {
+  it('groups providers by kind, with what each offers', () => {
+    render(<ConnectPanel {...base} selectedProvider="" />);
+    const cal = screen.getByRole('region', { name: 'Calendars' });
+    expect(cal.textContent).toContain('Google Calendar');
+    expect(cal.textContent).toContain('Events · calendars');
+    const booking = screen.getByRole('region', { name: 'Booking platforms' });
+    const square = Array.from(booking.querySelectorAll('.provider-chip')).find((b) =>
+      b.textContent?.startsWith('Square'),
+    );
+    expect(square?.textContent).toContain('Staff & services');
+    expect(screen.getByRole('region', { name: 'Try it' }).textContent).toContain('Sample Data');
   });
 });

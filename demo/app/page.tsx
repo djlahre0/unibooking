@@ -21,6 +21,7 @@ import {
   clearAll,
   storageAvailable,
   setRemember as persistRemember,
+  DEFAULT_REMEMBER,
 } from '../lib/cred-storage';
 import {
   patchUiState,
@@ -41,21 +42,33 @@ import AvailabilityTab from './tabs/AvailabilityTab';
 import CustomersTab from './tabs/CustomersTab';
 import CatalogTab from './tabs/CatalogTab';
 import ClassesTab from './tabs/ClassesTab';
+import ServicesTab from './tabs/ServicesTab';
+import StaffTab from './tabs/StaffTab';
+import MappingTab from './tabs/MappingTab';
+import CalendarSyncTab from './tabs/CalendarSyncTab';
+import { tabUnsupported } from '../lib/provider-picker';
 import UtilitiesTab from './tabs/UtilitiesTab';
 import WebhooksTab from './tabs/WebhooksTab';
 
+/** Grouped so eleven-plus tabs read as three steps: connect, do the work,
+ *  then the developer tools. Order within a group is the order shown. */
 const TABS = [
-  { id: 'calendar', label: 'My Calendar' },
-  { id: 'connect', label: 'Connect' },
-  { id: 'capabilities', label: 'Capabilities' },
-  { id: 'bookings', label: 'Bookings' },
-  { id: 'availability', label: 'Availability' },
-  { id: 'customers', label: 'Customers' },
-  { id: 'classes', label: 'Classes' },
-  { id: 'catalog', label: 'Catalog & Health' },
-  { id: 'utilities', label: 'Utilities' },
-  { id: 'webhooks', label: 'Webhooks' },
+  { id: 'calendar', label: 'My Calendar', group: 'Start' },
+  { id: 'connect', label: 'Connect', group: 'Start' },
+  { id: 'capabilities', label: 'Capabilities', group: 'Start' },
+  { id: 'bookings', label: 'Bookings', group: 'Work' },
+  { id: 'availability', label: 'Availability', group: 'Work' },
+  { id: 'customers', label: 'Clients', group: 'Work' },
+  { id: 'classes', label: 'Classes', group: 'Work' },
+  { id: 'services', label: 'Services', group: 'Work' },
+  { id: 'staff', label: 'Staff', group: 'Work' },
+  { id: 'mapping', label: 'Mapping', group: 'Work' },
+  { id: 'sync', label: 'Calendar Sync', group: 'Work' },
+  { id: 'catalog', label: 'Catalog & Health', group: 'Tools' },
+  { id: 'utilities', label: 'Utilities', group: 'Tools' },
+  { id: 'webhooks', label: 'Webhooks', group: 'Tools' },
 ];
+const TAB_GROUPS = ['Start', 'Work', 'Tools'] as const;
 
 /* ═══════════════════════════════════════════════════════════
    Provider rail
@@ -71,7 +84,19 @@ const EMPTY_CREDS: Record<string, string> = {};
 
 /** Result slots, keyed exactly as `wrap`'s `section` argument, so the stored
  *  results and the elapsed-time map can never drift apart. */
-const RESULT_KEYS = ['caps', 'booking', 'avail', 'customer', 'catalog', 'util', 'webhook'];
+const RESULT_KEYS = [
+  'caps',
+  'booking',
+  'avail',
+  'customer',
+  'classes',
+  'services',
+  'staff',
+  'mapping',
+  'catalog',
+  'util',
+  'webhook',
+];
 
 /**
  * A stored result, back as an ActionResult. A payload too large to save comes
@@ -116,7 +141,7 @@ const PROVIDER_GROUPS: { heading: string; ids: string[]; dot: 'indigo' | 'pine' 
    ═══════════════════════════════════════════════════════════ */
 type MountState = { storageOk: boolean; remember: boolean };
 
-const SERVER_MOUNT_STATE: MountState = { storageOk: true, remember: false };
+const SERVER_MOUNT_STATE: MountState = { storageOk: true, remember: DEFAULT_REMEMBER };
 
 // Cached module-side, because `getSnapshot` must return a referentially stable
 // value or React re-renders forever.
@@ -162,7 +187,13 @@ export default function Home() {
       root.style.removeProperty('--app-header-h');
     };
   }, []);
-  const activeTab = ui.activeTab;
+  // A tab saved by an older version may no longer exist ('staffsvc' became
+  // Services + Staff); fall back rather than render an empty page.
+  const activeTab = TABS.some((t) => t.id === ui.activeTab)
+    ? ui.activeTab
+    : ui.activeTab === 'staffsvc'
+      ? 'services'
+      : 'connect';
   const setActiveTab = useCallback((tab: string) => {
     patchUiState({ activeTab: tab });
   }, []);
@@ -236,7 +267,7 @@ export default function Home() {
   const resultOf = (key: string): ActionResult | null =>
     key in resultEdits ? resultEdits[key] : (savedResults[key] ?? null);
 
-  // One writer for all seven, so a new tab cannot forget to persist.
+  // One writer for every result slot, so a new tab cannot forget to persist.
   const setResult = useCallback((key: string, r: ActionResult | null) => {
     setResultEdits((prev) => ({ ...prev, [key]: r }));
     const results = { ...loadUiState().results };
@@ -250,6 +281,9 @@ export default function Home() {
   const availResult = resultOf('avail');
   const customerResult = resultOf('customer');
   const classesResult = resultOf('classes');
+  const servicesResult = resultOf('services');
+  const staffResult = resultOf('staff');
+  const mappingResult = resultOf('mapping');
   const catalogResult = resultOf('catalog');
   const utilResult = resultOf('util');
   const webhookResult = resultOf('webhook');
@@ -269,6 +303,18 @@ export default function Home() {
   );
   const setClassesResult = useCallback(
     (r: ActionResult | null) => setResult('classes', r),
+    [setResult],
+  );
+  const setServicesResult = useCallback(
+    (r: ActionResult | null) => setResult('services', r),
+    [setResult],
+  );
+  const setStaffResult = useCallback(
+    (r: ActionResult | null) => setResult('staff', r),
+    [setResult],
+  );
+  const setMappingResult = useCallback(
+    (r: ActionResult | null) => setResult('mapping', r),
     [setResult],
   );
   const setCatalogResult = useCallback(
@@ -434,7 +480,7 @@ export default function Home() {
         baseUrl: saved?.baseUrl ?? ENVIRONMENTS[id]?.prod ?? '',
       });
       // A result from the previous provider must never be shown under the new
-      // one. Cleared in a single store write rather than seven.
+      // one. Cleared in a single store write rather than one per tab.
       clearAllResults();
     },
     [selectedProvider, creds, env, baseUrl, remember, clearAllResults],
@@ -449,6 +495,27 @@ export default function Home() {
           <p>Unified CRUD for 17 booking &amp; calendar providers. Interactive API explorer.</p>
         </div>
         <div className="app-header-actions">
+          {/* The provider every tab is working against, always in view. A
+              button: changing it is the Connect tab's job. */}
+          <button
+            type="button"
+            className={`header-provider ${selectedProvider ? '' : 'is-empty'}`}
+            onClick={() => setActiveTab('connect')}
+            title={selectedProvider ? 'Change provider in the Connect tab' : undefined}
+            aria-label={
+              selectedProvider
+                ? `Provider: ${providerInfo?.label ?? selectedProvider}. Change it in Connect.`
+                : 'No provider selected. Choose one in Connect.'
+            }
+          >
+            <span
+              className={`status-dot ${selectedProvider ? 'connected' : ''}`}
+              aria-hidden="true"
+            />
+            <span className="header-provider-name">
+              {selectedProvider ? (providerInfo?.label ?? selectedProvider) : 'Choose a provider'}
+            </span>
+          </button>
           <nav className="header-links" aria-label="Project links">
             <a
               className="header-link header-link-github"
@@ -490,25 +557,6 @@ export default function Home() {
           <ThemeToggle />
         </div>
       </header>
-
-      {/* ─── Status Bar ─── */}
-      <div className="status-bar">
-        <div
-          className={`status-dot ${selectedProvider ? 'connected' : ''}`}
-          role="status"
-          aria-label={selectedProvider ? 'Provider selected' : 'No provider selected'}
-        />
-        <span style={{ color: 'var(--text-secondary)' }}>
-          {selectedProvider
-            ? `Selected: ${providerInfo?.label ?? selectedProvider}`
-            : 'No provider selected — go to Connect tab'}
-        </span>
-        {selectedProvider && (
-          <span className="info-badge accent" style={{ marginLeft: 'auto' }}>
-            {selectedProvider}
-          </span>
-        )}
-      </div>
 
       {/* ─── Provider select (< 900px only; the rail below is hidden there) ─── */}
       <div className="provider-select-bar">
@@ -610,27 +658,41 @@ export default function Home() {
         <main className="content-area">
           {/* ─── Tab strip ─── */}
           <nav className="tabs" role="tablist" aria-label="Sections">
-            {TABS.map((t, i) => (
-              <button
-                key={t.id}
-                id={`tab-${t.id}`}
-                role="tab"
-                aria-selected={activeTab === t.id}
-                tabIndex={activeTab === t.id ? 0 : -1}
-                className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(t.id)}
-                onKeyDown={(e) => {
-                  let idx = i;
-                  if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
-                  else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
-                  else return;
-                  e.preventDefault();
-                  setActiveTab(TABS[idx].id);
-                  document.getElementById(`tab-${TABS[idx].id}`)?.focus();
-                }}
-              >
-                {t.label}
-              </button>
+            {TAB_GROUPS.map((group) => (
+              <div key={group} className="tab-group" role="presentation">
+                <span className="tab-group-label" aria-hidden="true">
+                  {group}
+                </span>
+                {TABS.map((t, i) => {
+                  if (t.group !== group) return null;
+                  // Dimmed, not hidden: the tab still opens and explains
+                  // itself, but a glance shows what this provider can't do.
+                  const unsupported = tabUnsupported(t.id, selectedProvider);
+                  return (
+                    <button
+                      key={t.id}
+                      id={`tab-${t.id}`}
+                      role="tab"
+                      aria-selected={activeTab === t.id}
+                      tabIndex={activeTab === t.id ? 0 : -1}
+                      className={`tab ${activeTab === t.id ? 'active' : ''} ${unsupported ? 'tab-muted' : ''}`}
+                      title={unsupported || undefined}
+                      onClick={() => setActiveTab(t.id)}
+                      onKeyDown={(e) => {
+                        let idx = i;
+                        if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
+                        else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
+                        else return;
+                        e.preventDefault();
+                        setActiveTab(TABS[idx].id);
+                        document.getElementById(`tab-${TABS[idx].id}`)?.focus();
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
             ))}
           </nav>
 
@@ -798,6 +860,61 @@ export default function Home() {
               wrap={wrap}
               busy={busy}
               elapsedMs={elapsedMs.classes}
+            />
+          )}
+
+          {/* ═══ CALENDAR SYNC TAB ═══ */}
+          {activeTab === 'sync' && (
+            <CalendarSyncTab
+              key={selectedProvider}
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+            />
+          )}
+
+          {/* ═══ SERVICES TAB ═══ */}
+          {activeTab === 'services' && (
+            <ServicesTab
+              key={selectedProvider}
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              result={servicesResult}
+              setResult={setServicesResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.services}
+            />
+          )}
+
+          {/* ═══ MAPPING TAB ═══ */}
+          {activeTab === 'mapping' && (
+            <MappingTab
+              key={selectedProvider}
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              result={mappingResult}
+              setResult={setMappingResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.mapping}
+            />
+          )}
+
+          {/* ═══ STAFF TAB ═══ */}
+          {activeTab === 'staff' && (
+            <StaffTab
+              key={selectedProvider}
+              selectedProvider={selectedProvider}
+              providerInfo={providerInfo}
+              conn={conn}
+              result={staffResult}
+              setResult={setStaffResult}
+              wrap={wrap}
+              busy={busy}
+              elapsedMs={elapsedMs.staff}
             />
           )}
 

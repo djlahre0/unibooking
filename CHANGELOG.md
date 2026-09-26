@@ -8,6 +8,44 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Client records: `customers.list / get / create / update / delete`.** Each
+  behind its own flag (`customerDirectory`, `customerWrite`, `customerDelete`),
+  returning the new `CustomerRecord` whose `id` is the provider's stable id —
+  what an import/link layer keys on. Square and Microsoft Bookings (all five),
+  Wix (all five; update merges onto the contact's current `info` and
+  `revision`), Phorest and Zenoti (no delete: neither API has one), Boulevard
+  (read only). `customers.get` falls back to a bounded walk of
+  `customers.list` where a provider has no by-id endpoint.
+  **BREAKING** for custom `defineAdapter` consumers: add the three flags.
+- **`getCalendar(id)`** wherever `calendarList` is true, and
+  **`createCalendar` / `updateCalendar` / `deleteCalendar`** (`calendarWrite`)
+  on Google, Outlook and Apple (CalDAV `MKCALENDAR` / `PROPPATCH` / `DELETE`,
+  confined to the account's own calendar home). **BREAKING** for custom
+  `defineAdapter` consumers: add `calendarWrite`.
+
+- **Full staff & service CRUD, and assigning staff to services.** New optional
+  client methods, each behind its own capability because providers genuinely
+  differ:
+  - `getService(id)` / `getStaff(id)` — on every provider that can list them.
+    Square and Microsoft Bookings use their by-id endpoints; the rest page
+    through the list and throw `NOT_FOUND` when it isn't there.
+  - `deleteService(id)` (`serviceDelete`) — Square and Microsoft Bookings. On
+    Square only the one variation is deleted, unless it is the item's last.
+  - `deleteStaff(id)` (`staffDelete`) — Microsoft Bookings. Square has no
+    team-member delete.
+  - `assignStaffToService` / `unassignStaffFromService`
+    (`staffServiceAssignmentWrite`) — Square and Microsoft Bookings. Idempotent;
+    both return the service with its updated `staffIds`.
+  - `updateService(id, { active })` / `updateStaff(id, { active })` — change
+    status in the same call as other fields, on every adapter alike (other
+    fields first, then the status). Where staff have no inactive state
+    (`staffDeactivate` false, e.g. Microsoft Bookings) `active` throws
+    `UNSUPPORTED` instead of being silently dropped.
+  - **Microsoft Bookings** gains service and staff writes (`createService`,
+    `updateService`, `setServiceActive` via `isHiddenFromCustomers`,
+    `createStaff`, `updateStaff`) and reports `Service.staffIds`
+    (`staffServiceAssignment`), with the `staffId` / `serviceId` list filters.
+
 - **Multi-tenant connections** — `unibooking/connections`, a new server-only
   subpath for consumers running many tenants against many providers.
 
@@ -177,6 +215,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **BREAKING — `Capabilities` gains the required `staffDeactivate`,
+  `staffDelete`, `serviceDelete` and `staffServiceAssignmentWrite` fields**, and
+  `staffDirectoryWrite` now covers `createStaff` / `updateStaff` only;
+  `setStaffActive` moved to `staffDeactivate` (Square keeps it). Custom
+  `defineAdapter` consumers add the four as `false`.
+
 - **BREAKING — `Capabilities` gains the required `staffServiceAssignment`,
   `serviceCategories` and `businessHours` fields.** Custom `defineAdapter`
   consumers add all three as `false`; every shipped adapter declares them.
@@ -232,6 +276,35 @@ All notable changes to this project are documented here. The format is based on
   redirects, falling back to the requested URL). Additive.
 
 ### Fixed
+
+- **Phorest lists read nothing from a live account.** The documented paged
+  shape is `_embedded: { clients: [...] }` (a named list), but it was read as a
+  bare array, so every list came back empty — and `customers.findOrCreate`
+  never found an existing client, creating a duplicate on every call. Both
+  shapes are now accepted.
+
+- **Microsoft Bookings `listServices()` / `listStaff()` paging returned page 1
+  forever.** The `nextPageToken` handed out is the full `@odata.nextLink`, but
+  it was sent back as `$skiptoken=<url>`, which Graph silently ignores; so
+  `listAll` repeated the first page up to its cap. The link is now followed
+  verbatim, as `listBookings` already did.
+
+- **`withRetry` dropped the new client methods.** `getService`, `getStaff`,
+  `deleteService`, `deleteStaff`, `assignStaffToService` and
+  `unassignStaffFromService` vanished from a wrapped client; they are now
+  forwarded (all retry-safe: reads, deletes and idempotent assignment).
+
+- **Square `listCategories()` 404'd on every account.** It posted to
+  `catalog/search-catalog-objects`, which does not exist; Square's
+  SearchCatalogObjects is `POST /v2/catalog/search`.
+
+- **Square `createBooking` no longer demands `service_variation_version`.**
+  When `providerOptions.service_variation_version` is omitted, the adapter now
+  reads the variation's current version from the catalog (one extra
+  `GET catalog/object/{serviceId}`) instead of rejecting the call. Previously a
+  plain canonical `createBooking({ serviceId, staffId, … })` could never succeed
+  without digging the version out of a raw availability slot. Passing it still
+  works and skips the lookup.
 
 - **Square catalog writes were broken outright.** `createService`,
   `updateService` and `setServiceActive` read the upsert reply from `object`,

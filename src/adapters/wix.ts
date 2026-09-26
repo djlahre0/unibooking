@@ -1,4 +1,13 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  CreateCustomerInput,
+  Customer,
+  CustomerRecord,
+  Service,
+  Staff,
+} from '../types';
 import {
   asArray,
   asRecord,
@@ -188,6 +197,44 @@ function contactName(name: string): { first: string; last?: string } {
   return { first: first ?? name, ...(rest.length ? { last: rest.join(' ') } : {}) };
 }
 
+/** A Wix CRM contact -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'wix', 'contact');
+  const info = r.info ?? {};
+  const name = [info.name?.first, info.name?.last]
+    .filter((x: unknown) => typeof x === 'string' && x)
+    .join(' ');
+  const email = r.primaryInfo?.email ?? info.emails?.items?.[0]?.email;
+  const phone = r.primaryInfo?.phone ?? info.phones?.items?.[0]?.phone;
+  return {
+    id: reqString(String(r.id ?? ''), 'wix', 'contact.id'),
+    ...(name ? { name } : {}),
+    ...(typeof email === 'string' && email ? { email } : {}),
+    ...(typeof phone === 'string' && phone ? { phone } : {}),
+    ...(typeof r.createdDate === 'string' ? { createdAt: r.createdDate } : {}),
+    ...(typeof r.updatedDate === 'string' ? { updatedAt: r.updatedDate } : {}),
+    raw: r,
+  };
+}
+
+/** Canonical client fields -> Contacts v4 `info`. Update replaces `info`
+ *  wholesale, so callers merge onto the contact's current `info` first. */
+function contactInfo(
+  input: Pick<CreateCustomerInput, 'name' | 'email' | 'phone'>,
+  current: Record<string, any> = {},
+): Record<string, unknown> {
+  return {
+    ...current,
+    ...(input.name !== undefined ? { name: contactName(input.name) } : {}),
+    ...(input.email !== undefined
+      ? { emails: { items: input.email ? [{ email: input.email, primary: true }] : [] } }
+      : {}),
+    ...(input.phone !== undefined
+      ? { phones: { items: input.phone ? [{ phone: input.phone, primary: true }] : [] } }
+      : {}),
+  };
+}
+
 /** Resolve a canonical customer to a Wix CRM contact id, creating one if needed. */
 async function findOrCreateContact(
   http: HttpContext<WixCredentials>,
@@ -277,12 +324,20 @@ export const wix = defineAdapter<WixCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: true,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: false,
+    calendarWrite: false,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -630,6 +685,88 @@ export const wix = defineAdapter<WixCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateContact(http, c, customer);
+      },
+
+      // Query Contacts pages by offset (<= 1000 per page); the token is the
+      // next offset. Email/phone are Wix filters, so they span every page.
+      list: async (query) => {
+        const c = await http.resolve();
+        const offset = query?.pageToken ? Number(query.pageToken) : 0;
+        if (!Number.isInteger(offset) || offset < 0) {
+          throw new UnibookingError({
+            provider: 'wix',
+            code: 'INVALID_INPUT',
+            message: 'pageToken must be an offset from a previous list',
+          });
+        }
+        const limit = Math.min(query?.limit ?? 100, 1000);
+        const filter = {
+          ...(query?.email ? { 'info.emails.email': query.email } : {}),
+          ...(query?.phone ? { 'info.phones.phone': query.phone } : {}),
+        };
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'contacts/v4/contacts/query',
+          body: {
+            query: {
+              ...(Object.keys(filter).length ? { filter } : {}),
+              paging: { limit, offset },
+            },
+          },
+        });
+        const customers = asArray(res?.contacts ?? [], 'wix', 'contacts').map(toCustomerRecord);
+        const total = Number(res?.pagingMetadata?.total);
+        const next = offset + customers.length;
+        const more = Number.isFinite(total) ? next < total : customers.length === limit;
+        return { customers, ...(more && customers.length ? { nextPageToken: String(next) } : {}) };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        const res = await http.request(c, { path: `contacts/v4/contacts/${enc(id)}` });
+        return toCustomerRecord(res?.contact);
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'wix',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'contacts/v4/contacts',
+          body: { info: contactInfo(input), ...input.providerOptions },
+        });
+        return toCustomerRecord(res?.contact);
+      },
+
+      // Update needs the current `revision` (a stale one is refused with 409)
+      // and replaces `info`, so read the contact and merge onto its info.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = `contacts/v4/contacts/${enc(id)}`;
+        const current = asRecord((await http.request(c, { path }))?.contact, 'wix', 'contact');
+        const res = await http.request(c, {
+          method: 'PATCH',
+          path,
+          body: {
+            revision: current.revision,
+            info: contactInfo(input, current.info ?? {}),
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res?.contact);
+      },
+
+      // Wix refuses (428) a contact that is a site member or has a billing
+      // subscription; that surfaces as the provider's error, not a silent no-op.
+      delete: async (id) => {
+        const c = await http.resolve();
+        await http.request(c, { method: 'DELETE', path: `contacts/v4/contacts/${enc(id)}` });
       },
     },
   }),

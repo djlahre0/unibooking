@@ -9,10 +9,13 @@ import {
   formatWithOffset,
 } from '../time';
 import {
+  assertOwnCalendar,
   discoverCalendars,
   findPrincipal,
+  makeCalendar,
   multigetBody,
   parseSyncCollection,
+  patchCalendar,
   syncCollectionBody,
 } from '../caldav';
 import {
@@ -264,12 +267,20 @@ export const apple = defineAdapter<AppleCredentials>({
     webhooks: false,
     idempotency: true,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: false,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: true,
+    calendarWrite: true,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -637,6 +648,41 @@ export const apple = defineAdapter<AppleCredentials>({
     async listCalendars() {
       const c = await http.resolve();
       return { calendars: await discoverCalendars(http, c, 'apple') };
+    },
+
+    // CalDAV has no per-calendar timezone field without a VTIMEZONE body, so
+    // `timezone` is not written; name, description and colour are.
+    async createCalendar(input) {
+      if (!input.name?.trim()) {
+        throw new UnibookingError({
+          provider: 'apple',
+          code: 'INVALID_INPUT',
+          message: 'createCalendar requires a name',
+        });
+      }
+      const c = await http.resolve();
+      return makeCalendar(http, c, 'apple', { ...input, name: input.name.trim() });
+    },
+
+    async updateCalendar(id, input) {
+      const c = await http.resolve();
+      const url = await assertOwnCalendar(http, c, 'apple', id);
+      await patchCalendar(http, c, 'apple', url, input);
+      const found = (await discoverCalendars(http, c, 'apple')).find((x) => x.id === url);
+      if (!found) {
+        throw new UnibookingError({
+          provider: 'apple',
+          code: 'NOT_FOUND',
+          message: `calendar ${id} not found`,
+        });
+      }
+      return found;
+    },
+
+    async deleteCalendar(id) {
+      const c = await http.resolve();
+      const url = await assertOwnCalendar(http, c, 'apple', id);
+      await http.request(c, { method: 'DELETE', path: url, parse: 'none' });
     },
   }),
 });

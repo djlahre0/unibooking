@@ -97,6 +97,41 @@ function textFields(input: { description?: string; location?: string }): Record<
   };
 }
 
+/** The calendarList entry for a calendar, after setting its colour if given.
+ *  RGB colours need `colorRgbFormat=true` and a foreground to go with them. */
+async function readCalendarEntry(
+  http: HttpContext<GoogleCredentials>,
+  c: GoogleCredentials,
+  id: string,
+  color: string | undefined,
+): Promise<Calendar> {
+  const path = `users/me/calendarList/${encodeURIComponent(id)}`;
+  const bg = color ? hexColor(color) : undefined;
+  if (color && !bg) {
+    throw new UnibookingError({
+      provider: 'google',
+      code: 'INVALID_INPUT',
+      message: 'color must be #RRGGBB',
+    });
+  }
+  const res = bg
+    ? await http.request(c, {
+        method: 'PATCH',
+        path,
+        query: { colorRgbFormat: true },
+        body: { backgroundColor: bg, foregroundColor: readableOn(bg) },
+      })
+    : await http.request(c, { path });
+  return toCalendar(res);
+}
+
+/** Black or white, whichever reads better on `hex`. */
+function readableOn(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const lum = 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+  return lum > 150 ? '#000000' : '#ffffff';
+}
+
 function toCalendar(raw: unknown): Calendar {
   const c = asRecord(raw, 'google', 'calendarListEntry');
   const id = reqString(c.id, 'google', 'calendarListEntry.id');
@@ -325,12 +360,20 @@ export const google = defineAdapter<GoogleCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: false,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: true,
+    calendarWrite: true,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -556,6 +599,66 @@ export const google = defineAdapter<GoogleCredentials>({
         if (isUnibookingError(e) && e.code === 'NOT_FOUND') return;
         throw e;
       }
+    },
+
+    // The calendar itself (name, zone, description) lives on /calendars; its
+    // colour is per-user, on the calendarList entry. The entry is also what
+    // listCalendars maps, so it is what these return.
+    async createCalendar(input) {
+      if (!input.name?.trim()) {
+        throw new UnibookingError({
+          provider: 'google',
+          code: 'INVALID_INPUT',
+          message: 'createCalendar requires a name',
+        });
+      }
+      const c = await http.resolve();
+      const created = await http.request(c, {
+        method: 'POST',
+        path: 'calendars',
+        body: {
+          summary: input.name.trim(),
+          ...(input.timezone ? { timeZone: input.timezone } : {}),
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...input.providerOptions,
+        },
+      });
+      const id = reqString(created?.id, 'google', 'calendar.id');
+      return readCalendarEntry(http, c, id, input.color);
+    },
+
+    async updateCalendar(id, input) {
+      const c = await http.resolve();
+      const body = {
+        ...(input.name !== undefined ? { summary: input.name } : {}),
+        ...(input.timezone !== undefined ? { timeZone: input.timezone } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...input.providerOptions,
+      };
+      if (Object.keys(body).length > 0) {
+        await http.request(c, {
+          method: 'PATCH',
+          path: `calendars/${encodeURIComponent(id)}`,
+          body,
+        });
+      }
+      return readCalendarEntry(http, c, id, input.color);
+    },
+
+    async deleteCalendar(id) {
+      if (id === 'primary') {
+        throw new UnibookingError({
+          provider: 'google',
+          code: 'INVALID_INPUT',
+          message: "The primary calendar can't be deleted",
+        });
+      }
+      const c = await http.resolve();
+      await http.request(c, {
+        method: 'DELETE',
+        path: `calendars/${encodeURIComponent(id)}`,
+        parse: 'none',
+      });
     },
 
     async listCalendars(query) {

@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Booking } from 'unibooking';
 import type { ActionResult } from '../../lib/result';
 import * as api from '../../lib/calendar/api';
 import CalendarTab from './CalendarTab';
+
+// Each flow is several mocked round trips plus renders; under the full suite
+// the 1 s default wait was too tight and flaked. Failures still fail, later.
+configure({ asyncUtilTimeout: 5000 });
 
 vi.mock('../../lib/calendar/api', () => ({
   getStatus: vi.fn(),
@@ -27,7 +31,6 @@ vi.mock('../../lib/calendar/api', () => ({
 const getStatus = vi.mocked(api.getStatus);
 const calendarCall = vi.mocked(api.calendarCall);
 
-
 // An hour from now always falls inside the default 7-day window from today.
 const soon = new Date(Date.now() + 60 * 60 * 1000);
 soon.setUTCMinutes(0, 0, 0);
@@ -46,7 +49,7 @@ const EVENT: Booking = {
 
 beforeEach(() => {
   localStorage.clear();
-  calendarCall.mockImplementation(async (op): Promise<ActionResult> => {
+  calendarCall.mockImplementation(async (op, args): Promise<ActionResult> => {
     switch (op) {
       case 'listCalendars':
         return {
@@ -62,6 +65,26 @@ beforeEach(() => {
         return { ok: true, data: { events: [EVENT], truncated: false } };
       case 'deleteEvent':
         return { ok: true, data: { deleted: true, id: 'e1' } };
+      case 'createCalendar':
+        return {
+          ok: true,
+          data: { id: 'new-cal', name: args?.name, primary: false, readOnly: false, raw: {} },
+        };
+      case 'updateCalendar':
+        return {
+          ok: true,
+          data: { id: args?.calendarId, name: args?.name, primary: false, readOnly: false, raw: {} },
+        };
+      case 'deleteCalendar':
+        return { ok: true, data: { deleted: true } };
+      case 'setEventStatus':
+        return {
+          ok: true,
+          data:
+            args?.status === 'cancelled'
+              ? { ...EVENT, title: `Cancelled: ${EVENT.title}` }
+              : { ...EVENT, status: args?.status },
+        };
       default:
         return { ok: false, error: { message: `unexpected ${op}` } };
     }
@@ -73,7 +96,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('CalendarTab', () => {
+describe('CalendarTab', { timeout: 20_000 }, () => {
   it('shows the deployer notice when the feature is not configured', async () => {
     getStatus.mockResolvedValue({
       ok: true,
@@ -151,7 +174,7 @@ describe('CalendarTab', () => {
     await userEvent.click(row);
     expect(screen.getByRole('dialog', { name: 'Event: Team sync' })).toBeTruthy();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await userEvent.click(screen.getByRole('button', { name: /Delete/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^🗑 Delete$/ }));
     await waitFor(() =>
       expect(calendarCall).toHaveBeenCalledWith('deleteEvent', {
         calendarId: 'jane@gmail.com',
@@ -159,6 +182,102 @@ describe('CalendarTab', () => {
       }),
     );
     expect(await screen.findByText('Event deleted.')).toBeTruthy();
+  });
+
+  it('cancels an event while keeping it, separately from deleting it', async () => {
+    getStatus.mockResolvedValue({
+      ok: true,
+      data: {
+        enabled: true,
+        providers: { google: true, outlook: false, apple: true },
+        connection: { provider: 'google', account: { email: 'jane@gmail.com' } },
+      },
+    });
+    render(<CalendarTab />);
+    await userEvent.click(await screen.findByRole('button', { name: /Team sync/ }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const status = screen.getByRole('group', { name: 'Status' });
+    expect(within(status).getByRole('button', { name: 'Confirmed' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    await userEvent.click(within(status).getByRole('button', { name: 'Cancelled' }));
+    await waitFor(() =>
+      expect(calendarCall).toHaveBeenCalledWith('setEventStatus', {
+        calendarId: 'jane@gmail.com',
+        id: 'e1',
+        status: 'cancelled',
+      }),
+    );
+    expect(calendarCall).not.toHaveBeenCalledWith('deleteEvent', expect.anything());
+    expect(await screen.findByText(/Event cancelled/)).toBeTruthy();
+    // The kept event now reads as cancelled...
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('group', { name: 'Status' }))
+          .getByRole('button', { name: 'Cancelled' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    // ...and picking another status restores it, without a confirm prompt.
+    vi.mocked(window.confirm).mockClear();
+    await userEvent.click(
+      within(screen.getByRole('group', { name: 'Status' })).getByRole('button', {
+        name: 'Tentative',
+      }),
+    );
+    await waitFor(() =>
+      expect(calendarCall).toHaveBeenCalledWith('setEventStatus', {
+        calendarId: 'jane@gmail.com',
+        id: 'e1',
+        status: 'pending',
+      }),
+    );
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Event marked tentative/)).toBeTruthy();
+  });
+
+  it('creates, renames and deletes calendars; the primary cannot be deleted', async () => {
+    getStatus.mockResolvedValue({
+      ok: true,
+      data: {
+        enabled: true,
+        providers: { google: true, outlook: false, apple: true },
+        connection: { provider: 'google', account: { email: 'jane@gmail.com' } },
+      },
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<CalendarTab />);
+    await screen.findByRole('option', { name: /Jane/ }, { timeout: 5000 });
+    // The account's main calendar is selected: it can be renamed, not deleted.
+    expect((screen.getByRole('button', { name: 'Delete calendar' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(screen.getByText('client.deleteCalendar(id)')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'New calendar' }));
+    const form = screen.getByRole('form', { name: 'New calendar' });
+    await userEvent.type(within(form).getByLabelText('Name'), 'Front desk');
+    await userEvent.click(within(form).getByRole('button', { name: 'Create calendar' }));
+    await waitFor(() =>
+      expect(calendarCall).toHaveBeenCalledWith('createCalendar', {
+        name: 'Front desk',
+        color: '#0f5c4a',
+      }),
+    );
+    expect(await screen.findByText(/Calendar “Front desk” created/)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const rename = screen.getByRole('form', { name: 'Rename calendar' });
+    const input = within(rename).getByLabelText('New name');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Jane (work)');
+    await userEvent.click(within(rename).getByRole('button', { name: 'Save name' }));
+    await waitFor(() =>
+      expect(calendarCall).toHaveBeenCalledWith('updateCalendar', {
+        calendarId: 'jane@gmail.com',
+        name: 'Jane (work)',
+      }),
+    );
   });
 
   it('drops back to the empty state when the connection is revoked', async () => {
@@ -210,10 +329,6 @@ describe('CalendarTab: operator OAuth app setup on a fresh clone (nothing config
       connection: null,
     },
   };
-
-
-
-
 
   it('asks a non-local visitor for no credentials at all', async () => {
     getStatus.mockResolvedValue(nothingConfiguredRemote);

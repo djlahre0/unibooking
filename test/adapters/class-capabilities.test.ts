@@ -45,8 +45,12 @@ const CLIENTS: Array<[string, () => BookingClient]> = [
  *  declare the flags false AND omit the methods — a capability flag that lies
  *  is worse than no support, because callers branch on it. */
 const CLASS_PROVIDERS = ['mindbody', 'acuity', 'booker'];
-/** Adapters implementing the staff<->service link and catalog categories. */
-const ASSIGNMENT_PROVIDERS = ['square', 'acuity', 'booker'];
+/** Adapters exposing catalog categories. */
+const CATEGORY_PROVIDERS = ['square', 'acuity', 'booker'];
+/** Adapters reporting the staff<->service link. */
+const ASSIGNMENT_PROVIDERS = ['square', 'acuity', 'booker', 'microsoft_bookings'];
+/** Adapters that can also change it. */
+const ASSIGNMENT_WRITE_PROVIDERS = ['square', 'microsoft_bookings'];
 /** Adapters exposing recurring weekly opening hours. */
 const HOURS_PROVIDERS = ['square', 'booker'];
 
@@ -75,7 +79,7 @@ describe('class capability flags are honest', () => {
       if (caps.classEnrollment) expect(caps.classCatalog).toBe(true);
 
       // Categories and business hours follow the same flag/method contract.
-      expect(caps.serviceCategories).toBe(ASSIGNMENT_PROVIDERS.includes(name));
+      expect(caps.serviceCategories).toBe(CATEGORY_PROVIDERS.includes(name));
       expect(typeof client.listCategories === 'function').toBe(caps.serviceCategories);
       expect(caps.businessHours).toBe(HOURS_PROVIDERS.includes(name));
       expect(typeof client.getBusinessHours === 'function').toBe(caps.businessHours);
@@ -84,6 +88,7 @@ describe('class capability flags are honest', () => {
       // Service/Staff -- but it is meaningless without a catalog to carry them.
       expect(caps.staffServiceAssignment).toBe(ASSIGNMENT_PROVIDERS.includes(name));
       if (caps.staffServiceAssignment) expect(caps.serviceCatalog).toBe(true);
+      expect(caps.staffServiceAssignmentWrite).toBe(ASSIGNMENT_WRITE_PROVIDERS.includes(name));
     });
   }
 

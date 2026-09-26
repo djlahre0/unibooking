@@ -2,6 +2,12 @@
 
 import { instantToZoned, type Booking } from 'unibooking';
 import { dayLabel, shiftDate } from '../../lib/calendar/agenda';
+import {
+  EVENT_STATUS_LABELS,
+  eventStatus,
+  type EventStatus,
+} from '../../lib/cancel-event';
+import ApiHint from '../ApiHint';
 
 function when(b: Booking, tz: string): string {
   if (b.allDay) {
@@ -27,6 +33,7 @@ export default function EventDetails({
   readOnly,
   busy,
   onEdit,
+  onSetStatus,
   onDelete,
   onClose,
 }: {
@@ -35,10 +42,13 @@ export default function EventDetails({
   readOnly: boolean;
   busy: boolean;
   onEdit: () => void;
+  /** Confirmed / tentative / cancelled (kept, marked). Absent hides it. */
+  onSetStatus?: (status: EventStatus) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
   const ownZone = booking.range.timezone;
+  const status = eventStatus(booking);
   return (
     <div className="card cal-details" role="dialog" aria-label={`Event: ${booking.title}`}>
       <div className="card-title">
@@ -65,9 +75,42 @@ export default function EventDetails({
             <dd className="cal-description">{booking.description}</dd>
           </>
         ) : null}
-        <dt>Status</dt>
-        <dd>{booking.status}</dd>
+        {onSetStatus ? null : (
+          <>
+            <dt>Status</dt>
+            <dd>{EVENT_STATUS_LABELS[status]}</dd>
+          </>
+        )}
       </dl>
+      {onSetStatus ? (
+        <div className="cal-status" role="group" aria-label="Status">
+          <span className="form-label">Status</span>
+          <div className="cal-status-options">
+            {(Object.keys(EVENT_STATUS_LABELS) as EventStatus[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`cal-status-option ${status === s ? 'is-current' : ''} cal-status-${s}`}
+                aria-pressed={status === s}
+                disabled={readOnly || busy}
+                onClick={() => {
+                  if (s !== status) onSetStatus(s);
+                }}
+              >
+                {EVENT_STATUS_LABELS[s]}
+              </button>
+            ))}
+          </div>
+          <p className="cal-muted cal-status-help">
+            {status === 'cancelled'
+              ? 'Kept on the calendar, marked cancelled and not blocking the time. Pick Confirmed or Tentative to restore it.'
+              : 'Cancelled keeps the event, marked cancelled and no longer blocking the time. Delete removes it for good.'}
+          </p>
+          <ApiHint call="client.updateBooking(id, { status })">
+            Google and Outlook also get the title marker and free/busy change.
+          </ApiHint>
+        </div>
+      ) : null}
       <div className="op-row">
         <button
           className="btn btn-primary btn-sm"
@@ -89,6 +132,9 @@ export default function EventDetails({
           Close
         </button>
       </div>
+      <ApiHint call="client.getBooking(id) · client.cancelBooking(id)">
+        On a calendar, cancelBooking deletes the event.
+      </ApiHint>
       {readOnly ? <p className="cal-muted">This calendar is read-only for your account.</p> : null}
     </div>
   );

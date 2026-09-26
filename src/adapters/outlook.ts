@@ -346,12 +346,20 @@ export const outlook = defineAdapter<OutlookCredentials>({
     webhooks: true,
     idempotency: true,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: false,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: true,
+    calendarWrite: true,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -636,6 +644,55 @@ export const outlook = defineAdapter<OutlookCredentials>({
         if (isUnibookingError(e) && e.code === 'NOT_FOUND') return;
         throw e;
       }
+    },
+
+    // Graph calendars have a name and a named colour (`providerOptions.color`,
+    // e.g. 'lightBlue'); `hexColor` is read-only, and there is no per-calendar
+    // zone or description, so those inputs have nowhere to go.
+    async createCalendar(input) {
+      if (!input.name?.trim()) {
+        throw new UnibookingError({
+          provider: 'outlook',
+          code: 'INVALID_INPUT',
+          message: 'createCalendar requires a name',
+        });
+      }
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        path: `${who(c)}/calendars`,
+        body: { name: input.name.trim(), ...input.providerOptions },
+      });
+      return toCalendar(res);
+    },
+
+    async updateCalendar(id, input) {
+      const c = await http.resolve();
+      const path = `${who(c)}/calendars/${encodeURIComponent(id)}`;
+      const body = {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...input.providerOptions,
+      };
+      const res =
+        Object.keys(body).length > 0
+          ? await http.request(c, { method: 'PATCH', path, body })
+          : await http.request(c, { path });
+      return toCalendar(res);
+    },
+
+    async deleteCalendar(id) {
+      const c = await http.resolve();
+      const path = `${who(c)}/calendars/${encodeURIComponent(id)}`;
+      // Graph refuses to delete the default calendar; say so before trying.
+      const cal = await http.request(c, { path });
+      if (cal?.isDefaultCalendar === true) {
+        throw new UnibookingError({
+          provider: 'outlook',
+          code: 'INVALID_INPUT',
+          message: "The default calendar can't be deleted",
+        });
+      }
+      await http.request(c, { method: 'DELETE', path, parse: 'none' });
     },
 
     async listCalendars(query) {

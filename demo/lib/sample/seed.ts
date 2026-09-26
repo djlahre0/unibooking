@@ -109,20 +109,24 @@ const LAYOUT: Array<[number, string, number, number, Booking['status']]> = [
 ];
 
 export function buildSeed(today: string, timezone: string): SampleData {
+  const staff: Staff[] = STAFF.map(([name, active], i) => ({
+    id: `stf_${i + 1}`,
+    name,
+    email: `${name.split(' ')[0]!.toLowerCase()}@example.salon`,
+    active,
+    raw: { source: 'sample', seeded: true },
+  }));
+
+  // Every active stylist performs every seeded service, so the assignment
+  // controls start from a realistic "who does what" rather than nobody.
+  const performers = staff.filter((m) => m.active).map((m) => m.id);
   const services: Service[] = SERVICES.map(([name, durationMinutes, amount], i) => ({
     id: `svc_${i + 1}`,
     name,
     durationMinutes,
     price: { amount, currency: 'USD' },
     active: true,
-    raw: { source: 'sample', seeded: true },
-  }));
-
-  const staff: Staff[] = STAFF.map(([name, active], i) => ({
-    id: `stf_${i + 1}`,
-    name,
-    email: `${name.split(' ')[0]!.toLowerCase()}@example.salon`,
-    active,
+    staffIds: [...performers],
     raw: { source: 'sample', seeded: true },
   }));
 

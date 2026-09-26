@@ -13,11 +13,16 @@
  * localStorage does not exist — the same idiom the library uses for `fetch`.
  *
  * SECURITY: localStorage is readable by any script on this origin. That is the
- * accepted cost of the feature; the opt-in default and the UI's warning banner
- * are the mitigation, not encryption (a passphrase-derived key stored in the
+ * accepted cost of the feature. Remembering is ON by default (so a reload
+ * never loses what was pasted); the mitigation is the UI's always-visible
+ * warning plus one-click "Clear <provider>" / "Clear all saved", and unticking
+ * wipes everything -- not encryption (a passphrase-derived key stored in the
  * same browser as the ciphertext would be theatre).
  */
 export const STORAGE_KEY = 'unibooking:demo:v1';
+
+/** Remembering applies until the visitor explicitly turns it off. */
+export const DEFAULT_REMEMBER = true;
 
 export type SavedProvider = {
   creds: Record<string, string>;
@@ -30,11 +35,15 @@ export type SavedProvider = {
 export type SavedState = {
   remember: boolean;
   providers: Record<string, SavedProvider>;
+  /** True once the visitor has used the checkbox. Without it a stored
+   *  `remember: false` is ambiguous: earlier versions wrote that default on
+   *  every Clear, so only an explicit choice may override DEFAULT_REMEMBER. */
+  chosen?: boolean;
 };
 
 /** A fresh empty state, never shared — callers may mutate `.providers` freely. */
 function emptyState(): SavedState {
-  return { remember: false, providers: {} };
+  return { remember: DEFAULT_REMEMBER, providers: {} };
 }
 
 /** Resolve the store, tolerating SSR and environments without localStorage. */
@@ -52,7 +61,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /** Structural shape only; `providers` entries are validated individually below. */
-function isState(v: unknown): v is { remember: boolean; providers: Record<string, unknown> } {
+function isState(
+  v: unknown,
+): v is { remember: boolean; providers: Record<string, unknown>; chosen?: unknown } {
   return isPlainObject(v) && typeof v.remember === 'boolean' && isPlainObject(v.providers);
 }
 
@@ -75,7 +86,12 @@ export function loadState(storage?: Storage): SavedState {
     for (const [name, entry] of Object.entries(parsed.providers)) {
       if (isSavedProvider(entry)) providers[name] = entry;
     }
-    return { remember: parsed.remember, providers };
+    const chosen = parsed.chosen === true;
+    return {
+      remember: chosen ? parsed.remember : DEFAULT_REMEMBER,
+      providers,
+      ...(chosen ? { chosen: true } : {}),
+    };
   } catch {
     return emptyState();
   }
@@ -140,6 +156,7 @@ export function storageAvailable(storage?: Storage): boolean {
 export function setRemember(on: boolean, storage?: Storage): SavedState {
   const state = loadState(storage);
   state.remember = on;
+  state.chosen = true;
   if (!on) state.providers = {};
   write(state, storage);
   return state;

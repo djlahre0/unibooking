@@ -1,4 +1,4 @@
-import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type { Booking, BookingStatus, Customer, CustomerRecord, Service, Staff } from '../types';
 import {
   asArray,
   asRecord,
@@ -111,6 +111,15 @@ const CANCEL_APPOINTMENT = `mutation CancelAppointment($input: CancelAppointment
 
 const FIND_CLIENTS = `query FindClients($emails: [String!]) {
   clients(first: 1, emails: $emails) { edges { node { id } } }
+}`;
+
+/** Only the fields createClient itself takes, so the query asks for nothing
+ *  the schema might not have. */
+const LIST_CLIENTS = `query ListClients($first: Int!, $after: String, $emails: [String!]) {
+  clients(first: $first, after: $after, emails: $emails) {
+    edges { node { id firstName lastName email mobilePhone } }
+    pageInfo { endCursor hasNextPage }
+  }
 }`;
 
 const CREATE_CLIENT = `mutation CreateClient($input: CreateClientInput!) {
@@ -366,12 +375,20 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: false,
+    calendarWrite: false,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -703,6 +720,38 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateClient(http, c, customer);
+      },
+
+      // The same `clients` connection findOrCreate searches; email is its own
+      // filter, phone filters each page. `get` comes from defineAdapter's
+      // bounded walk of this list.
+      list: async (query) => {
+        const c = await http.resolve();
+        const data = await gql(http, c, LIST_CLIENTS, {
+          first: Math.min(query?.limit ?? 100, 100),
+          ...(query?.pageToken ? { after: query.pageToken } : {}),
+          ...(query?.email ? { emails: [query.email] } : {}),
+        });
+        const conn = data?.clients ?? {};
+        let customers = asArray(conn.edges ?? [], 'boulevard', 'clients.edges')
+          .map((e: any) => e?.node)
+          .filter(Boolean)
+          .map((n: any): CustomerRecord => {
+            const name = [n.firstName, n.lastName].filter(Boolean).join(' ');
+            return {
+              id: reqString(String(n.id ?? ''), 'boulevard', 'client.id'),
+              ...(name ? { name } : {}),
+              ...(n.email ? { email: String(n.email) } : {}),
+              ...(n.mobilePhone ? { phone: String(n.mobilePhone) } : {}),
+              raw: n,
+            };
+          });
+        if (query?.phone) customers = customers.filter((x) => x.phone === query.phone);
+        const end = conn.pageInfo?.endCursor;
+        return {
+          customers,
+          ...(conn.pageInfo?.hasNextPage && typeof end === 'string' ? { nextPageToken: end } : {}),
+        };
       },
     },
   }),

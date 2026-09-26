@@ -4,6 +4,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import BookingsTab from './BookingsTab';
 import {
+  callCancelBooking,
+  callMarkCancelled,
   callCreateBooking,
   callListBookings,
   callListCalendars,
@@ -17,7 +19,8 @@ vi.mock('../../lib/call', () => ({
   callCreateBooking: vi.fn(async () => ({ ok: true, data: { id: 'b1' } })),
   callGetBooking: vi.fn(),
   callUpdateBooking: vi.fn(async () => ({ ok: true, data: { id: 'b1' } })),
-  callCancelBooking: vi.fn(),
+  callCancelBooking: vi.fn(async () => ({ ok: true, data: { cancelled: true } })),
+  callMarkCancelled: vi.fn(async () => ({ ok: true, data: { id: 'b1' } })),
   callListBookings: vi.fn(async () => ({ ok: true, data: { bookings: [] } })),
   callListCalendars: vi.fn(),
   // Google by default reports no calendar list here, so the browser zone is
@@ -30,6 +33,8 @@ const update = vi.mocked(callUpdateBooking);
 const list = vi.mocked(callListBookings);
 const listCalendars = vi.mocked(callListCalendars);
 const capabilities = vi.mocked(providerCapabilities);
+const cancel = vi.mocked(callCancelBooking);
+const markCancelled = vi.mocked(callMarkCancelled);
 
 // Same contract as page.tsx's wrap: a throw becomes an error result.
 const wrap = (async (
@@ -65,6 +70,8 @@ beforeEach(() => {
   localStorage.clear();
   create.mockClear();
   update.mockClear();
+  cancel.mockClear();
+  markCancelled.mockClear();
   list.mockClear();
   listCalendars.mockReset();
   capabilities.mockImplementation(() => ({ calendarList: false }) as never);
@@ -240,5 +247,69 @@ describe('bad picker input is reported, not sent', () => {
       expect(setBookingResult).toHaveBeenCalledWith(expect.objectContaining({ ok: false })),
     );
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancel vs delete', () => {
+  it('a calendar provider offers both; Cancel keeps the event, Delete removes it', async () => {
+    const user = userEvent.setup();
+    render(<BookingsTab {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /^🚫 Cancel$/ }));
+    await user.type(screen.getByLabelText('Booking ID'), 'e1');
+    await user.type(screen.getByLabelText('Reason'), 'Room gone');
+    await user.click(screen.getByRole('button', { name: /Cancel Event/ }));
+    await vi.waitFor(() => expect(markCancelled).toHaveBeenCalled());
+    expect(markCancelled.mock.calls[0]!.slice(2)).toEqual(['e1', 'Room gone']);
+    expect(cancel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /^🗑 Delete$/ }));
+    await user.type(screen.getByLabelText('Booking ID'), 'e2');
+    // Permanent, so it asks first; declining sends nothing.
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await user.click(screen.getByRole('button', { name: /Delete Event/ }));
+    expect(ask).toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    ask.mockReturnValue(true);
+    await user.click(screen.getByRole('button', { name: /Delete Event/ }));
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
+    expect(cancel.mock.calls[0]![2]).toBe('e2');
+    ask.mockRestore();
+  });
+
+  it('update offers a status: calendar statuses on a calendar, platform ones elsewhere', async () => {
+    const user = userEvent.setup();
+    render(<BookingsTab {...props} />);
+    await user.click(screen.getByRole('button', { name: /^✏️ Update$/ }));
+    const select = screen.getByLabelText('New Status') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.text)).toEqual([
+      'Leave unchanged',
+      'Confirmed',
+      'Tentative',
+      'Cancelled',
+    ]);
+    await user.type(screen.getByLabelText('Booking ID'), 'e7');
+    await user.selectOptions(select, 'Tentative');
+    await user.click(screen.getByRole('button', { name: /Update Booking/ }));
+    await vi.waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0]![3]).toMatchObject({ status: 'pending' });
+    cleanup();
+
+    render(<BookingsTab {...props} selectedProvider="square" />);
+    await user.click(screen.getByRole('button', { name: /^✏️ Update$/ }));
+    expect(
+      [...(screen.getByLabelText('New Status') as HTMLSelectElement).options].map((o) => o.value),
+    ).toEqual(['', 'confirmed', 'pending', 'completed', 'no_show']);
+  });
+
+  it('a booking platform keeps its single Cancel, which is the real cancelBooking', async () => {
+    const user = userEvent.setup();
+    render(<BookingsTab {...props} selectedProvider="square" />);
+    expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^🗑 Cancel$/ }));
+    await user.type(screen.getByLabelText('Booking ID'), 'b9');
+    await user.click(screen.getByRole('button', { name: /Cancel Booking/ }));
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
+    expect(markCancelled).not.toHaveBeenCalled();
   });
 });

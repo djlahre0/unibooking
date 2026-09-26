@@ -194,6 +194,64 @@ describe('square: customer resolution + version fetch', () => {
     agent.assertNoPendingInterceptors();
   });
 
+  it('createBooking reads the variation version from the catalog when not given', async () => {
+    // Demanding the caller dig it out of a raw availability slot made the
+    // plain canonical createBooking unusable (the demo's form never could).
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: '/v2/catalog/object/sv1', method: 'GET' })
+      .reply(
+        200,
+        JSON.stringify({ object: { id: 'sv1', type: 'ITEM_VARIATION', version: 1621345678900 } }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    let body: any;
+    pool.intercept({ path: '/v2/bookings', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        body = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking() });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await client.createBooking({
+      title: 'Cut',
+      range: RANGE,
+      customer: { id: 'CUST1' },
+      staffId: 'tm1',
+      serviceId: 'sv1',
+    });
+
+    expect(body.booking.appointment_segments[0].service_variation_version).toBe(1621345678900);
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('createBooking names the field when the catalog has no version for the service', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({ path: '/v2/catalog/object/sv1', method: 'GET' })
+      .reply(200, JSON.stringify({ object: { id: 'sv1' } }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    const client = square({ accessToken: 't', locationId: 'LOC1' });
+    await expect(
+      client.createBooking({
+        title: 'Cut',
+        range: RANGE,
+        customer: { id: 'CUST1' },
+        staffId: 'tm1',
+        serviceId: 'sv1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('service_variation_version'),
+    });
+  });
+
   it('updateBooking without a version first GETs to read it', async () => {
     const pool = agent.get(ORIGIN);
     pool
@@ -305,13 +363,6 @@ describe('square: customer resolution + version fetch', () => {
     ).rejects.toMatchObject({
       code: 'INVALID_INPUT',
       message: expect.stringContaining('serviceId'),
-    });
-
-    await expect(
-      client.createBooking({ ...common, staffId: 'tm1', serviceId: 'sv1' }),
-    ).rejects.toMatchObject({
-      code: 'INVALID_INPUT',
-      message: expect.stringContaining('service_variation_version'),
     });
 
     // Nothing was sent — the guard is client-side.
@@ -582,5 +633,120 @@ describe('square: customer resolution + version fetch', () => {
     // Smith" into one record would attach a booking to the wrong person, which
     // is worse than the duplicate a stable key would avoid.
     expect(keys[0]).not.toBe(keys[1]);
+  });
+});
+
+describe('square: client records (customers.list/get/create/update/delete)', () => {
+  let agent: MockAgent;
+  let previous: Dispatcher;
+  const client = () => square({ accessToken: 't', locationId: 'L1' });
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+  const CUST = {
+    id: 'C1',
+    given_name: 'Ana',
+    family_name: 'Silva',
+    email_address: 'ana@x.com',
+    phone_number: '+15550100',
+    note: 'VIP',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-02-01T00:00:00Z',
+  };
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+  });
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('list pages by cursor and maps each record', async () => {
+    agent
+      .get(ORIGIN)
+      .intercept({
+        path: (p) => p.startsWith('/v2/customers?') && p.includes('cursor=K1'),
+        method: 'GET',
+      })
+      .reply(200, JSON.stringify({ customers: [CUST], cursor: 'K2' }), { headers: JSON_HEADERS });
+    const r = await client().customers!.list!({ pageToken: 'K1' });
+    expect(r.nextPageToken).toBe('K2');
+    expect(r.customers[0]).toMatchObject({
+      id: 'C1',
+      name: 'Ana Silva',
+      email: 'ana@x.com',
+      phone: '+15550100',
+      note: 'VIP',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+  });
+
+  it('an email filter searches server-side, exactly', async () => {
+    let body: any;
+    agent
+      .get(ORIGIN)
+      .intercept({ path: '/v2/customers/search', method: 'POST' })
+      .reply(
+        200,
+        (o) => {
+          body = JSON.parse(String(o.body));
+          return JSON.stringify({ customers: [CUST] });
+        },
+        { headers: JSON_HEADERS },
+      );
+    const r = await client().customers!.list!({ email: 'ana@x.com' });
+    expect(body.query.filter).toEqual({ email_address: { exact: 'ana@x.com' } });
+    expect(r.customers).toHaveLength(1);
+  });
+
+  it('get, create, update (clearing a dropped surname) and delete', async () => {
+    const pool = agent.get(ORIGIN);
+    pool
+      .intercept({ path: '/v2/customers/C1', method: 'GET' })
+      .reply(200, JSON.stringify({ customer: CUST }), { headers: JSON_HEADERS });
+    expect((await client().customers!.get!('C1')).name).toBe('Ana Silva');
+
+    let created: any;
+    pool.intercept({ path: '/v2/customers', method: 'POST' }).reply(
+      200,
+      (o) => {
+        created = JSON.parse(String(o.body));
+        return JSON.stringify({ customer: CUST });
+      },
+      { headers: JSON_HEADERS },
+    );
+    await client().customers!.create!({ name: 'Ana Silva', email: 'ana@x.com' });
+    expect(created).toMatchObject({
+      given_name: 'Ana',
+      family_name: 'Silva',
+      email_address: 'ana@x.com',
+    });
+    expect(typeof created.idempotency_key).toBe('string');
+
+    let updated: any;
+    pool.intercept({ path: '/v2/customers/C1', method: 'PUT' }).reply(
+      200,
+      (o) => {
+        updated = JSON.parse(String(o.body));
+        return JSON.stringify({ customer: { ...CUST, family_name: undefined } });
+      },
+      { headers: JSON_HEADERS },
+    );
+    const u = await client().customers!.update!('C1', { name: 'Ana' });
+    expect(updated).toEqual({ given_name: 'Ana', family_name: null });
+    expect(u.name).toBe('Ana');
+
+    pool.intercept({ path: '/v2/customers/C1', method: 'DELETE' }).reply(200, '{}', {
+      headers: JSON_HEADERS,
+    });
+    await client().customers!.delete!('C1');
+  });
+
+  it('create refuses a record with no name, email or phone', async () => {
+    await expect(client().customers!.create!({ note: 'x' })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
   });
 });

@@ -1,4 +1,12 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  Customer,
+  CustomerRecord,
+  Service,
+  Staff,
+} from '../types';
 import {
   asArray,
   asRecord,
@@ -170,11 +178,36 @@ function requireStaff(staffId: string | undefined): string {
   return staffId;
 }
 
-/** Every paged Phorest model is `{ links, _embedded, page }` with `_embedded` a
- *  bare array at the top level. (The one `data`-wrapped body in the spec is
- *  availability, which is mapped separately.) */
+/** Every paged Phorest model is `{ links, _embedded, page }`. The documented
+ *  shape wraps the list by name -- `_embedded: { clients: [...] }` -- so reading
+ *  only a bare array returned nothing (and made findOrCreate create a duplicate
+ *  client every time). Both shapes are accepted: the named list, or a bare
+ *  array. (The one `data`-wrapped body in the spec is availability, which is
+ *  mapped separately.) */
 function embedded(res: any): any[] {
-  return Array.isArray(res?._embedded) ? res._embedded : [];
+  const e = res?._embedded;
+  if (Array.isArray(e)) return e;
+  if (e && typeof e === 'object') {
+    const list = Object.values(e).find(Array.isArray);
+    if (list) return list as any[];
+  }
+  return [];
+}
+
+/** A Phorest ClientResponse -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'phorest', 'client');
+  const name = [r.firstName, r.lastName].filter((x) => typeof x === 'string' && x).join(' ');
+  return {
+    id: reqString(String(r.clientId ?? ''), 'phorest', 'client.clientId'),
+    ...(name ? { name } : {}),
+    ...(typeof r.email === 'string' && r.email ? { email: r.email } : {}),
+    ...(typeof r.mobile === 'string' && r.mobile ? { phone: r.mobile } : {}),
+    ...(typeof r.notes === 'string' && r.notes ? { note: r.notes } : {}),
+    ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+    ...(typeof r.updatedAt === 'string' ? { updatedAt: r.updatedAt } : {}),
+    raw: r,
+  };
 }
 
 /** BookingResponse (`{bookingStatus, clientId, schedules,
@@ -261,12 +294,20 @@ export const phorest = defineAdapter<PhorestCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
     calendarList: false,
+    calendarWrite: false,
     staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
     serviceCategories: false,
     businessHours: false,
     classCatalog: false,
@@ -562,6 +603,92 @@ export const phorest = defineAdapter<PhorestCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateClient(http, c, customer);
+      },
+
+      // Page numbers are the token (Phorest pages from 0, size <= 200); the
+      // email/phone filters are Phorest's own, so they apply across pages.
+      list: async (query) => {
+        const c = await http.resolve();
+        const page = query?.pageToken ? Number(query.pageToken) : 0;
+        if (!Number.isInteger(page) || page < 0) {
+          throw new UnibookingError({
+            provider: 'phorest',
+            code: 'INVALID_INPUT',
+            message: 'pageToken must be a page number from a previous list',
+          });
+        }
+        const res = await http.request(c, {
+          path: businessPath(c, 'client'),
+          query: {
+            page,
+            size: Math.min(query?.limit ?? 100, 200),
+            ...(query?.email ? { email: query.email } : {}),
+            ...(query?.phone ? { phone: query.phone } : {}),
+          },
+        });
+        const customers = embedded(res).map(toCustomerRecord);
+        const totalPages = Number(res?.page?.totalPages);
+        const more = Number.isFinite(totalPages) && page + 1 < totalPages;
+        return { customers, ...(more ? { nextPageToken: String(page + 1) } : {}) };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        return toCustomerRecord(
+          await http.request(c, { path: businessPath(c, `client/${enc(id)}`) }),
+        );
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'phorest',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: businessPath(c, 'client'),
+          body: {
+            // Phorest requires both names; a nameless client is "Guest".
+            ...(input.name?.trim()
+              ? splitName(input.name)
+              : { firstName: 'Guest', lastName: 'Guest' }),
+            ...(input.email ? { email: input.email } : {}),
+            ...(input.phone ? { mobile: input.phone } : {}),
+            ...(input.note ? { notes: input.note } : {}),
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res);
+      },
+
+      // firstName/lastName are required on every update and `version` guards
+      // against overwriting a concurrent change, so read the client first and
+      // send the current values for anything the caller left out.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = businessPath(c, `client/${enc(id)}`);
+        const current = asRecord(await http.request(c, { path }), 'phorest', 'client');
+        const names = input.name?.trim()
+          ? splitName(input.name)
+          : { firstName: current.firstName, lastName: current.lastName };
+        const res = await http.request(c, {
+          method: 'PUT',
+          path,
+          body: {
+            clientId: current.clientId,
+            ...(current.version !== undefined ? { version: current.version } : {}),
+            ...names,
+            email: input.email !== undefined ? input.email : current.email,
+            mobile: input.phone !== undefined ? input.phone : current.mobile,
+            notes: input.note !== undefined ? input.note : current.notes,
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res);
       },
     },
   }),

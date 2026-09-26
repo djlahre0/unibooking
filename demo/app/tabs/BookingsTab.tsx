@@ -8,11 +8,24 @@ import {
   callGetBooking,
   callUpdateBooking,
   callCancelBooking,
+  callMarkCancelled,
   callListBookings,
 } from '../../lib/call';
+import { CALENDAR_PROVIDERS, EVENT_STATUS_LABELS } from '../../lib/cancel-event';
+
+/** Statuses a calendar event can be given (see setEventStatus). */
+const CALENDAR_STATUSES = Object.entries(EVENT_STATUS_LABELS);
+/** Booking-platform statuses an update can set. Cancelling has its own op. */
+const PLATFORM_STATUSES: [string, string][] = [
+  ['confirmed', 'Confirmed'],
+  ['pending', 'Pending'],
+  ['completed', 'Completed'],
+  ['no_show', 'No-show'],
+];
 import type { ProviderMeta } from '../../lib/providers';
 import { browserZone, isTimeZone, toInstant } from '../../lib/datetime';
 import ResultBox from '../ResultBox';
+import ApiHint from '../ApiHint';
 import PersistedForm from '../PersistedForm';
 import { useCalendarZone, type CalendarZone } from './useCalendarZone';
 
@@ -162,6 +175,14 @@ export default function BookingsTab({
   // Picked wall-clock times are anchored in the targeted calendar's zone, so
   // "10:00" lands at 10:00 on that calendar, not in the laptop's zone.
   const zone = useCalendarZone(selectedProvider, conn);
+  // Calendar events can be cancelled (kept, marked cancelled) or deleted;
+  // booking platforms only cancel. A 'delete' left selected from a calendar
+  // provider falls back to 'cancel' after switching to one of those.
+  const isCalendar = CALENDAR_PROVIDERS.has(selectedProvider);
+  const ops = isCalendar
+    ? ['create', 'get', 'update', 'cancel', 'delete', 'list']
+    : ['create', 'get', 'update', 'cancel', 'list'];
+  const activeOp = bookingOp === 'delete' && !isCalendar ? 'cancel' : bookingOp;
 
   return (
     <div className="fade-in">
@@ -177,10 +198,10 @@ export default function BookingsTab({
           </div>
 
           <div className="op-row">
-            {['create', 'get', 'update', 'cancel', 'list'].map((op) => (
+            {ops.map((op) => (
               <button
                 key={op}
-                className={`btn btn-sm ${bookingOp === op ? 'btn-primary' : 'btn-secondary'}`}
+                className={`btn btn-sm ${activeOp === op ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => {
                   setBookingOp(op);
                   setBookingResult(null);
@@ -189,7 +210,8 @@ export default function BookingsTab({
                 {op === 'create' && '➕ '}
                 {op === 'get' && '🔍 '}
                 {op === 'update' && '✏️ '}
-                {op === 'cancel' && '🗑 '}
+                {op === 'cancel' && (isCalendar ? '🚫 ' : '🗑 ')}
+                {op === 'delete' && '🗑 '}
                 {op === 'list' && '📋 '}
                 {op.charAt(0).toUpperCase() + op.slice(1)}
               </button>
@@ -197,7 +219,7 @@ export default function BookingsTab({
           </div>
 
           {/* Create Booking */}
-          {bookingOp === 'create' && (
+          {activeOp === 'create' && (
             <PersistedForm
               formKey="bookings:create"
               onSubmit={(e) => {
@@ -314,11 +336,12 @@ export default function BookingsTab({
               >
                 {busy('booking') ? '...' : '➕ Create Booking'}
               </button>
+              <ApiHint call="client.createBooking({ title, range, serviceId, staffId, customer })" />
             </PersistedForm>
           )}
 
           {/* Get Booking */}
-          {bookingOp === 'get' && (
+          {activeOp === 'get' && (
             <PersistedForm
               formKey="bookings:get"
               onSubmit={(e) => {
@@ -346,11 +369,12 @@ export default function BookingsTab({
               <button className="btn btn-primary" type="submit" disabled={busy('booking')}>
                 {busy('booking') ? '...' : '🔍 Get Booking'}
               </button>
+              <ApiHint call="client.getBooking(id)" />
             </PersistedForm>
           )}
 
           {/* Update Booking */}
-          {bookingOp === 'update' && (
+          {activeOp === 'update' && (
             <PersistedForm
               formKey="bookings:update"
               onSubmit={(e) => {
@@ -365,6 +389,7 @@ export default function BookingsTab({
                       end: pickedInstant(fd, 'end', 'New end', zone) || undefined,
                       staffId: (fd.get('staffId') as string) || undefined,
                       serviceId: (fd.get('serviceId') as string) || undefined,
+                      status: (fd.get('status') as string) || undefined,
                     }),
                   setBookingResult,
                 );
@@ -419,6 +444,24 @@ export default function BookingsTab({
                     placeholder="Optional"
                   />
                 </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="bk-new-status">
+                    New Status
+                  </label>
+                  <select id="bk-new-status" name="status" className="form-select" defaultValue="">
+                    <option value="">Leave unchanged</option>
+                    {(isCalendar ? CALENDAR_STATUSES : PLATFORM_STATUSES).map(([value, text]) => (
+                      <option key={value} value={value}>
+                        {text}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="form-hint">
+                    {isCalendar
+                      ? 'Cancelled keeps the event, marked; Confirmed or Tentative restores a cancelled one.'
+                      : 'Support varies by provider; to cancel a booking use Cancel.'}
+                  </span>
+                </div>
               </div>
               <button
                 className="btn btn-primary"
@@ -428,29 +471,35 @@ export default function BookingsTab({
               >
                 {busy('booking') ? '...' : '✏️ Update Booking'}
               </button>
+              <ApiHint call={isCalendar ? 'client.updateBooking(id, { range, title, status })' : 'client.updateBooking(id, { range, staffId, status })'} />
             </PersistedForm>
           )}
 
-          {/* Cancel Booking */}
-          {bookingOp === 'cancel' && (
+          {/* Cancel Booking — on a calendar, keeps the event marked cancelled */}
+          {activeOp === 'cancel' && (
             <PersistedForm
               formKey="bookings:cancel"
               onSubmit={(e) => {
                 e.preventDefault();
                 const fd = new FormData(e.currentTarget);
+                const id = fd.get('bookingId') as string;
+                const reason = (fd.get('reason') as string) || undefined;
                 wrap(
                   'booking',
                   () =>
-                    callCancelBooking(
-                      selectedProvider,
-                      conn,
-                      fd.get('bookingId') as string,
-                      (fd.get('reason') as string) || undefined,
-                    ),
+                    isCalendar
+                      ? callMarkCancelled(selectedProvider, conn, id, reason)
+                      : callCancelBooking(selectedProvider, conn, id, reason),
                   setBookingResult,
                 );
               }}
             >
+              {isCalendar ? (
+                <p className="cal-muted">
+                  Keeps the event on the calendar, retitled &ldquo;Cancelled: &hellip;&rdquo; and no
+                  longer blocking the time; guests are notified. To remove it entirely, use Delete.
+                </p>
+              ) : null}
               <div className="two-col">
                 <div className="form-group">
                   <label className="form-label" htmlFor="bk-booking-id-3">
@@ -482,13 +531,64 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : '🗑 Cancel Booking'}
+                {busy('booking') ? '...' : isCalendar ? '🚫 Cancel Event' : '🗑 Cancel Booking'}
               </button>
+              {isCalendar ? (
+                <ApiHint call="client.getBooking(id) + client.updateBooking(id, { title, status })">Keeps the event, marked cancelled.</ApiHint>
+              ) : (
+                <ApiHint call="client.cancelBooking(id, { reason })" />
+              )}
+            </PersistedForm>
+          )}
+
+          {/* Delete Event — calendar providers only: removes it for good */}
+          {activeOp === 'delete' && (
+            <PersistedForm
+              formKey="bookings:delete"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.currentTarget);
+                const id = fd.get('bookingId') as string;
+                if (!window.confirm(`Permanently delete event ${id}? This cannot be undone.`)) {
+                  return;
+                }
+                wrap(
+                  'booking',
+                  // The library's cancelBooking() is a delete on calendars.
+                  () => callCancelBooking(selectedProvider, conn, id),
+                  setBookingResult,
+                );
+              }}
+            >
+              <p className="cal-muted">
+                Removes the event from the calendar permanently. This cannot be undone.
+              </p>
+              <div className="form-group">
+                <label className="form-label" htmlFor="bk-booking-id-4">
+                  Booking ID
+                </label>
+                <input
+                  id="bk-booking-id-4"
+                  name="bookingId"
+                  className="form-input"
+                  placeholder="ID to delete"
+                  required
+                />
+              </div>
+              <button
+                className="btn btn-secondary cal-danger"
+                type="submit"
+                disabled={busy('booking')}
+                style={{ marginTop: '1rem' }}
+              >
+                {busy('booking') ? '...' : '🗑 Delete Event'}
+              </button>
+              <ApiHint call="client.cancelBooking(id)">On a calendar this deletes the event.</ApiHint>
             </PersistedForm>
           )}
 
           {/* List Bookings */}
-          {bookingOp === 'list' && (
+          {activeOp === 'list' && (
             <PersistedForm
               formKey="bookings:list"
               onSubmit={(e) => {
@@ -554,10 +654,11 @@ export default function BookingsTab({
               >
                 {busy('booking') ? '...' : '📋 List Bookings'}
               </button>
+              <ApiHint call="client.listBookings({ range, limit, pageToken })" />
             </PersistedForm>
           )}
 
-          <ResultBox result={bookingResult} label={`${bookingOp} result`} elapsedMs={elapsedMs} />
+          <ResultBox result={bookingResult} label={`${activeOp} result`} elapsedMs={elapsedMs} />
         </div>
       )}
     </div>

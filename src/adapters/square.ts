@@ -1,8 +1,11 @@
 import type {
   Booking,
   BookingStatus,
+  CreateCustomerInput,
   Customer,
+  CustomerRecord,
   HoursPeriod,
+  UpdateCustomerInput,
   Service,
   ServiceCategory,
   Staff,
@@ -187,6 +190,51 @@ function splitName(name: string): { given_name: string; family_name?: string } {
   return { given_name: given ?? name, ...(rest.length ? { family_name: rest.join(' ') } : {}) };
 }
 
+/** A Square Customer -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'square', 'customer');
+  const name =
+    [r.given_name, r.family_name].filter((x) => typeof x === 'string' && x).join(' ') ||
+    (typeof r.company_name === 'string' ? r.company_name : '');
+  return {
+    id: reqString(r.id, 'square', 'customer.id'),
+    ...(name ? { name } : {}),
+    ...(typeof r.email_address === 'string' ? { email: r.email_address } : {}),
+    ...(typeof r.phone_number === 'string' ? { phone: r.phone_number } : {}),
+    ...(typeof r.note === 'string' ? { note: r.note } : {}),
+    ...(typeof r.created_at === 'string' ? { createdAt: r.created_at } : {}),
+    ...(typeof r.updated_at === 'string' ? { updatedAt: r.updated_at } : {}),
+    raw: r,
+  };
+}
+
+/** Canonical client fields -> a Square Customer body. On update a one-word
+ *  name sends `family_name: null`, which Square's sparse update reads as
+ *  "clear", so renaming "Ana Silva" to "Ana" does not leave "Silva" behind. */
+function customerBody(
+  input: CreateCustomerInput | UpdateCustomerInput,
+  clearMissing: boolean,
+): Record<string, unknown> {
+  const name = input.name?.trim();
+  const split = name ? splitName(name) : undefined;
+  return {
+    ...(split
+      ? {
+          given_name: split.given_name,
+          ...(split.family_name
+            ? { family_name: split.family_name }
+            : clearMissing
+              ? { family_name: null }
+              : {}),
+        }
+      : {}),
+    ...(input.email !== undefined ? { email_address: input.email } : {}),
+    ...(input.phone !== undefined ? { phone_number: input.phone } : {}),
+    ...(input.note !== undefined ? { note: input.note } : {}),
+    ...input.providerOptions,
+  };
+}
+
 /**
  * The identity a customer is deduped on, as both a search filter and a stable
  * key. Deriving both from one expression keeps them provably in step — they are
@@ -355,6 +403,37 @@ async function upsertItem(
 }
 
 /**
+ * Add or remove one team member on a service variation's `team_member_ids`,
+ * the list Square consults for who performs it. Read-modify-write against the
+ * item's current version, like updateService; a no-op change is still written
+ * back so the caller always gets the service as Square now holds it.
+ */
+async function setAssignment(
+  http: HttpContext<SquareCredentials>,
+  c: SquareCredentials,
+  serviceId: string,
+  staffId: string,
+  assigned: boolean,
+): Promise<Service> {
+  const { item } = await readServiceItem(http, c, serviceId);
+  const variation = findVariation(item, serviceId);
+  const vd = variation.item_variation_data ?? {};
+  const current: string[] = Array.isArray(vd.team_member_ids)
+    ? vd.team_member_ids.filter((t: unknown): t is string => typeof t === 'string')
+    : [];
+  const next = assigned
+    ? current.includes(staffId)
+      ? current
+      : [...current, staffId]
+    : current.filter((t) => t !== staffId);
+  variation.item_variation_data = { ...vd, team_member_ids: next };
+  const saved = await upsertItem(http, c, item, serviceId);
+  // Square omits `team_member_ids` from the reply once the list is empty, which
+  // would read as "did not say". We just wrote it, so report what we wrote.
+  return saved.staffIds === undefined ? { ...saved, staffIds: next } : saved;
+}
+
+/**
  * Flatten one catalog ITEM into one `Service` per ITEM_VARIATION.
  *
  * This is the round-trip invariant in action: Square's booking API takes the
@@ -458,12 +537,20 @@ export const square = defineAdapter<SquareCredentials>({
     webhooks: true,
     idempotency: true,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: true,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: true,
     staffDirectoryWrite: true,
+    staffDeactivate: true,
+    staffDelete: false,
+    serviceDelete: true,
     calendarList: false,
+    calendarWrite: false,
     staffServiceAssignment: true,
+    staffServiceAssignmentWrite: true,
     serviceCategories: true,
     businessHours: true,
     classCatalog: false,
@@ -539,10 +626,24 @@ export const square = defineAdapter<SquareCredentials>({
           input.staffId,
           'Square createBooking requires a staffId (team_member_id)',
         );
+      }
+      // The segment must pin the service variation's catalog version. A caller
+      // who has it (e.g. from a searchAvailability slot's
+      // raw.appointment_segments[0].service_variation_version) passes it and
+      // saves a request; otherwise it is read from the catalog here, since
+      // demanding it made the plain canonical createBooking unusable.
+      let segmentVersion = service_variation_version;
+      if (
+        segmentVersion === undefined &&
+        bookingOptions.appointment_segments === undefined &&
+        input.serviceId
+      ) {
+        const obj = await http.request(c, { path: `catalog/object/${enc(input.serviceId)}` });
+        segmentVersion = obj?.object?.version;
         requireCreateField(
-          service_variation_version,
-          'Square createBooking requires providerOptions.service_variation_version — ' +
-            "read it from a searchAvailability slot's raw.appointment_segments[0].service_variation_version",
+          segmentVersion,
+          `Square createBooking could not read the catalog version of service ${input.serviceId}; ` +
+            'pass providerOptions.service_variation_version',
         );
       }
       const res = await http.request(c, {
@@ -564,7 +665,9 @@ export const square = defineAdapter<SquareCredentials>({
               {
                 ...(input.staffId ? { team_member_id: input.staffId } : {}),
                 ...(input.serviceId ? { service_variation_id: input.serviceId } : {}),
-                ...(service_variation_version !== undefined ? { service_variation_version } : {}),
+                ...(segmentVersion !== undefined
+                  ? { service_variation_version: segmentVersion }
+                  : {}),
               },
             ],
             ...bookingOptions,
@@ -721,7 +824,9 @@ export const square = defineAdapter<SquareCredentials>({
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'POST',
-        path: 'catalog/search-catalog-objects',
+        // SearchCatalogObjects is POST /v2/catalog/search. (There is no
+        // `search-catalog-objects` path; that 404s on every account.)
+        path: 'catalog/search',
         body: { object_types: ['CATEGORY'], include_deleted_objects: false },
       });
       const categories = asArray(res?.objects ?? [], 'square', 'catalog.objects').flatMap(
@@ -999,10 +1104,126 @@ export const square = defineAdapter<SquareCredentials>({
       return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
     },
 
+    async getService(id) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      const found = itemToServices(item).find((sv) => sv.id === id);
+      if (!found) {
+        throw new UnibookingError({
+          provider: 'square',
+          code: 'NOT_FOUND',
+          message: `service ${id} not found`,
+        });
+      }
+      return found;
+    },
+
+    async getStaff(id) {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: `team-members/${enc(id)}` });
+      return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
+    },
+
+    async deleteService(id) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      // Deleting an ITEM cascades to every variation under it, and each
+      // variation is its own Service. So delete just this variation, unless it
+      // is the item's last one -- then the item goes too, rather than leaving
+      // an empty item behind that no listing would ever show.
+      const variations = Array.isArray(item.item_data?.variations)
+        ? item.item_data.variations.filter((v: any) => v?.is_deleted !== true)
+        : [];
+      const target = variations.length > 1 ? id : String(item.id);
+      await http.request(c, { method: 'DELETE', path: `catalog/object/${enc(target)}` });
+    },
+
+    async assignStaffToService(serviceId, staffId) {
+      return setAssignment(http, await http.resolve(), serviceId, staffId, true);
+    },
+
+    async unassignStaffFromService(serviceId, staffId) {
+      return setAssignment(http, await http.resolve(), serviceId, staffId, false);
+    },
+
     customers: {
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateCustomer(http, c, customer);
+      },
+
+      // Email/phone filters use SearchCustomers (server-side, exact match);
+      // otherwise ListCustomers. Both page by `cursor`, at most 100.
+      list: async (query) => {
+        const c = await http.resolve();
+        const limit = Math.min(query?.limit ?? 100, 100);
+        const filter = query?.email
+          ? { email_address: { exact: query.email } }
+          : query?.phone
+            ? { phone_number: { exact: query.phone } }
+            : undefined;
+        const res = filter
+          ? await http.request(c, {
+              method: 'POST',
+              path: 'customers/search',
+              body: {
+                query: { filter },
+                limit,
+                ...(query?.pageToken ? { cursor: query.pageToken } : {}),
+              },
+            })
+          : await http.request(c, {
+              path: 'customers',
+              query: { limit, ...(query?.pageToken ? { cursor: query.pageToken } : {}) },
+            });
+        const customers = asArray(res?.customers ?? [], 'square', 'customers').map(
+          toCustomerRecord,
+        );
+        return {
+          customers,
+          ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+        };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        const res = await http.request(c, { path: `customers/${enc(id)}` });
+        return toCustomerRecord(res?.customer);
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'square',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'customers',
+          body: {
+            idempotency_key: globalThis.crypto.randomUUID(),
+            ...customerBody(input, false),
+          },
+        });
+        return toCustomerRecord(res?.customer);
+      },
+
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'PUT',
+          path: `customers/${enc(id)}`,
+          body: customerBody(input, true),
+        });
+        return toCustomerRecord(res?.customer);
+      },
+
+      delete: async (id) => {
+        const c = await http.resolve();
+        await http.request(c, { method: 'DELETE', path: `customers/${enc(id)}` });
       },
     },
   }),

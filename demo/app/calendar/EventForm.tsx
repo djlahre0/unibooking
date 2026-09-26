@@ -9,6 +9,7 @@ import {
 } from '../../lib/calendar/event-form';
 import type { EventInput } from '../../lib/calendar/types';
 import TimezoneField from './TimezoneField';
+import ApiHint from '../ApiHint';
 
 /**
  * Create / edit an event. The form speaks in dates, times and a timezone; the
@@ -169,6 +170,15 @@ export default function EventForm({
           Cancel
         </button>
       </div>
+      <ApiHint
+        call={
+          mode === 'new'
+            ? 'client.createBooking({ title, range, allDay, description, location })'
+            : 'client.updateBooking(id, changedFields)'
+        }
+      >
+        {mode === 'edit' ? 'Only the fields you changed are sent.' : null}
+      </ApiHint>
     </form>
   );
 }

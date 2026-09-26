@@ -21,12 +21,13 @@ import {
   type EventInput,
 } from '../../lib/calendar/types';
 import Agenda from './Agenda';
-import CalendarList from './CalendarList';
+import CalendarList, { type CalendarActions } from './CalendarList';
 import { NoCalendarConnected, SetupNotice } from './CalendarEmptyStates';
 import CopyField from './CopyField';
 import EventDetails from './EventDetails';
 import EventForm from './EventForm';
 import { CALENDAR_STORAGE_KEY } from './constants';
+import { EVENT_STATUS_LABELS, type EventStatus } from '../../lib/cancel-event';
 
 type Banner = { kind: 'error' | 'success'; text: string; redirectUrl?: string };
 
@@ -314,6 +315,84 @@ export default function CalendarTab({ onOpenConnect }: { onOpenConnect?: () => v
     setReloadKey((k) => k + 1);
   }
 
+  // Calendars themselves: the provider owns them; these ask it to make,
+  // rename or remove one, then re-read the list so it shows the provider's view.
+  async function reloadCalendars(select?: string) {
+    const res = await calendarCall('listCalendars', {});
+    if (!accept(res)) return;
+    const list = (res.data as { calendars: Calendar[] }).calendars;
+    setCalendars(list);
+    const next = select && list.some((c) => c.id === select) ? select : pickCalendar(list, provider!);
+    setSelectedId(next);
+    if (next) remember(provider!, next);
+  }
+
+  const calendarActions: CalendarActions = {
+    create: async (input) => {
+      setBusy(true);
+      const res = await calendarCall('createCalendar', input);
+      setBusy(false);
+      if (!accept(res)) return false;
+      const cal = res.data as Calendar;
+      setBanner({ kind: 'success', text: `Calendar “${cal.name}” created.` });
+      setSelected(null);
+      await reloadCalendars(cal.id);
+      return true;
+    },
+    rename: async (cal, name) => {
+      setBusy(true);
+      const res = await calendarCall('updateCalendar', { calendarId: cal.id, name });
+      setBusy(false);
+      if (!accept(res)) return false;
+      setBanner({ kind: 'success', text: `Calendar renamed to “${name}”.` });
+      await reloadCalendars(cal.id);
+      return true;
+    },
+    remove: async (cal) => {
+      if (
+        !window.confirm(
+          `Delete the calendar “${cal.name}” and every event in it? This can't be undone.`,
+        )
+      )
+        return;
+      setBusy(true);
+      const res = await calendarCall('deleteCalendar', { calendarId: cal.id });
+      setBusy(false);
+      if (!accept(res)) return;
+      setBanner({ kind: 'success', text: `Calendar “${cal.name}” deleted.` });
+      setSelected(null);
+      setEditing(null);
+      await reloadCalendars();
+    },
+  };
+
+  // Confirmed / tentative / cancelled. Cancelled keeps the event on the
+  // calendar, marked and no longer blocking the time; picking another status
+  // restores it. Delete below removes it. See lib/cancel-event.ts.
+  async function changeStatus(b: Booking, status: EventStatus) {
+    if (!selectedId) return;
+    if (
+      status === 'cancelled' &&
+      !window.confirm(
+        `Cancel "${b.title}"? It stays on the calendar marked as cancelled, and guests are notified.`,
+      )
+    )
+      return;
+    setBusy(true);
+    const res = await calendarCall('setEventStatus', { calendarId: selectedId, id: b.id, status });
+    setBusy(false);
+    if (!accept(res)) return;
+    setSelected((res.data as Booking) ?? null);
+    setBanner({
+      kind: 'success',
+      text:
+        status === 'cancelled'
+          ? 'Event cancelled. It stays on the calendar, marked cancelled.'
+          : `Event marked ${EVENT_STATUS_LABELS[status].toLowerCase()}.`,
+    });
+    setReloadKey((k) => k + 1);
+  }
+
   async function remove(b: Booking) {
     if (!selectedId) return;
     if (!window.confirm(`Delete "${b.title}"? This cannot be undone.`)) return;
@@ -414,6 +493,8 @@ export default function CalendarTab({ onOpenConnect }: { onOpenConnect?: () => v
           calendars={calendars}
           selectedId={selectedId}
           loading={calendarsLoading}
+          busy={busy}
+          actions={calendarActions}
           onSelect={(id) => {
             setSelectedId(id);
             remember(provider, id);
@@ -440,6 +521,7 @@ export default function CalendarTab({ onOpenConnect }: { onOpenConnect?: () => v
               readOnly={readOnly}
               busy={busy}
               onEdit={() => setEditing(selected)}
+              onSetStatus={(s) => void changeStatus(selected, s)}
               onDelete={() => void remove(selected)}
               onClose={() => setSelected(null)}
             />

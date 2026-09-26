@@ -236,6 +236,18 @@ export async function verifyWebhook(
   }
 }
 
+/** Any dispatch op with raw args, over the same transport choice as every
+ *  typed call below. For flows that talk to two providers at once (Calendar
+ *  Sync reads a booking platform and writes a calendar). */
+export function callOp(
+  providerId: string,
+  conn: Connection,
+  op: Op,
+  args: Record<string, unknown>,
+): Promise<ActionResult> {
+  return run(providerId, conn, op, args);
+}
+
 /* ═══════════════════════════════════════════════════════════
    Client-requiring operations — same signatures the page already
    used, so call sites are unchanged. Each picks its transport.
@@ -269,7 +281,15 @@ export function callUpdateBooking(
   providerId: string,
   conn: Connection,
   bookingId: string,
-  input: { title?: string; start?: string; end?: string; staffId?: string; serviceId?: string },
+  input: {
+    title?: string;
+    start?: string;
+    end?: string;
+    staffId?: string;
+    serviceId?: string;
+    /** On calendars: confirmed | pending | cancelled, via setEventStatus. */
+    status?: string;
+  },
 ): Promise<ActionResult> {
   return run(providerId, conn, 'updateBooking', { bookingId, input });
 }
@@ -281,6 +301,16 @@ export function callCancelBooking(
   reason?: string,
 ): Promise<ActionResult> {
   return run(providerId, conn, 'cancelBooking', { bookingId, reason });
+}
+
+/** Calendar providers only: keep the event, marked cancelled. See cancel-event.ts. */
+export function callMarkCancelled(
+  providerId: string,
+  conn: Connection,
+  bookingId: string,
+  reason?: string,
+): Promise<ActionResult> {
+  return run(providerId, conn, 'markCancelled', { bookingId, reason });
 }
 
 export function callListBookings(
@@ -376,6 +406,115 @@ export function callListStaff(
   query: { limit?: number; pageToken?: string; serviceId?: string } = {},
 ): Promise<ActionResult> {
   return run(providerId, conn, 'listStaff', query);
+}
+
+/* ── Staff & services writes. `fields` are the form's raw values; dispatch.ts
+   turns them into the library's inputs, so both transports agree. ── */
+export type CatalogFields = Record<string, string | boolean | undefined>;
+
+export function callGetService(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getService', { id });
+}
+export function callGetStaff(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getStaff', { id });
+}
+export function callCreateService(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createService', fields);
+}
+export function callUpdateService(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateService', { ...fields, id });
+}
+export function callSetServiceActive(
+  p: string,
+  conn: Connection,
+  id: string,
+  active: boolean,
+): Promise<ActionResult> {
+  return run(p, conn, 'setServiceActive', { id, active });
+}
+export function callDeleteService(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteService', { id });
+}
+export function callCreateStaff(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createStaff', fields);
+}
+export function callUpdateStaff(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateStaff', { ...fields, id });
+}
+export function callSetStaffActive(
+  p: string,
+  conn: Connection,
+  id: string,
+  active: boolean,
+): Promise<ActionResult> {
+  return run(p, conn, 'setStaffActive', { id, active });
+}
+export function callDeleteStaff(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteStaff', { id });
+}
+export function callAssignStaff(
+  p: string,
+  conn: Connection,
+  serviceId: string,
+  staffId: string,
+): Promise<ActionResult> {
+  return run(p, conn, 'assignStaff', { serviceId, staffId });
+}
+export function callUnassignStaff(
+  p: string,
+  conn: Connection,
+  serviceId: string,
+  staffId: string,
+): Promise<ActionResult> {
+  return run(p, conn, 'unassignStaff', { serviceId, staffId });
+}
+
+/* ── Client records ── */
+export function callListCustomers(
+  p: string,
+  conn: Connection,
+  query: { limit?: number; pageToken?: string; email?: string; phone?: string } = {},
+): Promise<ActionResult> {
+  return run(p, conn, 'listCustomers', query);
+}
+export function callGetCustomer(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getCustomer', { id });
+}
+export function callCreateCustomer(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createCustomer', fields);
+}
+export function callUpdateCustomer(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateCustomer', { ...fields, id });
+}
+export function callDeleteCustomer(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteCustomer', { id });
 }
 
 export function callFindOrCreateCustomer(
