@@ -291,6 +291,10 @@ export const apple = defineAdapter<AppleCredentials>({
     versionedWrites: true,
   },
   baseUrl: BASE,
+  // Collections live on whatever host discovery (or the caller's calendarUrl)
+  // names — iCloud answers from per-account partition hosts. Calendar writes
+  // that take a caller-supplied URL are confined by `assertOwnCalendar`.
+  allowCrossOrigin: true,
   auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` } }),
   build: (http) => ({
     async checkConnection() {

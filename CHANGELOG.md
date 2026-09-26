@@ -275,7 +275,74 @@ All notable changes to this project are documented here. The format is based on
 - `HttpRequest.onResponse` now also receives the response `url` (after
   redirects, falling back to the requested URL). Additive.
 
+- OAuth configs take `timeoutMs` (default 15000, like `ClientOptions.timeoutMs`),
+  and `wixOAuth` / `setmoreOAuth` take the same injectable `now` clock as every
+  other OAuth client. Additive.
+
+### Security
+
+- **A `pageToken` could send the Graph bearer token to any host.** Outlook and
+  Microsoft Bookings page by following the full `@odata.nextLink` URL they hand
+  out as `nextPageToken` (and Outlook's `syncToken` is a full `deltaLink`), and
+  the HTTP layer sent the credentials to whatever absolute URL a path named. A
+  consumer passing a `pageToken` through from its own request (a query string,
+  a form) could therefore be made to deliver the user's access token to an
+  attacker's server. The HTTP layer now refuses — before building any
+  credential — a request whose URL is off the base URL's host. Only the Apple
+  / CalDAV adapter opts out (`defineAdapter({ allowCrossOrigin: true })`),
+  because iCloud serves calendars from partition hosts learned at discovery;
+  its caller-supplied calendar URLs are already confined to the account's own
+  calendar home. **BREAKING** only for a custom `defineAdapter` that relied on
+  requesting absolute URLs on another host: set `allowCrossOrigin`.
+
 ### Fixed
+
+- **Paged lists that never handed out a next page.** Anything past the first
+  page was unreachable — through the list itself and through the
+  `getService` / `getStaff` / `customers.get` fallbacks that walk it:
+  - Mindbody `listServices`, `listStaff`, `listClasses` (100 per page) now
+    return the next offset from `PaginationResponse.TotalResults`.
+  - Phorest `listServices`, `listStaff` read only page 0 at the default size;
+    they now page with `page` / `size` and `page.totalPages`.
+  - Zenoti `listServices`, `listStaff` accepted a page token but never returned
+    one; a full page now hands out the next.
+  - Boulevard `listServices`, `listStaff` queried their connections without
+    `first` / `after`; they now page by cursor like `listBookings`.
+
+- **Setmore `listBookings({ limit })` dropped bookings.** The limit was applied
+  to every page, including one with a cursor, so the bookings between the cut
+  and the next page were never returned. It now trims only the last page.
+
+- **Booker `getBooking` reported real appointments as `NOT_FOUND`.** It read
+  one page of 500 from an 800-day window, which at a busy location covers a few
+  weeks. It now pages through the window. `listBookings` also now validates its
+  range (`INVALID_INPUT`) before any request, like every other adapter.
+
+- **Square `updateBooking({ serviceId })` could never land.** The new service
+  was written onto the current segment together with the OLD service's
+  `service_variation_version` and duration, which Square rejects. The new
+  service's catalog version is now read and pinned, and its own duration
+  applies.
+
+- **Microsoft Bookings `updateBooking({ status })` silently did nothing** for
+  any status other than `cancelled`. Every status is now `INVALID_INPUT`, as
+  documented. A `pageToken` that is not an `@odata.nextLink` is now refused on
+  `listServices` / `listStaff` / `customers.list` too, instead of being sent
+  as `$skiptoken` and returning page 1 forever.
+
+- **Calendly reschedule lost the new booking when the cancel step failed.** The
+  new event is booked before the old one is cancelled; a failed cancel threw
+  the raw error, so the caller never learned the new id, and a retryable one
+  let `withRetry` run the whole reschedule again and book a third time. It now
+  throws `CONFLICT` naming both ids.
+
+- **Vagaro availability silently dropped a day.** A range under 31 days can
+  touch 32 dates; the per-day loop stopped at 31 without saying so. It now
+  throws `INVALID_INPUT`, as Acuity does.
+
+- **OAuth token requests could hang forever.** They had no timeout, unlike
+  every adapter request, and under `withAutoRefresh` every request waiting on
+  that refresh hung with it. They now time out as `TIMEOUT`.
 
 - **Phorest lists read nothing from a live account.** The documented paged
   shape is `_embedded: { clients: [...] }` (a named list), but it was read as a

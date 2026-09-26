@@ -25,8 +25,10 @@ import { slotsWithinRange } from '../availability';
 /**
  * Zenoti (api.zenoti.com, /v1). Auth: `Authorization: apikey <key>`. `center_id`
  * scopes every call. Booking is multi-step (create booking -> get slots -> reserve
- * -> confirm); there is no single create and no clean reschedule, so updateBooking
- * re-books and cancels the old invoice. Times use the *_utc fields (append `Z`).
+ * -> confirm); there is no single create. `updateBooking` reschedules in place by
+ * running the same chain with the appointment's existing `invoice_id` /
+ * `invoice_item_id`, so the id is kept and no cancellation fee fires. Times use
+ * the *_utc fields (append `Z`).
  *
  * **Center-timezone caveat.** Booking *slots* are not *_utc: their `Time` is
  * center-local wall clock with no offset, and neither the API nor the canonical
@@ -294,6 +296,30 @@ function toCustomerRecord(raw: unknown): CustomerRecord {
   };
 }
 
+/** A 1-based Zenoti page and its size, from a canonical list query. The size
+ *  is always sent, so a full page is recognisable as "maybe more". */
+function pagingOf(query: { limit?: number; pageToken?: string } | undefined): {
+  page: number;
+  size: number;
+} {
+  const page = query?.pageToken ? Number(query.pageToken) : 1;
+  if (!Number.isInteger(page) || page < 1) {
+    throw new UnibookingError({
+      provider: 'zenoti',
+      code: 'INVALID_INPUT',
+      message: 'pageToken must be a page number from a previous list',
+    });
+  }
+  return { page, size: Math.min(query?.limit ?? 100, 100) };
+}
+
+/** Zenoti reports no reliable total, so a full page means there may be
+ *  another. Without a token at all, everything past the first page was
+ *  unreachable — including through `getService`/`getStaff`. */
+function nextPageIf(count: number, paging: { page: number; size: number }): string | undefined {
+  return count > 0 && count >= paging.size ? String(paging.page + 1) : undefined;
+}
+
 async function resolveGuestId(
   http: HttpContext<ZenotiCredentials>,
   c: ZenotiCredentials,
@@ -430,12 +456,10 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
   build: (http) => ({
     async listServices(query) {
       const c = await http.resolve();
+      const paging = pagingOf(query);
       const res = await http.request(c, {
         path: `centers/${enc(c.centerId)}/services`,
-        query: {
-          ...(query?.limit !== undefined ? { size: query.limit } : {}),
-          ...(query?.pageToken ? { page: query.pageToken } : {}),
-        },
+        query: { page: paging.page, size: paging.size },
       });
       const services = asArray(res?.services, 'zenoti', 'services').map((raw): Service => {
         const s = asRecord(raw, 'zenoti', 'service');
@@ -454,17 +478,16 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           raw: s,
         };
       });
-      return { services };
+      const next = nextPageIf(services.length, paging);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async listStaff(query) {
       const c = await http.resolve();
+      const paging = pagingOf(query);
       const res = await http.request(c, {
         path: `centers/${enc(c.centerId)}/therapists`,
-        query: {
-          ...(query?.limit !== undefined ? { size: query.limit } : {}),
-          ...(query?.pageToken ? { page: query.pageToken } : {}),
-        },
+        query: { page: paging.page, size: paging.size },
       });
       const staff = asArray(res?.therapists, 'zenoti', 'therapists').map((raw): Staff => {
         const t = asRecord(raw, 'zenoti', 'therapist');
@@ -480,7 +503,8 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           raw: t,
         };
       });
-      return { staff };
+      const next = nextPageIf(staff.length, paging);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async checkConnection() {
@@ -528,7 +552,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         throw new UnibookingError({
           provider: 'zenoti',
           code: 'UNSUPPORTED',
-          message: 'Zenoti only supports rescheduling (pass input.range) via re-book',
+          message: 'Zenoti only supports rescheduling (pass input.range)',
         });
       }
       assertValidRange(input.range, 'zenoti');

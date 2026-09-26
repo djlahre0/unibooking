@@ -71,6 +71,8 @@ export interface OAuthConfig {
   /** Injectable clock, so `expiresAt` is deterministic in tests. Mirrors
    *  `ClientOptions.now` on the adapter side. */
   now?: () => number;
+  /** Token-request timeout in ms. Default 15000, like `ClientOptions.timeoutMs`. */
+  timeoutMs?: number;
 }
 
 // --- primitives -------------------------------------------------------------
@@ -108,6 +110,41 @@ const DEAD_GRANT = new Set([
   'login_required',
   'consent_required',
 ]);
+
+/** Default token-request timeout, matching the adapters' HTTP default. */
+const TOKEN_TIMEOUT_MS = 15_000;
+
+/**
+ * One call to a token endpoint, bounded by a timeout. Without one, a token
+ * endpoint that accepted the connection and never answered held the request —
+ * and, under `withAutoRefresh`, every request sharing that refresh — forever,
+ * where every adapter call gives up after `timeoutMs`. Nothing about the
+ * request is put in the error: its body carries the client secret.
+ */
+export async function tokenFetch(
+  provider: ProviderId,
+  config: { fetch?: typeof fetch; timeoutMs?: number },
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const doFetch = config.fetch ?? globalThis.fetch;
+  const timeoutMs = config.timeoutMs ?? TOKEN_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await doFetch(url, { ...init, signal: controller.signal });
+  } catch (cause) {
+    const aborted = cause instanceof Error && cause.name === 'AbortError';
+    throw new UnibookingError({
+      provider,
+      code: aborted ? 'TIMEOUT' : 'NETWORK',
+      message: aborted ? `token request timed out after ${timeoutMs}ms` : 'token request failed',
+      cause,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // --- token parsing ----------------------------------------------------------
 
@@ -166,26 +203,15 @@ export function defineOAuth(config: DefineOAuthConfig): OAuthClient {
   const parse = config.parseTokens ?? parseStandardTokens;
 
   async function post(body: Record<string, string>): Promise<OAuthTokens> {
-    const doFetch = config.fetch ?? globalThis.fetch;
     const isForm = config.bodyFormat === 'form';
-    let res: Response;
-    try {
-      res = await doFetch(config.tokenUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': isForm ? 'application/x-www-form-urlencoded' : 'application/json',
-          accept: 'application/json',
-        },
-        body: isForm ? new URLSearchParams(body).toString() : JSON.stringify(body),
-      });
-    } catch (cause) {
-      throw new UnibookingError({
-        provider: config.provider,
-        code: 'NETWORK',
-        message: 'token request failed',
-        cause,
-      });
-    }
+    const res = await tokenFetch(config.provider, config, config.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': isForm ? 'application/x-www-form-urlencoded' : 'application/json',
+        accept: 'application/json',
+      },
+      body: isForm ? new URLSearchParams(body).toString() : JSON.stringify(body),
+    });
 
     const text = await res.text();
     let parsed: any;

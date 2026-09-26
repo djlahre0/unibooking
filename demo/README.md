@@ -1,7 +1,7 @@
 # unibooking — Try It
 
 An interactive explorer for the [`unibooking`](https://www.npmjs.com/package/unibooking)
-package: stateless, unified CRUD across 16 booking & calendar providers.
+package: stateless, unified CRUD across 17 booking & calendar providers.
 
 - **📆 My Calendar** — sign in with Google or Microsoft (or connect Apple iCloud
   with an app-specific password), pick a calendar, and create, view, edit and

@@ -55,9 +55,11 @@ export interface SquareOAuthConfig extends OAuthConfig {
  *
  * It also returns `merchant_id`, reachable via `tokens.raw`.
  *
- * Note the scope list above omits `ITEMS_WRITE`: this library only reads the
- * catalog. Requesting write scopes you do not use is a needless escalation, and
- * adding one later forces every connected merchant to re-consent.
+ * Note the default scope list above is read-only for the catalog and team: the
+ * write methods (`createService`, `updateService`, `deleteService`,
+ * `createStaff`, `updateStaff`, …) need `SQUARE_WRITE_SCOPES` as well.
+ * Requesting write scopes you do not use is a needless escalation, and adding
+ * one later forces every connected merchant to re-consent.
  */
 export function squareOAuth(config: SquareOAuthConfig): OAuthClient {
   const base = (config.baseUrl ?? 'https://connect.squareup.com').replace(/\/$/, '');

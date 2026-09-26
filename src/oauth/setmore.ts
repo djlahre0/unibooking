@@ -1,5 +1,5 @@
 import { UnibookingError, codeForStatus } from '../errors';
-import { unsupportedOAuth, type OAuthClient, type OAuthTokens } from './core';
+import { tokenFetch, unsupportedOAuth, type OAuthClient, type OAuthTokens } from './core';
 
 /**
  * Setmore token exchange. **Partial** — `refresh` only.
@@ -21,6 +21,10 @@ export interface SetmoreOAuthConfig {
   /** Override the host (there is no sandbox; use a throwaway account). */
   baseUrl?: string;
   fetch?: typeof fetch;
+  /** Injectable clock, so `expiresAt` is deterministic in tests. */
+  now?: () => number;
+  /** Token-request timeout in ms. Default 15000. */
+  timeoutMs?: number;
 }
 
 const NO_FLOW =
@@ -40,19 +44,11 @@ export function setmoreOAuth(config: SetmoreOAuthConfig = {}): OAuthClient {
     exchangeCode: async () => unsupportedOAuth('setmore', `exchangeCode — ${NO_FLOW}`),
 
     async refresh(refreshToken): Promise<OAuthTokens> {
-      const doFetch = config.fetch ?? globalThis.fetch;
       const url = `${base}/api/v1/o/oauth2/token?refreshToken=${encodeURIComponent(refreshToken)}`;
-      let res: Response;
-      try {
-        res = await doFetch(url, { method: 'GET', headers: { accept: 'application/json' } });
-      } catch (cause) {
-        throw new UnibookingError({
-          provider: 'setmore',
-          code: 'NETWORK',
-          message: 'token request failed',
-          cause,
-        });
-      }
+      const res = await tokenFetch('setmore', config, url, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      });
 
       const text = await res.text();
       let parsed: any;
@@ -91,7 +87,7 @@ export function setmoreOAuth(config: SetmoreOAuthConfig = {}): OAuthClient {
         // it back — otherwise withAutoRefresh would lose it after one cycle.
         refreshToken,
         ...(Number.isFinite(expiresIn) && expiresIn > 0
-          ? { expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString() }
+          ? { expiresAt: new Date((config.now ?? Date.now)() + expiresIn * 1000).toISOString() }
           : {}),
         raw: parsed,
       };

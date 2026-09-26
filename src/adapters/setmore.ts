@@ -552,19 +552,23 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       });
       const data = dataOf(res);
       // startDate/endDate are whole dates (dd-mm-yyyy), so Setmore returns both
-      // entire end days regardless of the times asked for. Trim to the instants,
-      // then apply `limit` — the endpoint takes no page-size parameter, so
-      // ignoring it silently returned the whole day to a caller who asked for
-      // three bookings.
+      // entire end days regardless of the times asked for. Trim to the instants.
       let bookings = bookingsWithinRange(
         asArray(data?.appointments, 'setmore', 'appointments').map(toBooking),
         query.range,
       );
-      if (query.limit !== undefined && query.limit >= 0) bookings = bookings.slice(0, query.limit);
       const cursor = data?.cursor;
       // Docs never specify how the final page is signalled; treat an absent,
       // empty, or unchanged cursor as terminal.
       const isTerminal = typeof cursor !== 'string' || cursor === '' || cursor === query.pageToken;
+      // The endpoint takes no page-size parameter, so ignoring `limit` silently
+      // returned the whole day to a caller who asked for three bookings. But
+      // only a TERMINAL page may be cut: slicing one that carries a cursor drops
+      // the bookings between the cut and the next page, and a caller paging
+      // forward never sees them (same rule as defineAdapter's `capPage`).
+      if (isTerminal && query.limit !== undefined && query.limit >= 0) {
+        bookings = bookings.slice(0, query.limit);
+      }
       return {
         bookings,
         ...(isTerminal ? {} : { nextPageToken: cursor }),

@@ -64,6 +64,8 @@ export interface AdapterDef<TCreds extends ProviderCredentials> {
   auth: AuthFn<TCreds>;
   requestIdHeader?: string;
   parseError?: HttpConfig<TCreds>['parseError'];
+  /** See `HttpConfig.allowCrossOrigin`. CalDAV only. */
+  allowCrossOrigin?: boolean;
   /** Build the method implementations against a ready HTTP context. `env`
    *  carries the client's clock (`ClientOptions.now`), for adapters whose
    *  answer depends on the current time — never read `Date.now()` directly,
@@ -90,6 +92,7 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       options,
       ...(def.requestIdHeader !== undefined ? { requestIdHeader: def.requestIdHeader } : {}),
       ...(def.parseError !== undefined ? { parseError: def.parseError } : {}),
+      ...(def.allowCrossOrigin ? { allowCrossOrigin: true } : {}),
     });
     const clock = options?.now;
     const m = def.build(http, { now: () => (clock ? clock().getTime() : Date.now()) });

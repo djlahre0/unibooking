@@ -149,6 +149,25 @@ function parsePhorestError(
   };
 }
 
+/** A 0-based Phorest page number from a canonical pageToken. */
+function pageFrom(pageToken: string | undefined): number {
+  const page = pageToken ? Number(pageToken) : 0;
+  if (!Number.isInteger(page) || page < 0) {
+    throw new UnibookingError({
+      provider: 'phorest',
+      code: 'INVALID_INPUT',
+      message: 'pageToken must be a page number from a previous list',
+    });
+  }
+  return page;
+}
+
+/** The next page's token, from the `page` block every paged model carries. */
+function nextPageOf(res: any, page: number): string | undefined {
+  const totalPages = Number(res?.page?.totalPages);
+  return Number.isFinite(totalPages) && page + 1 < totalPages ? String(page + 1) : undefined;
+}
+
 function splitName(name: string): { firstName: string; lastName: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
   return { firstName: first ?? name, lastName: rest.join(' ') };
@@ -321,9 +340,15 @@ export const phorest = defineAdapter<PhorestCredentials>({
   auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),
   parseError: parsePhorestError,
   build: (http) => ({
-    async listServices() {
+    // Both catalogs are paged models (`{ _embedded, page }`). Reading page 0
+    // alone at the default size silently cut a real salon's catalog short.
+    async listServices(query) {
       const c = await http.resolve();
-      const res = await http.request(c, { path: branchPath(c, 'service') });
+      const page = pageFrom(query?.pageToken);
+      const res = await http.request(c, {
+        path: branchPath(c, 'service'),
+        query: { page, size: Math.min(query?.limit ?? 100, 100) },
+      });
       const services = embedded(res).map((raw): Service => {
         const s = asRecord(raw, 'phorest', 'service');
         const amount = decimalToMinorUnits(s.price);
@@ -340,12 +365,17 @@ export const phorest = defineAdapter<PhorestCredentials>({
           raw: s,
         };
       });
-      return { services };
+      const next = nextPageOf(res, page);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
     },
 
-    async listStaff() {
+    async listStaff(query) {
       const c = await http.resolve();
-      const res = await http.request(c, { path: branchPath(c, 'staff') });
+      const page = pageFrom(query?.pageToken);
+      const res = await http.request(c, {
+        path: branchPath(c, 'staff'),
+        query: { page, size: Math.min(query?.limit ?? 100, 100) },
+      });
       const staff = embedded(res).map((raw): Staff => {
         const s = asRecord(raw, 'phorest', 'staff');
         const name = [s.firstName, s.lastName].filter(Boolean).join(' ');
@@ -358,7 +388,8 @@ export const phorest = defineAdapter<PhorestCredentials>({
           raw: s,
         };
       });
-      return { staff };
+      const next = nextPageOf(res, page);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async checkConnection() {
@@ -609,14 +640,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
       // email/phone filters are Phorest's own, so they apply across pages.
       list: async (query) => {
         const c = await http.resolve();
-        const page = query?.pageToken ? Number(query.pageToken) : 0;
-        if (!Number.isInteger(page) || page < 0) {
-          throw new UnibookingError({
-            provider: 'phorest',
-            code: 'INVALID_INPUT',
-            message: 'pageToken must be a page number from a previous list',
-          });
-        }
+        const page = pageFrom(query?.pageToken);
         const res = await http.request(c, {
           path: businessPath(c, 'client'),
           query: {
@@ -627,9 +651,8 @@ export const phorest = defineAdapter<PhorestCredentials>({
           },
         });
         const customers = embedded(res).map(toCustomerRecord);
-        const totalPages = Number(res?.page?.totalPages);
-        const more = Number.isFinite(totalPages) && page + 1 < totalPages;
-        return { customers, ...(more ? { nextPageToken: String(page + 1) } : {}) };
+        const next = nextPageOf(res, page);
+        return { customers, ...(next ? { nextPageToken: next } : {}) };
       },
 
       get: async (id) => {

@@ -311,6 +311,23 @@ function assertNoBookingErrors(errors: unknown, ctx: string): void {
   });
 }
 
+/** Relay `first`/`after` for a canonical list query. */
+function connectionPage(query: { limit?: number; pageToken?: string } | undefined): {
+  first: number;
+  after?: string;
+} {
+  return {
+    first: Math.min(query?.limit ?? 100, 100),
+    ...(query?.pageToken ? { after: query.pageToken } : {}),
+  };
+}
+
+/** The cursor of the next page of a connection, or undefined on the last. */
+function nextCursor(conn: any): string | undefined {
+  const end = conn?.pageInfo?.endCursor;
+  return conn?.pageInfo?.hasNextPage === true && typeof end === 'string' && end ? end : undefined;
+}
+
 function requireField(value: string | undefined, hint: string): string {
   if (!value) {
     throw new UnibookingError({
@@ -407,19 +424,21 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
     return { headers: { authorization: `Basic ${btoa(`${c.apiKey}:${token}`)}` } };
   },
   build: (http) => ({
-    async listServices() {
+    // Both catalogs are Relay connections, paged with first/after exactly like
+    // `appointments` and `clients` above. Asking without `first` returned one
+    // server-sized page and no way to reach the rest.
+    async listServices(query) {
       const c = await http.resolve();
-      // Relay-style connection; Boulevard's admin API pages with first/after but
-      // the canonical query returns the full list for a location.
       const res = await gql(
         http,
         c,
-        `query Services($locationId: ID!) {
-          services(locationId: $locationId) {
+        `query Services($locationId: ID!, $first: Int, $after: String) {
+          services(locationId: $locationId, first: $first, after: $after) {
             edges { node { id name description defaultDuration } }
+            pageInfo { endCursor hasNextPage }
           }
         }`,
-        { locationId: c.locationId },
+        { locationId: c.locationId, ...connectionPage(query) },
       );
       const edges = asArray((res as any)?.services?.edges, 'boulevard', 'services.edges');
       const services = edges.map((edge: any): Service => {
@@ -434,20 +453,22 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
           raw: s,
         };
       });
-      return { services };
+      const next = nextCursor((res as any)?.services);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
     },
 
-    async listStaff() {
+    async listStaff(query) {
       const c = await http.resolve();
       const res = await gql(
         http,
         c,
-        `query Staff($locationId: ID!) {
-          staff(locationId: $locationId) {
+        `query Staff($locationId: ID!, $first: Int, $after: String) {
+          staff(locationId: $locationId, first: $first, after: $after) {
             edges { node { id firstName lastName email mobilePhone } }
+            pageInfo { endCursor hasNextPage }
           }
         }`,
-        { locationId: c.locationId },
+        { locationId: c.locationId, ...connectionPage(query) },
       );
       const edges = asArray((res as any)?.staff?.edges, 'boulevard', 'staff.edges');
       const staff = edges.map((edge: any): Staff => {
@@ -462,7 +483,8 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
           raw: s,
         };
       });
-      return { staff };
+      const next = nextCursor((res as any)?.staff);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async checkConnection() {

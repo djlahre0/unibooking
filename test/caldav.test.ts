@@ -17,6 +17,9 @@ function http() {
     auth: (c) => ({
       headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` },
     }),
+    // As the apple adapter declares it: discovery follows iCloud onto its
+    // partition host, which the HTTP layer otherwise refuses.
+    allowCrossOrigin: true,
   });
 }
 

@@ -83,14 +83,24 @@ function toVagaroDate(iso: string): string {
  *  fan out unboundedly (see MAX_AVAILABILITY_DAYS). */
 const MAX_AVAILABILITY_DAYS = 31;
 
-/** The `yyyy-mm-dd` dates (in `range.start`'s offset) that a window overlaps. */
+/** The `yyyy-mm-dd` dates (in `range.start`'s offset) that a window overlaps.
+ *  Past the cap this throws. A window of at most 31 days can still touch 32
+ *  dates (10:00 on the 1st to 09:00 on the 1st a month later), and stopping
+ *  the loop at the cap answered for 31 of them with no sign the last was cut. */
 function datesInRange(startIso: string, endIso: string): string[] {
   const offset = /([+-]\d{2}:\d{2}|Z)$/i.exec(startIso)?.[1] ?? 'Z';
   const endMs = Date.parse(endIso);
   const dates: string[] = [];
   let dateStr = toVagaroDate(startIso);
-  for (let i = 0; i < MAX_AVAILABILITY_DAYS; i++) {
+  for (;;) {
     if (Date.parse(`${dateStr}T00:00:00${offset}`) >= endMs) break;
+    if (dates.length >= MAX_AVAILABILITY_DAYS) {
+      throw new UnibookingError({
+        provider: 'vagaro',
+        code: 'INVALID_INPUT',
+        message: `Vagaro availability is queried one day at a time; ranges may not touch more than ${MAX_AVAILABILITY_DAYS} dates`,
+      });
+    }
     dates.push(dateStr);
     const d = new Date(`${dateStr}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() + 1);

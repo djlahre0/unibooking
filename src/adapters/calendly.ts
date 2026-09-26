@@ -16,9 +16,10 @@ import { assertValidRange, endFromDuration, isInstant } from '../time';
  * arrived with the Scheduling API "Create Event Invitee" (Oct 2025), so
  * `createBooking` requires a paid Calendly plan.
  *
- * Calendly has NO reschedule endpoint, so `updateBooking` with a new range does
- * cancel-then-rebook (read the event's type + invitee, book the new time, cancel
- * the old) — the same re-book strategy `zenoti` uses.
+ * Calendly has NO reschedule endpoint, so `updateBooking` with a new range
+ * re-books: it reads the event's type + invitee, books the new time, then
+ * cancels the old event. Booking first means a slot that is gone leaves the
+ * original untouched; the returned booking has a new id.
  *
  * Auth: bring your own bearer (Personal Access Token or OAuth). `user` (or
  * `organization`) scopes `listBookings`; when omitted it is discovered via
@@ -317,12 +318,28 @@ export const calendly = defineAdapter<CalendlyCredentials>({
           ...(timezone ? { timezone } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
-        await http.request(c, {
-          method: 'POST',
-          path: `scheduled_events/${enc(uuid)}/cancellation`,
-          body: { reason: 'Rescheduled' },
-          parse: 'none',
-        });
+        try {
+          await http.request(c, {
+            method: 'POST',
+            path: `scheduled_events/${enc(uuid)}/cancellation`,
+            body: { reason: 'Rescheduled' },
+            parse: 'none',
+          });
+        } catch (e) {
+          // The new booking exists and the old one is still live. Rethrowing the
+          // raw failure lost the only record of the new id, and a retryable code
+          // (a network blip, a 5xx) let `withRetry` run the whole reschedule
+          // again and book a THIRD time. Name both ids, as a code nothing retries.
+          throw new UnibookingError({
+            provider: 'calendly',
+            code: 'CONFLICT',
+            message:
+              `rescheduled to new booking ${rebooked.id}, but the original ${uuid} could not be ` +
+              `cancelled (${e instanceof Error ? e.message : String(e)}); ` +
+              `cancel it with cancelBooking('${uuid}')`,
+            cause: e,
+          });
+        }
         return rebooked;
       }
       if (input.status === 'cancelled') {

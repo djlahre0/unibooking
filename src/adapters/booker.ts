@@ -29,8 +29,9 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * Auth is a bearer access token **plus** an API subscription key header. Mint
  * the token with `POST /v5/auth/connect/token` (form-encoded
  * `grant_type=client_credentials` + `client_id`/`client_secret`/`scope`, with
- * the same `Ocp-Apim-Subscription-Key` header) — see `unibooking/oauth/booker`.
- * This package never stores it.
+ * the same `Ocp-Apim-Subscription-Key` header) yourself: a client-credentials
+ * token has no refresh token, so use the function credential form to re-mint
+ * it. This package ships no Booker OAuth helper and never stores the token.
  *
  * IMPORTANT — two time hazards, both load-bearing:
  *
@@ -310,6 +311,9 @@ function parseBookerError(_status: number, body: unknown): { message?: string } 
  *  reasoning: Booker has no verified get-one path, so an id lookup has to scan
  *  a window, and a narrow one would report a real appointment as NOT_FOUND. */
 const LOOKUP_WINDOW_DAYS = 400;
+/** Page size and page cap for that scan: up to 20,000 appointments. */
+const LOOKUP_PAGE_SIZE = 500;
+const LOOKUP_MAX_PAGES = 40;
 
 const NO_AVAILABILITY =
   'searchAvailability — Booker exposes appointment (non-class) time slots through an ' +
@@ -357,7 +361,7 @@ export const booker = defineAdapter<BookerCredentials>({
     },
   }),
   parseError: parseBookerError,
-  build: (http) => {
+  build: (http, env) => {
     const listAppointments = async (
       c: BookerCredentials,
       fromInstant: string,
@@ -398,7 +402,7 @@ export const booker = defineAdapter<BookerCredentials>({
     };
 
     const defaultWindow = (): { from: string; to: string } => {
-      const now = Date.now();
+      const now = env.now();
       const span = 90 * 24 * 60 * 60 * 1000;
       return {
         from: new Date(now - span).toISOString(),
@@ -480,15 +484,20 @@ export const booker = defineAdapter<BookerCredentials>({
         const c = await http.resolve();
         const zone = locationZone(c);
         const span = LOOKUP_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-        const res = await listAppointments(
-          c,
-          new Date(Date.now() - span).toISOString(),
-          new Date(Date.now() + span).toISOString(),
-          500,
-        );
-        const found = results(res, 'Appointments')
-          .map((raw) => asRecord(raw, 'booker', 'appointment'))
-          .find((a) => String(a.ID ?? '') === id);
+        const from = new Date(env.now() - span).toISOString();
+        const to = new Date(env.now() + span).toISOString();
+        // Walk the window page by page. Reading only the first page reported a
+        // real appointment as NOT_FOUND at any location with more than one
+        // page of appointments in the window — i.e. almost every live salon.
+        let found: Record<string, any> | undefined;
+        for (let page = 1; page <= LOOKUP_MAX_PAGES && found === undefined; page++) {
+          const rows = results(
+            await listAppointments(c, from, to, LOOKUP_PAGE_SIZE, String(page)),
+            'Appointments',
+          ).map((raw) => asRecord(raw, 'booker', 'appointment'));
+          found = rows.find((a) => String(a.ID ?? '') === id);
+          if (rows.length < LOOKUP_PAGE_SIZE) break;
+        }
         if (found === undefined) {
           throw new UnibookingError({
             provider: 'booker',
@@ -520,6 +529,7 @@ export const booker = defineAdapter<BookerCredentials>({
       },
 
       async listBookings(query) {
+        assertValidRange(query.range, 'booker');
         const c = await http.resolve();
         const zone = locationZone(c);
         const res = await listAppointments(

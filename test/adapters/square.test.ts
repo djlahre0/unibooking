@@ -278,9 +278,27 @@ describe('square: customer resolution + version fetch', () => {
 
   it('updateBooking maps staffId/serviceId/title into the segment and note', async () => {
     const pool = agent.get(ORIGIN);
+    pool.intercept({ path: '/v2/bookings/B1', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        booking: booking({
+          version: 9,
+          appointment_segments: [
+            {
+              duration_minutes: 30,
+              team_member_id: 'tm1',
+              service_variation_id: 'sv1',
+              service_variation_version: 111,
+            },
+          ],
+        }),
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
+    // A new service is pinned at ITS catalog version, read here.
     pool
-      .intercept({ path: '/v2/bookings/B1', method: 'GET' })
-      .reply(200, JSON.stringify({ booking: booking({ version: 9 }) }), {
+      .intercept({ path: '/v2/catalog/object/svNEW', method: 'GET' })
+      .reply(200, JSON.stringify({ object: { id: 'svNEW', version: 222 } }), {
         headers: { 'content-type': 'application/json' },
       });
     let putBody: any;
@@ -299,10 +317,54 @@ describe('square: customer resolution + version fetch', () => {
     const seg = putBody.booking.appointment_segments[0];
     expect(seg.team_member_id).toBe('tmNEW');
     expect(seg.service_variation_id).toBe('svNEW');
-    // the untouched segment field is preserved from the current booking
-    expect(seg.duration_minutes).toBe(30);
+    // The old service's version and duration must not ride along: Square
+    // rejects sv1's version for svNEW, and svNEW brings its own duration.
+    expect(seg.service_variation_version).toBe(222);
+    expect(seg.duration_minutes).toBeUndefined();
     expect(putBody.booking.customer_note).toBe('VIP note');
     expect(putBody.booking.version).toBe(9);
+    agent.assertNoPendingInterceptors();
+  });
+
+  it('updateBooking of staff alone keeps the rest of the current segment', async () => {
+    const pool = agent.get(ORIGIN);
+    pool.intercept({ path: '/v2/bookings/B1', method: 'GET' }).reply(
+      200,
+      JSON.stringify({
+        booking: booking({
+          appointment_segments: [
+            {
+              duration_minutes: 30,
+              team_member_id: 'tm1',
+              service_variation_id: 'sv1',
+              service_variation_version: 111,
+            },
+          ],
+        }),
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
+    let putBody: any;
+    pool.intercept({ path: '/v2/bookings/B1', method: 'PUT' }).reply(
+      200,
+      (opts) => {
+        putBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ booking: booking() });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    await square({ accessToken: 't', locationId: 'LOC1' }).updateBooking('B1', {
+      staffId: 'tmNEW',
+    });
+
+    expect(putBody.booking.appointment_segments[0]).toEqual({
+      duration_minutes: 30,
+      team_member_id: 'tmNEW',
+      service_variation_id: 'sv1',
+      service_variation_version: 111,
+    });
+    // Same service, so no catalog read was needed.
     agent.assertNoPendingInterceptors();
   });
 

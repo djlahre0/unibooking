@@ -32,6 +32,22 @@ function base(c: MicrosoftBookingsCredentials): string {
   return `solutions/bookingBusinesses/${encodeURIComponent(c.businessId)}`;
 }
 
+/** A pageToken is the full @odata.nextLink from a previous page. Anything else
+ *  is refused: forwarding a hand-built `$skiptoken` returned page 1 forever,
+ *  because Graph ignores unrecognized query params silently and its paging docs
+ *  say a token must never be extracted and reused. (The link's host is checked
+ *  by the HTTP layer, which refuses to send the token anywhere but Graph.) */
+function followLink(pageToken: string): string {
+  if (/^https?:\/\//i.test(pageToken)) return pageToken;
+  throw new UnibookingError({
+    provider: 'microsoft_bookings',
+    code: 'INVALID_INPUT',
+    message:
+      'pageToken must be the full @odata.nextLink URL from a previous page; ' +
+      'Graph paging tokens cannot be reconstructed',
+  });
+}
+
 function toBooking(raw: unknown): Booking {
   const a = asRecord(raw, 'microsoft_bookings', 'appointment');
   // Graph's bookingAppointment exposes the times as `start`/`end` (each a
@@ -245,20 +261,18 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
     };
     /** One page of a collection. The pageToken handed out is the full
      *  @odata.nextLink, so it is followed verbatim: sending it back as
-     *  `$skiptoken` made Graph ignore it and return page 1 forever. */
+     *  `$skiptoken` made Graph ignore it and return page 1 forever, so a
+     *  token that is not such a link is refused rather than looped on. */
     const listPage = (
       c: MicrosoftBookingsCredentials,
       collection: string,
       query: { limit?: number; pageToken?: string } | undefined,
     ) =>
-      query?.pageToken && /^https?:\/\//i.test(query.pageToken)
-        ? http.request(c, { path: query.pageToken })
+      query?.pageToken
+        ? http.request(c, { path: followLink(query.pageToken) })
         : http.request(c, {
             path: `${base(c)}/${collection}`,
-            query: {
-              ...(query?.limit !== undefined ? { $top: query.limit } : {}),
-              ...(query?.pageToken ? { $skiptoken: query.pageToken } : {}),
-            },
+            query: { ...(query?.limit !== undefined ? { $top: query.limit } : {}) },
           });
     const currentStaffIds = async (serviceId: string): Promise<string[]> => {
       const c = await http.resolve();
@@ -320,12 +334,16 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
       async updateBooking(id, input) {
         if (input.range) assertValidRange(input.range, 'microsoft_bookings');
         // bookingAppointment has no writable status; silently PATCHing nothing and
-        // returning a live booking would report a cancel as "done" when it wasn't.
-        if (input.status === 'cancelled') {
+        // returning a live booking would report a status change as "done" when it
+        // wasn't — for a cancel, and just as much for `confirmed` or `no_show`.
+        if (input.status !== undefined) {
           throw new UnibookingError({
             provider: 'microsoft_bookings',
             code: 'INVALID_INPUT',
-            message: 'Bookings has no writable status; use cancelBooking() to cancel',
+            message:
+              input.status === 'cancelled'
+                ? 'Bookings has no writable status; use cancelBooking() to cancel'
+                : `Bookings has no writable status (cannot set "${input.status}")`,
           });
         }
         const c = await http.resolve();
@@ -369,20 +387,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         const c = await http.resolve();
         // A pageToken is the full @odata.nextLink; follow it verbatim so any Graph
         // paging param ($skiptoken or $skip) is preserved.
-        const follow =
-          query.pageToken && /^https?:\/\//i.test(query.pageToken) ? query.pageToken : undefined;
-        if (query.pageToken !== undefined && follow === undefined) {
-          // Forwarding a hand-built `$skiptoken` returned page 1 forever: Graph
-          // ignores unrecognized query params silently, and its paging docs say a
-          // token must never be extracted and reused.
-          throw new UnibookingError({
-            provider: 'microsoft_bookings',
-            code: 'INVALID_INPUT',
-            message:
-              'pageToken must be the full @odata.nextLink URL from a previous page; ' +
-              'Graph paging tokens cannot be reconstructed',
-          });
-        }
+        const follow = query.pageToken !== undefined ? followLink(query.pageToken) : undefined;
         const res = follow
           ? await http.request(c, { path: follow, headers: PREFER_UTC })
           : await http.request(c, {

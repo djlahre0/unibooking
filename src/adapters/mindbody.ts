@@ -283,6 +283,21 @@ function num(v: unknown): number | undefined {
 
 const now = (): number => Date.now();
 
+/** The next `offset` page token, from Mindbody's `PaginationResponse`. Every
+ *  list endpoint pages (100 by default) and says how many results exist in
+ *  total; without this token the rest were silently unreachable — a site with
+ *  120 staff listed 100 and `getStaff` could never find the other 20. */
+function nextOffsetToken(
+  res: any,
+  pageToken: string | undefined,
+  count: number,
+): string | undefined {
+  const offset = pageToken ? Number(pageToken) : 0;
+  const total = res?.PaginationResponse?.TotalResults;
+  const next = (Number.isFinite(offset) ? offset : 0) + count;
+  return typeof total === 'number' && count > 0 && next < total ? String(next) : undefined;
+}
+
 /** Days either side of `now` covered by the `getBooking` lookup window. */
 const LOOKUP_WINDOW_DAYS = 730;
 
@@ -389,7 +404,8 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
             };
           },
         );
-        return { services };
+        const next = nextOffsetToken(res, query?.pageToken, services.length);
+        return { services, ...(next ? { nextPageToken: next } : {}) };
       },
 
       async listClasses(query) {
@@ -414,7 +430,8 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
         const classes = asArray(res?.Classes, 'mindbody', 'Classes').map((raw) =>
           toClassSession(raw, tz),
         );
-        return { classes };
+        const next = nextOffsetToken(res, query?.pageToken, classes.length);
+        return { classes, ...(next ? { nextPageToken: next } : {}) };
       },
 
       getClass: fetchClass,
@@ -489,7 +506,8 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
             raw: s,
           };
         });
-        return { staff };
+        const next = nextOffsetToken(res, query?.pageToken, staff.length);
+        return { staff, ...(next ? { nextPageToken: next } : {}) };
       },
 
       async checkConnection() {

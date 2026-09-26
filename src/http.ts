@@ -37,6 +37,13 @@ export interface HttpConfig<TCreds> {
   options?: ClientOptions | undefined;
   /** Response header carrying a request/correlation id, if the provider sets one. */
   requestIdHeader?: string;
+  /** Allow an absolute request `path` on a host other than `baseUrl`'s. Off by
+   *  default: every request carries the credentials, so an absolute URL that
+   *  reached a path from caller input (an Outlook `pageToken` is a full Graph
+   *  URL) would otherwise hand the bearer token to whatever host it names.
+   *  CalDAV needs it, because iCloud serves a calendar home from a partition
+   *  host (`p57-caldav.icloud.com`) that discovery only learns at runtime. */
+  allowCrossOrigin?: boolean;
   /** Pull a provider-specific error code/message out of a parsed error body.
    *
    *  May also return a canonical `code` to OVERRIDE the one the HTTP status
@@ -91,6 +98,21 @@ function buildUrl(
   return url.toString();
 }
 
+/** Refuse a `path` that resolves off the base URL's host. Paths are relative
+ *  by construction everywhere except where an adapter follows a URL it was
+ *  handed, and that URL may have come from a caller (see
+ *  `HttpConfig.allowCrossOrigin`). */
+function assertSameOrigin(provider: ProviderId, baseUrl: string, path: string): void {
+  const base = new URL(baseUrl.endsWith('/') ? baseUrl : baseUrl + '/');
+  const target = new URL(path.replace(/^\//, ''), base);
+  if (target.origin === base.origin) return;
+  throw new UnibookingError({
+    provider,
+    code: 'INVALID_INPUT',
+    message: `refusing to send credentials to ${target.origin}; requests stay on ${base.origin}`,
+  });
+}
+
 function parseRetryAfter(header: string | null, now: () => Date): number | undefined {
   if (!header) return undefined;
   const secs = Number(header);
@@ -131,6 +153,9 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
   }
 
   async function request<T = any>(creds: TCreds, req: HttpRequest): Promise<T> {
+    // Checked before auth is even computed, so no credential is built for a
+    // request that is refused.
+    if (!config.allowCrossOrigin) assertSameOrigin(config.provider, config.baseUrl, req.path);
     const authed = await config.auth(creds);
     const url = buildUrl(config.baseUrl, req.path, req.query, authed.query);
 

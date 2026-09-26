@@ -716,11 +716,30 @@ export const square = defineAdapter<SquareCredentials>({
           : [];
         curSeg = segs[0];
       }
+      // A segment pins its service's catalog version and duration. Swapping the
+      // service onto the current segment kept the OLD service's
+      // `service_variation_version`, which Square rejects for the new variation
+      // (and its old `duration_minutes`), so a service change could never land.
+      // Pin the new service's version instead and let its own duration apply.
+      const serviceChanged =
+        input.serviceId !== undefined && input.serviceId !== curSeg?.service_variation_id;
+      let newVersion: unknown;
+      if (serviceChanged) {
+        const obj = await http.request(c, { path: `catalog/object/${enc(input.serviceId!)}` });
+        newVersion = obj?.object?.version;
+        requireCreateField(
+          newVersion,
+          `Square updateBooking could not read the catalog version of service ${input.serviceId}`,
+        );
+      }
+      const { service_variation_version: _v, duration_minutes: _d, ...kept } = curSeg ?? {};
       const segment = needSegment
         ? {
-            ...(curSeg ?? {}),
+            ...(serviceChanged ? kept : (curSeg ?? {})),
             ...(input.staffId ? { team_member_id: input.staffId } : {}),
-            ...(input.serviceId ? { service_variation_id: input.serviceId } : {}),
+            ...(serviceChanged
+              ? { service_variation_id: input.serviceId, service_variation_version: newVersion }
+              : {}),
           }
         : undefined;
       const res = await http.request(c, {
@@ -1040,8 +1059,7 @@ export const square = defineAdapter<SquareCredentials>({
       const variation = findVariation(item, id);
       // `available_for_booking` is the honest lever: it makes the variation
       // unbookable while leaving it, its history and its past bookings intact.
-      // Square's actual delete cascades from the item down through every
-      // variation, which is why no `deleteService` exists.
+      // (`deleteService` removes it outright instead.)
       variation.item_variation_data = {
         ...(variation.item_variation_data ?? {}),
         available_for_booking: active,

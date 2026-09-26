@@ -1,5 +1,5 @@
 import { UnibookingError, codeForStatus } from '../errors';
-import { unsupportedOAuth, type OAuthClient, type OAuthTokens } from './core';
+import { tokenFetch, unsupportedOAuth, type OAuthClient, type OAuthTokens } from './core';
 
 /**
  * Wix token exchange. **Partial** — no `authorizationUrl`.
@@ -21,6 +21,10 @@ export interface WixOAuthConfig {
   clientSecret: string;
   baseUrl?: string;
   fetch?: typeof fetch;
+  /** Injectable clock, so `expiresAt` is deterministic in tests. */
+  now?: () => number;
+  /** Token-request timeout in ms. Default 15000. */
+  timeoutMs?: number;
 }
 
 const NO_AUTHORIZE =
@@ -32,22 +36,11 @@ export function wixOAuth(config: WixOAuthConfig): OAuthClient {
   const base = (config.baseUrl ?? 'https://www.wixapis.com').replace(/\/$/, '');
 
   async function post(body: Record<string, string>): Promise<OAuthTokens> {
-    const doFetch = config.fetch ?? globalThis.fetch;
-    let res: Response;
-    try {
-      res = await doFetch(`${base}/oauth2/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch (cause) {
-      throw new UnibookingError({
-        provider: 'wix',
-        code: 'NETWORK',
-        message: 'token request failed',
-        cause,
-      });
-    }
+    const res = await tokenFetch('wix', config, `${base}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
     const text = await res.text();
     let parsed: any;
     try {
@@ -77,7 +70,7 @@ export function wixOAuth(config: WixOAuthConfig): OAuthClient {
       accessToken,
       ...(typeof parsed?.refresh_token === 'string' ? { refreshToken: parsed.refresh_token } : {}),
       ...(Number.isFinite(expiresIn) && expiresIn > 0
-        ? { expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString() }
+        ? { expiresAt: new Date((config.now ?? Date.now)() + expiresIn * 1000).toISOString() }
         : {}),
       raw: parsed,
     };
