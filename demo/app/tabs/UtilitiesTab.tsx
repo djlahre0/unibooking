@@ -10,6 +10,7 @@ import {
   demoErrorHelpers,
 } from '../../lib/call';
 import ResultBox from '../ResultBox';
+import { PagesIcon, RepeatIcon, SyncIcon, WarnIcon, WrenchIcon } from '../components/icons';
 
 export type UtilitiesTabProps = {
   selectedProvider: string;
@@ -41,11 +42,16 @@ export default function UtilitiesTab({
     <div className="fade-in">
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div className="card-title">
-          <span className="icon">🛠</span> Core Utilities
+          <span className="icon">
+            <WrenchIcon size={18} />
+          </span>{' '}
+          Core Utilities
         </div>
         <div className="feature-list">
           <div className="feature-item">
-            <span className="icon">🔄</span>
+            <span className="icon">
+              <SyncIcon size={18} />
+            </span>
             <div>
               <h4>createRegistry</h4>
               <p>
@@ -55,7 +61,9 @@ export default function UtilitiesTab({
             </div>
           </div>
           <div className="feature-item">
-            <span className="icon">🔁</span>
+            <span className="icon">
+              <RepeatIcon size={18} />
+            </span>
             <div>
               <h4>withRetry</h4>
               <p>
@@ -66,7 +74,9 @@ export default function UtilitiesTab({
             </div>
           </div>
           <div className="feature-item">
-            <span className="icon">📄</span>
+            <span className="icon">
+              <PagesIcon size={18} />
+            </span>
             <div>
               <h4>listAll / collectAll</h4>
               <p>
@@ -76,12 +86,14 @@ export default function UtilitiesTab({
             </div>
           </div>
           <div className="feature-item">
-            <span className="icon">⚠️</span>
+            <span className="icon">
+              <WarnIcon size={18} />
+            </span>
             <div>
               <h4>Error Helpers</h4>
               <p>
-                <code>isUnibookingError</code>, <code>isRetryable</code>,{' '}
-                <code>codeForStatus</code> — discriminate and map errors consistently.
+                <code>isUnibookingError</code>, <code>isRetryable</code>, <code>codeForStatus</code>{' '}
+                discriminate and map errors consistently.
               </p>
             </div>
           </div>
@@ -96,14 +108,14 @@ export default function UtilitiesTab({
             onClick={() => wrap('util', () => demoRegistry(), setUtilResult)}
             disabled={busy('util')}
           >
-            🔄 createRegistry
+            <SyncIcon /> createRegistry
           </button>
           <button
             className="btn btn-primary btn-sm"
             onClick={() => wrap('util', () => demoErrorHelpers(), setUtilResult)}
             disabled={busy('util')}
           >
-            ⚠️ Error Helpers
+            <WarnIcon /> Error Helpers
           </button>
           {selectedProvider && (
             <>
@@ -122,7 +134,7 @@ export default function UtilitiesTab({
                 }
                 disabled={busy('util')}
               >
-                🔁 withRetry
+                <RepeatIcon /> withRetry
               </button>
               <button
                 className="btn btn-primary btn-sm"
@@ -139,7 +151,7 @@ export default function UtilitiesTab({
                 }
                 disabled={busy('util')}
               >
-                📄 collectAll
+                <PagesIcon /> collectAll
               </button>
               <button
                 className="btn btn-primary btn-sm"
@@ -156,7 +168,7 @@ export default function UtilitiesTab({
                 }
                 disabled={busy('util')}
               >
-                📄 listAll
+                <PagesIcon /> listAll
               </button>
             </>
           )}

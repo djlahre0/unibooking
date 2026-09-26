@@ -125,7 +125,7 @@ function friendly(res: ActionResult): string {
     case 'AUTH':
       return 'Your connection expired or was revoked. Please reconnect.';
     case 'RATE_LIMIT':
-      return 'Too many requests — try again in a moment.';
+      return 'Too many requests: try again in a moment.';
     case 'CONFLICT':
       return 'This event was changed elsewhere. Reload and try again.';
     case 'NETWORK':

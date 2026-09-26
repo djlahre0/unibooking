@@ -77,7 +77,7 @@ export default function ServicesTab(props: ServicesTabProps) {
   if (!P) {
     return (
       <div className="fade-in">
-        <div className="empty-state">Select a provider in the Connect tab first.</div>
+        <div className="empty-state">Choose a provider in the sidebar to start.</div>
       </div>
     );
   }
@@ -408,10 +408,10 @@ function ServiceRow({
           {s.categoryName ? <span className="roster-aside">{s.categoryName}</span> : null}
         </span>
         <span className="roster-cell" data-label="Length">
-          {minutes(s.durationMinutes) || '—'}
+          {minutes(s.durationMinutes) || '-'}
         </span>
         <span className="roster-cell roster-num" data-label="Price">
-          {money(s.price) || '—'}
+          {money(s.price) || '-'}
         </span>
         <span className="roster-cell" data-label="Performed by">
           {showsPerformers ? <Performers staff={who} reported={s.staffIds !== undefined || staff.some((m) => m.serviceIds)} /> : null}

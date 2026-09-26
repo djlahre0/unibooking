@@ -351,7 +351,7 @@ describe('every provider is selectable in the Connect picker', () => {
   it('renders a chip for all 18 providers, Bookeo and Booker included', () => {
     render(<ConnectPanel {...base} selectedProvider="" />);
     // A provider missing from PROVIDER_META silently vanishes here, however
-    // complete its adapter is — which is exactly how "Bookeo is missing" would
+    // complete its adapter is, which is exactly how "Bookeo is missing" would
     // look to a visitor.
     const chips = Array.from(document.querySelectorAll('.provider-chip-name')).map((b) =>
       b.textContent?.trim(),

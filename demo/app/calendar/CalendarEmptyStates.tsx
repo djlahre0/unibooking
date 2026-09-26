@@ -1,5 +1,7 @@
 'use client';
 
+import { WrenchIcon } from '../components/icons';
+
 /**
  * What My Calendar shows when there is no calendar to show.
  *
@@ -17,7 +19,10 @@ export function SetupNotice({ problem }: { problem?: string }) {
   return (
     <div className="card">
       <div className="card-title">
-        <span className="icon">🛠</span> My Calendar is not set up on this deployment
+        <span className="icon">
+          <WrenchIcon size={18} />
+        </span>{' '}
+        My Calendar is not set up on this deployment
       </div>
       <p className="cal-muted">
         {problem ?? 'Configuration is missing'}. This is unexpected -- see the My Calendar section
@@ -35,8 +40,8 @@ export function NoCalendarConnected({ onOpenConnect }: { onOpenConnect?: () => v
     <div className="card cal-empty">
       <div className="card-title">No calendar connected</div>
       <p className="cal-muted">
-        Once you connect a calendar, your events show up here — a day-grouped agenda you can add
-        to, edit and clear out.
+        Once you connect a calendar, your events show up here: a day-grouped agenda you can add to,
+        edit and clear out.
       </p>
       {onOpenConnect ? (
         <button type="button" className="btn btn-primary" onClick={onOpenConnect}>

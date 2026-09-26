@@ -12,6 +12,7 @@ import ResetSetupButton from './calendar/ResetSetupButton';
 import ResultBox from './ResultBox';
 import ConnectionCheck from './ConnectionCheck';
 import { pickerGroups, providerHint } from '../lib/provider-picker';
+import { ExternalIcon, FlaskIcon, LockIcon, ResetIcon, ShieldIcon } from './components/icons';
 
 /* ─── Trust-model banner: shows where the visitor's token actually goes ───
    The three original states are kept byte-for-byte -- it is a security claim.
@@ -22,13 +23,14 @@ import { pickerGroups, providerHint } from '../lib/provider-picker';
 function TrustBanner({ provider, signedIn }: { provider: string; signedIn?: boolean }) {
   const local = isLocal(provider);
   const direct = isDirect(provider);
-  const palette = local
-    ? { border: '#2f5f6f', background: '#0f1f24', color: '#7dd3fc' }
-    : signedIn
-      ? { border: '#3a4a7a', background: '#131a2c', color: '#a5b4fc' }
-      : direct
-        ? { border: '#2f6f4f', background: '#0f2418', color: '#86efac' }
-        : { border: '#6b5a2f', background: '#241f0f', color: '#fcd34d' };
+  // Theme tokens, so the banner follows light and dark mode like every other
+  // surface. The tone is the same one the sidebar uses for where a call runs.
+  const tone = local || signedIn ? 'indigo' : direct ? 'pine' : 'amber';
+  const palette = {
+    border: `color-mix(in srgb, var(--${tone}) 35%, transparent)`,
+    background: `var(--${tone}-wash)`,
+    color: 'var(--ink)',
+  };
   const style: React.CSSProperties = {
     borderRadius: '8px',
     padding: '0.7rem 0.85rem',
@@ -43,26 +45,28 @@ function TrustBanner({ provider, signedIn }: { provider: string; signedIn?: bool
     <div style={style} role="note">
       {local ? (
         <>
-          🧪 <strong>Sample data — your data never leaves this browser.</strong> No account needed:
-          this provider runs entirely on your device against data kept in this page&apos;s local
-          storage, and makes no request to anyone.
+          <FlaskIcon size={15} /> <strong>Sample data: your data never leaves this browser.</strong>{' '}
+          No account needed: this provider runs entirely on your device against data kept in this
+          page&apos;s local storage, and makes no request to anyone.
         </>
       ) : signedIn ? (
         <>
-          🔐 <strong>Signed in — this call runs on the server, not your browser.</strong> Your token
-          is sealed in an HttpOnly session cookie from My Calendar; this page&apos;s JavaScript can
+          <LockIcon size={15} />{' '}
+          <strong>Signed in: this call runs on the server, not your browser.</strong> Your token is
+          sealed in an HttpOnly session cookie from My Calendar; this page&apos;s JavaScript can
           never read it, and it is never sent here.
         </>
       ) : direct ? (
         <>
-          🔒 <strong>Your token never leaves this browser.</strong> It is sent directly from your
-          machine to the provider&apos;s API — this demo&apos;s server is never involved.
+          <ShieldIcon size={15} /> <strong>Your token never leaves this browser.</strong> It is sent
+          directly from your machine to the provider&apos;s API: this demo&apos;s server is never
+          involved.
         </>
       ) : (
         <>
-          ↗ <strong>This provider blocks browser calls</strong>, so your credentials are sent to the
-          demo&apos;s server, forwarded to the provider, and discarded. They are never stored on the
-          demo&apos;s server, and never logged.{' '}
+          <ExternalIcon size={15} /> <strong>This provider blocks browser calls</strong>, so your
+          credentials are sent to the demo&apos;s server, forwarded to the provider, and discarded.
+          They are never stored on the demo&apos;s server, and never logged.{' '}
           <span style={{ color: 'var(--text-muted, #8888a0)' }}>
             This is exactly why unibooking runs server-side.
           </span>
@@ -248,34 +252,43 @@ export default function ConnectPanel({
   return (
     <div className="fade-in">
       <div className="card">
-        <div className="card-title">Select Provider</div>
-        {pickerGroups().map((group) => (
-          <section key={group.heading} className="provider-group" aria-label={group.heading}>
-            <div className="provider-group-head">
-              <h3 className="provider-group-title">{group.heading}</h3>
-              {group.blurb ? <p className="provider-group-blurb">{group.blurb}</p> : null}
-            </div>
-            <div className="provider-grid">
-              {group.ids.map((id) => (
-                <button
-                  key={id}
-                  className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
-                  aria-pressed={selectedProvider === id}
-                  onClick={() => onSelectProvider(id)}
-                >
-                  <span className="provider-chip-name">{PROVIDERS[id]!.label}</span>
-                  <span className="provider-chip-hint">{providerHint(id)}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
+        {/* The first-visit chooser: every provider grouped by what it is. Once
+            one is chosen, the sidebar picker is where you switch, so the grid
+            steps aside and this card is just the connect form. */}
+        {!providerInfo && (
+          <>
+            <div className="card-title">Choose a provider</div>
+            <p className="cal-muted" style={{ marginTop: 0 }}>
+              Start with Sample Data to try everything without an account. You can switch providers
+              any time from the sidebar.
+            </p>
+            {pickerGroups().map((group) => (
+              <section key={group.heading} className="provider-group" aria-label={group.heading}>
+                <div className="provider-group-head">
+                  <h3 className="provider-group-title">{group.heading}</h3>
+                  {group.blurb ? <p className="provider-group-blurb">{group.blurb}</p> : null}
+                </div>
+                <div className="provider-grid">
+                  {group.ids.map((id) => (
+                    <button
+                      key={id}
+                      className={`provider-chip ${selectedProvider === id ? 'selected' : ''}`}
+                      aria-pressed={selectedProvider === id}
+                      onClick={() => onSelectProvider(id)}
+                    >
+                      <span className="provider-chip-name">{PROVIDERS[id]!.label}</span>
+                      <span className="provider-chip-hint">{providerHint(id)}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </>
+        )}
 
         {providerInfo && (
           <>
-            <div className="section-title" style={{ marginTop: '1.2rem' }}>
-              Connect {providerInfo.label}
-            </div>
+            <div className="card-title">Connect {providerInfo.label}</div>
             <TrustBanner provider={selectedProvider} signedIn={signedInHere} />
             {onOpenCalendar &&
             SIGN_IN_PROVIDERS.has(selectedProvider) &&
@@ -308,7 +321,7 @@ export default function ConnectPanel({
                     <div className="cal-account">{who}</div>
                     <div className="cal-muted" style={{ margin: 0 }}>
                       Signed in via My Calendar
-                      {connection?.custom ? ' — your own OAuth app' : ''}
+                      {connection?.custom ? ': your own OAuth app' : ''}
                     </div>
                   </div>
                   <button
@@ -390,12 +403,12 @@ export default function ConnectPanel({
             {isLocal(selectedProvider) ? (
               <div className="creds-form">
                 <p className="cal-muted">
-                  Everything below works right away. Create, edit and cancel bookings — the changes
+                  Everything below works right away. Create, edit and cancel bookings: the changes
                   are saved on this device and survive a reload.
                 </p>
                 {onResetSample ? (
                   <button type="button" className="btn" onClick={onResetSample}>
-                    ♻ Reset sample data
+                    <ResetIcon /> Reset sample data
                   </button>
                 ) : null}
               </div>
@@ -427,7 +440,7 @@ export default function ConnectPanel({
                         </div>
                       ) : advancedTokenFields.length === 0 ? (
                         <p className="cal-muted">
-                          This provider has no separate token — the ids in the next step are all it
+                          This provider has no separate token: the ids in the next step are all it
                           needs.
                         </p>
                       ) : null}
@@ -450,7 +463,7 @@ export default function ConnectPanel({
                       </div>
                     ) : advancedIdFields.length === 0 ? (
                       <p className="cal-muted">
-                        No additional ids — the token above is everything this provider needs.
+                        No additional ids: the token above is everything this provider needs.
                       </p>
                     ) : null}
 

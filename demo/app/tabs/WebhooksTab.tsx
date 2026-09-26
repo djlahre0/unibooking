@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { type ActionResult, verifyWebhook } from '../../lib/call';
 import ResultBox from '../ResultBox';
 import { loadUiState, patchUiState } from '../../lib/ui-state';
+import { BellIcon, KeyIcon } from '../components/icons';
 
 /* ═══════════════════════════════════════════════════════════
    Webhook field metadata per provider
@@ -12,7 +13,14 @@ const WEBHOOK_PROVIDERS: Record<
   string,
   {
     label: string;
-    fields: { key: string; label: string; placeholder: string; multiline?: boolean }[];
+    fields: {
+      key: string;
+      label: string;
+      placeholder: string;
+      multiline?: boolean;
+      /** A fixed choice, rendered as a select; the first option is the default. */
+      options?: string[];
+    }[];
   }
 > = {
   square: {
@@ -62,7 +70,12 @@ const WEBHOOK_PROVIDERS: Record<
   outlook: {
     label: 'Outlook / Graph',
     fields: [
-      { key: 'mode', label: 'Mode', placeholder: 'validation | clientState' },
+      {
+        key: 'mode',
+        label: 'What to check',
+        placeholder: '',
+        options: ['clientState', 'validation'],
+      },
       {
         key: 'queryString',
         label: 'Query String (validation)',
@@ -101,6 +114,17 @@ const WEBHOOK_PROVIDERS: Record<
       },
     ],
   },
+  bookeo: {
+    label: 'Bookeo',
+    fields: [
+      { key: 'secretKey', label: 'Secret Key', placeholder: 'Your application secret key' },
+      { key: 'timestamp', label: 'Timestamp Header', placeholder: 'X-Bookeo-Timestamp value' },
+      { key: 'messageId', label: 'Message ID Header', placeholder: 'X-Bookeo-MessageId value' },
+      { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://... (as registered)' },
+      { key: 'body', label: 'Raw Body', placeholder: '{"itemId":"..."}', multiline: true },
+      { key: 'signature', label: 'Signature Header', placeholder: 'X-Bookeo-Signature value' },
+    ],
+  },
   wix: {
     label: 'Wix',
     fields: [
@@ -136,7 +160,7 @@ export default function WebhooksTab({
   elapsedMs,
 }: WebhooksTabProps) {
   // Only the PROVIDER choice is remembered. `webhookFields` holds this tab's
-  // API key and signing secret — HMAC credentials — so they stay in memory
+  // API key and signing secret, HMAC credentials, so they stay in memory
   // for the session and are never written to storage, which is also why this
   // tab's inputs are not wrapped in PersistedForm.
   const [webhookProvider, setWebhookProvider_] = useState(() => loadUiState().webhookProvider);
@@ -150,7 +174,10 @@ export default function WebhooksTab({
     <div className="fade-in">
       <div className="card">
         <div className="card-title">
-          <span className="icon">🔔</span> Webhook Verification
+          <span className="icon">
+            <BellIcon size={18} />
+          </span>{' '}
+          Webhook Verification
         </div>
         <p
           style={{
@@ -159,7 +186,8 @@ export default function WebhooksTab({
             marginBottom: '1rem',
           }}
         >
-          9 webhook verifiers — paste the raw payload + signature to verify.
+          {Object.keys(WEBHOOK_PROVIDERS).length} webhook verifiers. Paste the raw payload and its
+          signature exactly as your server received them.
         </p>
 
         <div className="section-title">Select Webhook Provider</div>
@@ -183,7 +211,11 @@ export default function WebhooksTab({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              wrap('webhook', () => verifyWebhook(webhookProvider, webhookFields), setWebhookResult);
+              wrap(
+                'webhook',
+                () => verifyWebhook(webhookProvider, webhookFields),
+                setWebhookResult,
+              );
             }}
           >
             <div className="section-title">{WEBHOOK_PROVIDERS[webhookProvider].label} Fields</div>
@@ -192,7 +224,24 @@ export default function WebhooksTab({
                 <label className="form-label" htmlFor={`wh-${f.key}`}>
                   {f.label}
                 </label>
-                {f.multiline ? (
+                {f.options ? (
+                  <select
+                    id={`wh-${f.key}`}
+                    className="form-select"
+                    value={webhookFields[f.key] ?? f.options[0]}
+                    onChange={(e) =>
+                      setWebhookFields((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                  >
+                    {f.options.map((o) => (
+                      <option key={o} value={o}>
+                        {o === 'validation'
+                          ? 'Subscription validation token'
+                          : 'Notification clientState'}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.multiline ? (
                   <textarea
                     id={`wh-${f.key}`}
                     className="form-textarea"
@@ -217,7 +266,13 @@ export default function WebhooksTab({
               </div>
             ))}
             <button className="btn btn-primary" type="submit" disabled={busy('webhook')}>
-              {busy('webhook') ? '...' : '🔐 Verify Signature'}
+              {busy('webhook') ? (
+                '...'
+              ) : (
+                <>
+                  <KeyIcon /> Verify Signature
+                </>
+              )}
             </button>
           </form>
         )}

@@ -118,7 +118,7 @@ export default function MappingTab({
   if (!P) {
     return (
       <div className="fade-in">
-        <div className="empty-state">Select a provider in the Connect tab first.</div>
+        <div className="empty-state">Choose a provider in the sidebar to start.</div>
       </div>
     );
   }

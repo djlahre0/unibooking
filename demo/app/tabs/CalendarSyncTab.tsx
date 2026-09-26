@@ -75,7 +75,7 @@ export default function CalendarSyncTab({
   if (!P) {
     return (
       <div className="fade-in">
-        <div className="empty-state">Select a calendar provider in the Connect tab first.</div>
+        <div className="empty-state">Choose Google Calendar, Outlook or Apple in the sidebar to start.</div>
       </div>
     );
   }
@@ -88,7 +88,7 @@ export default function CalendarSyncTab({
           <div className="card-title">Calendar Sync</div>
           <p className="cal-muted">
             {label} has no calendars. Calendar Sync links your project to one calendar provider at
-            a time: select Google Calendar, Outlook or Apple in the Connect tab. To link your
+            a time: choose Google Calendar, Outlook or Apple in the sidebar. To link your
             project&apos;s staff and services to {label}, use the Mapping tab.
           </p>
         </div>

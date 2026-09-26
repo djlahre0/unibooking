@@ -22,16 +22,23 @@ const PLATFORM_STATUSES: [string, string][] = [
   ['completed', 'Completed'],
   ['no_show', 'No-show'],
 ];
-import type { ProviderMeta } from '../../lib/providers';
 import { browserZone, isTimeZone, toInstant } from '../../lib/datetime';
 import ResultBox from '../ResultBox';
 import ApiHint from '../ApiHint';
 import PersistedForm from '../PersistedForm';
 import { useCalendarZone, type CalendarZone } from './useCalendarZone';
+import {
+  BanIcon,
+  ListIcon,
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+  TicketIcon,
+  TrashIcon,
+} from '../components/icons';
 
 export type BookingsTabProps = {
   selectedProvider: string;
-  providerInfo: ProviderMeta | null;
   conn: Connection;
   /** Today-relative date defaults, computed once in page.tsx so every tab
    *  shows the same window and none can go stale. `start`/`end` are the wide
@@ -162,7 +169,6 @@ function pickedInstant(
 
 export default function BookingsTab({
   selectedProvider,
-  providerInfo,
   conn,
   defaultRange,
   bookingResult,
@@ -188,13 +194,18 @@ export default function BookingsTab({
     <div className="fade-in">
       {!selectedProvider ? (
         <div className="empty-state">
-          <span className="icon">📅</span>
-          Select a provider in the Connect tab first
+          <span className="icon">
+            <TicketIcon size={18} />
+          </span>
+          Choose a provider in the sidebar to start.
         </div>
       ) : (
         <div className="card">
           <div className="card-title">
-            <span className="icon">📅</span> Booking CRUD — {providerInfo?.label}
+            <span className="icon">
+              <TicketIcon size={18} />
+            </span>{' '}
+            Create, read, update and cancel
           </div>
 
           <div className="op-row">
@@ -207,12 +218,12 @@ export default function BookingsTab({
                   setBookingResult(null);
                 }}
               >
-                {op === 'create' && '➕ '}
-                {op === 'get' && '🔍 '}
-                {op === 'update' && '✏️ '}
-                {op === 'cancel' && (isCalendar ? '🚫 ' : '🗑 ')}
-                {op === 'delete' && '🗑 '}
-                {op === 'list' && '📋 '}
+                {op === 'create' && <PlusIcon />}
+                {op === 'get' && <SearchIcon />}
+                {op === 'update' && <PencilIcon />}
+                {op === 'cancel' && (isCalendar ? <BanIcon /> : <TrashIcon />)}
+                {op === 'delete' && <TrashIcon />}
+                {op === 'list' && <ListIcon />}
                 {op.charAt(0).toUpperCase() + op.slice(1)}
               </button>
             ))}
@@ -253,7 +264,7 @@ export default function BookingsTab({
                     id="bk-title"
                     name="title"
                     className="form-input"
-                    placeholder="Haircut — Jane"
+                    placeholder="Haircut: Jane"
                     defaultValue="Demo Booking"
                   />
                 </div>
@@ -334,7 +345,13 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : '➕ Create Booking'}
+                {busy('booking') ? (
+                  '...'
+                ) : (
+                  <>
+                    <PlusIcon /> Create Booking
+                  </>
+                )}
               </button>
               <ApiHint call="client.createBooking({ title, range, serviceId, staffId, customer })" />
             </PersistedForm>
@@ -367,7 +384,13 @@ export default function BookingsTab({
                 />
               </div>
               <button className="btn btn-primary" type="submit" disabled={busy('booking')}>
-                {busy('booking') ? '...' : '🔍 Get Booking'}
+                {busy('booking') ? (
+                  '...'
+                ) : (
+                  <>
+                    <SearchIcon /> Get Booking
+                  </>
+                )}
               </button>
               <ApiHint call="client.getBooking(id)" />
             </PersistedForm>
@@ -469,13 +492,25 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : '✏️ Update Booking'}
+                {busy('booking') ? (
+                  '...'
+                ) : (
+                  <>
+                    <PencilIcon /> Update Booking
+                  </>
+                )}
               </button>
-              <ApiHint call={isCalendar ? 'client.updateBooking(id, { range, title, status })' : 'client.updateBooking(id, { range, staffId, status })'} />
+              <ApiHint
+                call={
+                  isCalendar
+                    ? 'client.updateBooking(id, { range, title, status })'
+                    : 'client.updateBooking(id, { range, staffId, status })'
+                }
+              />
             </PersistedForm>
           )}
 
-          {/* Cancel Booking — on a calendar, keeps the event marked cancelled */}
+          {/* Cancel Booking, on a calendar, keeps the event marked cancelled */}
           {activeOp === 'cancel' && (
             <PersistedForm
               formKey="bookings:cancel"
@@ -531,17 +566,29 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : isCalendar ? '🚫 Cancel Event' : '🗑 Cancel Booking'}
+                {busy('booking') ? (
+                  '...'
+                ) : isCalendar ? (
+                  <>
+                    <BanIcon /> Cancel Event
+                  </>
+                ) : (
+                  <>
+                    <TrashIcon /> Cancel Booking
+                  </>
+                )}
               </button>
               {isCalendar ? (
-                <ApiHint call="client.getBooking(id) + client.updateBooking(id, { title, status })">Keeps the event, marked cancelled.</ApiHint>
+                <ApiHint call="client.getBooking(id) + client.updateBooking(id, { title, status })">
+                  Keeps the event, marked cancelled.
+                </ApiHint>
               ) : (
                 <ApiHint call="client.cancelBooking(id, { reason })" />
               )}
             </PersistedForm>
           )}
 
-          {/* Delete Event — calendar providers only: removes it for good */}
+          {/* Delete Event: calendar providers only: removes it for good */}
           {activeOp === 'delete' && (
             <PersistedForm
               formKey="bookings:delete"
@@ -581,9 +628,17 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : '🗑 Delete Event'}
+                {busy('booking') ? (
+                  '...'
+                ) : (
+                  <>
+                    <TrashIcon /> Delete Event
+                  </>
+                )}
               </button>
-              <ApiHint call="client.cancelBooking(id)">On a calendar this deletes the event.</ApiHint>
+              <ApiHint call="client.cancelBooking(id)">
+                On a calendar this deletes the event.
+              </ApiHint>
             </PersistedForm>
           )}
 
@@ -652,7 +707,13 @@ export default function BookingsTab({
                 disabled={busy('booking')}
                 style={{ marginTop: '1rem' }}
               >
-                {busy('booking') ? '...' : '📋 List Bookings'}
+                {busy('booking') ? (
+                  '...'
+                ) : (
+                  <>
+                    <ListIcon /> List Bookings
+                  </>
+                )}
               </button>
               <ApiHint call="client.listBookings({ range, limit, pageToken })" />
             </PersistedForm>

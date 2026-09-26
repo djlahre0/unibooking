@@ -51,7 +51,7 @@ async function submitWith(tz: string) {
 }
 
 describe('Availability query built from the pickers', () => {
-  it('sends a positive durationMinutes — the field Google rejected the query without', async () => {
+  it('sends a positive durationMinutes: the field Google rejected the query without', async () => {
     // The reported failure: "[google] INVALID_INPUT: Google freeBusy returns
     // busy intervals only; pass a positive durationMinutes to size each slot".
     const query = await submitWith('UTC');

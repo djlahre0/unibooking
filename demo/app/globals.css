@@ -1,7 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
 /* ═══════════════════════════════════════════════════════════
-   Design tokens — appointment-book aesthetic: paper, ink, hairline
+   Design tokens: appointment-book aesthetic: paper, ink, hairline
    rules, times down the left edge. Not a glass dashboard. See
    .superpowers/sdd/2026-09-20-sample-provider/design-system.md.
 
@@ -14,11 +12,11 @@
   --surface: #ffffff; /* raised working areas */
   --ink: #12211f; /* primary text: green-black, not a tinted grey */
   --ink-soft: #4a5c58; /* secondary text */
-  /* Darkened from #7d8d89, which measured 3.15:1 on paper — below WCAG AA.
+  /* Darkened from #7d8d89, which measured 3.15:1 on paper: below WCAG AA.
      Placeholders are text and need 4.5:1 like any other. This is 4.53:1 on
      paper and 5.00:1 on white. */
   --ink-faint: #62736e; /* tertiary, placeholders */
-  --rule: #d3dad7; /* hairlines — the main structural device */
+  --rule: #d3dad7; /* hairlines: the main structural device */
   --pine: #0f5c4a; /* accent: fountain-pen ink on an appointment book */
   --pine-wash: #e3ece8; /* accent tint for selected rows */
   --amber: #a65a28; /* "routes through your server" */
@@ -55,7 +53,7 @@
      own (ResultBox, ConnectPanel's credential flow, the tab bodies) and is
      restyled by a following task. Those files reference the *old* variable
      names, so the token layer carries them forward onto the new palette
-     instead of leaving dangling custom properties — no purple, no glow, no
+     instead of leaving dangling custom properties, no purple, no glow, no
      hardcoded dark-mode-only colours reach those files by way of this swap. */
   --bg-primary: var(--paper);
   --bg-secondary: var(--surface);
@@ -137,7 +135,7 @@ html {
 
 body {
   font-family:
-    'Familjen Grotesk',
+    var(--font-sans),
     -apple-system,
     BlinkMacSystemFont,
     sans-serif;
@@ -190,98 +188,6 @@ textarea:focus-visible,
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--ink-soft);
-}
-
-/* ─── Layout ─── */
-.app-container {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 0 2rem;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Pinned to the top while the page scrolls. The top padding lives here, not
-   on .app-container, so content never shows through a gap above it. The
-   box-shadow + clip-path pair extends the opaque ground sideways past the
-   1440px container, so rows scrolling underneath stay hidden on wide screens
-   without widening the header's own box. */
-.app-header {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
-  padding: 1.5rem 0 1rem;
-  background: var(--paper);
-  box-shadow: 0 0 0 100vmax var(--paper);
-  clip-path: inset(0 -100vmax);
-  border-bottom: 1px solid var(--rule);
-}
-
-.app-header h1 {
-  font-size: var(--t-xl);
-  line-height: var(--t-xl-lh);
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: -0.01em;
-  margin: 0;
-  white-space: nowrap;
-}
-
-.app-header p {
-  color: var(--ink-soft);
-  font-size: var(--t-sm);
-  margin: 0;
-  max-width: 600px;
-}
-
-.app-header-brand {
-  display: flex;
-  align-items: baseline;
-  gap: 1rem;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.app-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-shrink: 0;
-}
-
-.header-links {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-}
-
-.header-link {
-  display: inline-flex;
-  color: var(--ink-soft);
-  text-decoration: none;
-  border-radius: 4px;
-  transition: color 0.2s;
-}
-
-.header-link:hover,
-.header-link:focus-visible {
-  color: var(--ink);
-}
-
-.header-link-npm:hover,
-.header-link-npm:focus-visible {
-  color: #cb3837;
-}
-
-.header-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 /* ─── Connect: "Test connection" verdict ─── */
@@ -350,15 +256,6 @@ textarea:focus-visible,
   color: var(--ink-soft);
 }
 
-/* ─── Calendar Sync: one row per staff member / service ─── */
-/* A fieldset only to disable the link controls during a sync; no chrome. */
-.sync-fieldset {
-  border: 0;
-  margin: 0;
-  padding: 0;
-  min-width: 0;
-}
-
 .sync-link-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
@@ -382,174 +279,6 @@ textarea:focus-visible,
   margin-top: 0.35rem;
   color: var(--ink-soft);
   font-size: var(--t-xs);
-}
-
-/* ─── Provider select (mobile provider picker, < 900px) ─── */
-.provider-select-bar {
-  display: none;
-  margin-bottom: 1rem;
-}
-
-/* ─── Sidebar / rail layout ─── */
-.main-layout {
-  display: flex;
-  gap: 2rem;
-  align-items: flex-start;
-  flex: 1;
-  padding-bottom: 2rem;
-}
-
-.sidebar,
-.provider-rail {
-  width: 220px;
-  flex-shrink: 0;
-  position: sticky;
-  top: calc(var(--app-header-h, 0px) + 1rem);
-  max-height: calc(100vh - var(--app-header-h, 0px) - 2rem);
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.content-area {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ─── Provider rail groups ─── */
-.rail-group + .rail-group {
-  margin-top: 1.5rem;
-}
-
-.rail-heading {
-  font-size: var(--t-sm);
-  line-height: var(--t-sm-lh);
-  font-weight: 600;
-  color: var(--ink-soft);
-  margin: 0 0 0.5rem;
-  /* Sentence case, never tracked-out caps -- the heading text is the
-     explanation (why this provider runs where it does), so it reads as
-     prose, not as a dashboard eyebrow label. */
-}
-
-.rail-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.rail-item {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  width: 100%;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 0.4rem 0.5rem;
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--t-sm);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--transition);
-}
-
-.rail-item:hover {
-  background: var(--surface);
-}
-
-.rail-item.selected {
-  background: var(--pine-wash);
-  border-color: var(--pine);
-  color: var(--pine);
-  font-weight: 600;
-}
-
-.rail-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.rail-dot-indigo {
-  background: var(--indigo);
-}
-
-.rail-dot-pine {
-  background: var(--pine);
-}
-
-.rail-dot-amber {
-  background: var(--amber);
-}
-
-/* ─── Tabs (horizontal strip, top of the content column) ─── */
-.tabs {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 0.25rem 1.25rem;
-  border-bottom: 1px solid var(--rule);
-  padding-bottom: 0;
-  margin-bottom: 1.5rem;
-  overflow-x: auto;
-}
-
-.tab {
-  padding: 0.6rem 0.1rem;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--ink-soft);
-  font-family: inherit;
-  font-size: var(--t-sm);
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  text-align: left;
-  transition: color var(--transition);
-}
-
-/* A labelled cluster of tabs (Start / Work / Tools). */
-.tab-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.25rem 1.25rem;
-  min-width: 0;
-}
-
-.tab-group + .tab-group {
-  padding-left: 1.25rem;
-  border-left: 1px solid var(--rule);
-}
-
-.tab-group-label {
-  align-self: center;
-  font-size: var(--t-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-}
-
-/* Not supported by the selected provider: still clickable, visibly quieter. */
-.tab.tab-muted {
-  opacity: 0.5;
-}
-
-.tab:hover {
-  color: var(--ink);
-}
-
-.tab.active {
-  color: var(--ink);
-  border-bottom-color: var(--pine);
-  font-weight: 600;
 }
 
 /* ─── Cards / Panels ─── */
@@ -632,7 +361,7 @@ textarea:focus-visible,
 .form-textarea {
   min-height: 100px;
   resize: vertical;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: var(--t-sm);
   line-height: 1.5;
 }
@@ -778,11 +507,15 @@ textarea:focus-visible,
 /* ─── Capabilities Grid ─── */
 .caps-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 0.6rem;
 }
 
+/* Flag names are single long camelCase words ("staffServiceAssignmentWrite"):
+   let them break rather than spill out of the badge. */
 .cap-badge {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -852,7 +585,7 @@ textarea:focus-visible,
 }
 
 .rb-timing {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
 }
@@ -866,7 +599,7 @@ textarea:focus-visible,
 }
 
 .rb-plain {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: var(--t-sm);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -914,7 +647,7 @@ textarea:focus-visible,
 }
 
 .rb-mono {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
   white-space: nowrap;
@@ -1000,7 +733,7 @@ textarea:focus-visible,
 .rb-raw pre {
   margin: 0;
   padding: 0 0.9rem 0.9rem;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: var(--t-sm);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -1204,61 +937,8 @@ textarea:focus-visible,
 }
 
 @media (max-width: 900px) {
-  .app-container {
-    padding: 0 16px 2rem;
-  }
   .two-col {
     grid-template-columns: 1fr;
-  }
-  .main-layout {
-    flex-direction: column;
-    /* Stretch, not flex-start: sized to its content, the content area took
-       the width of the whole tab strip and pushed every tab off-screen. */
-    align-items: stretch;
-  }
-  .sidebar,
-  .provider-rail {
-    display: none;
-  }
-  .provider-select-bar {
-    display: block;
-  }
-  /* One row per group (Start / Work / Tools), each wrapping, so every tab
-     stays visible instead of hiding behind a sideways scroll. */
-  .tabs {
-    flex-direction: column;
-    flex-wrap: nowrap;
-    overflow-x: visible;
-    gap: 0.35rem;
-    padding-bottom: 0.4rem;
-  }
-  .tab-group {
-    width: 100%;
-    gap: 0.1rem 1rem;
-  }
-  .tab-group + .tab-group {
-    padding-left: 0;
-    border-left: 0;
-  }
-  .tab-group-label {
-    flex: 0 0 3.2rem;
-  }
-  /* The stacked header is too tall to pin on a phone. */
-  .app-header {
-    position: static;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 1rem 0;
-  }
-  .app-header-brand {
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  .app-header-actions {
-    width: 100%;
-    justify-content: space-between;
-    flex-wrap: wrap;
   }
   .provider-grid {
     grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
@@ -1271,7 +951,7 @@ textarea:focus-visible,
 }
 
 /* ─── Motion: only answers an action (a result appearing, a section
-   expanding) — never a page-load fade-and-slide. Kept short, and disabled
+   expanding), never a page-load fade-and-slide. Kept short, and disabled
    entirely under prefers-reduced-motion above. ─── */
 @keyframes fadeIn {
   from {
@@ -1339,13 +1019,6 @@ textarea:focus-visible,
   margin-bottom: 1rem;
 }
 
-/* ─── Webhook Provider Select ─── */
-.webhook-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem;
-}
-
 /* ─── Empty State ─── */
 .empty-state {
   text-align: center;
@@ -1358,84 +1031,6 @@ textarea:focus-visible,
   font-size: 2.5rem;
   margin-bottom: 0.8rem;
   display: block;
-}
-
-/* ─── Utility: Info Panel ─── */
-.info-panel {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-
-.info-panel h4 {
-  font-size: var(--t-sm);
-  font-weight: 600;
-  color: var(--ink);
-  margin-bottom: 0.4rem;
-}
-
-.info-panel p,
-.info-panel code {
-  font-size: var(--t-sm);
-  color: var(--ink-soft);
-  line-height: 1.5;
-}
-
-.info-panel code {
-  font-family: 'IBM Plex Mono', monospace;
-  background: var(--pine-wash);
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  color: var(--pine);
-  font-size: var(--t-xs);
-}
-
-/* ─── Connected status bar ─── */
-/* The selected provider, in the header: a dot and its name. */
-.header-provider {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  max-width: 16rem;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--t-sm);
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color var(--transition);
-}
-
-.header-provider:hover {
-  border-color: var(--pine);
-}
-
-.header-provider.is-empty {
-  color: var(--ink-soft);
-  font-weight: 500;
-  border-style: dashed;
-}
-
-.header-provider-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-}
-
-.status-dot.connected {
-  background: var(--pine);
 }
 
 /* ─── Feature section list ─── */
@@ -1473,7 +1068,7 @@ textarea:focus-visible,
 }
 
 .feature-item code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: var(--t-xs);
   background: var(--pine-wash);
   padding: 0.1rem 0.3rem;
@@ -1487,10 +1082,6 @@ textarea:focus-visible,
   font-size: var(--t-sm);
   line-height: 1.6;
   margin: 0.4rem 0 0.8rem;
-}
-
-.cal-list {
-  padding-left: 1.2rem;
 }
 
 .cal-muted a {
@@ -1558,21 +1149,6 @@ textarea:focus-visible,
   opacity: 0.85;
 }
 
-/* start, not the grid default of stretch: these cards hold very different
-   amounts (a configured provider is a blurb and a button; an unconfigured
-   one on localhost is a whole client-id/secret setup form). Stretched, the
-   short cards inherit the tall one's height and `margin-top: auto` below
-   drops their button to the floor, leaving a void that reads as missing
-   content. Each card sizing to itself costs a ragged bottom edge and is
-   worth it. */
-.cal-connect-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  align-items: start;
-  gap: 1rem;
-  margin-top: 1rem;
-}
-
 .cal-connect-card {
   display: flex;
   flex-direction: column;
@@ -1596,11 +1172,6 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-.cal-connect-btn {
-  text-align: center;
-  text-decoration: none;
 }
 
 /* The operator's own escape hatch, not a visitor action: it sits under the
@@ -1762,7 +1333,7 @@ textarea:focus-visible,
 }
 
 .agenda-time {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-variant-numeric: tabular-nums;
   font-size: var(--t-sm);
   color: var(--ink-soft);
@@ -1822,18 +1393,8 @@ textarea:focus-visible,
   }
 }
 
-/* Theme switch in the header. The tokens it drives already exist above; this
-   only lays the three buttons out. It sits in .app-header-actions at the far
-   end of the header row and wraps on narrow screens, so it stays reachable at
-   375px — unlike the provider rail, which is hidden below 900px. */
-.theme-toggle {
-  display: flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-}
-
 /* ═══════════════════════════════════════════════════════════
-   Services & Staff rosters — a ledger, not a form. One ruled row per
+   Services & Staff rosters: a ledger, not a form. One ruled row per
    service or person; the open row gets the pen's margin line (pine) and
    unfolds its editor underneath. Performers are ink initials, the way a
    stylist initials an appointment book.
@@ -2262,7 +1823,7 @@ textarea:focus-visible,
 .roster-open-row .form-input {
   flex: 1;
   min-width: 0;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: var(--t-sm);
 }
 
@@ -2299,7 +1860,7 @@ textarea:focus-visible,
   margin-bottom: 0.5rem;
 }
 
-/* "Uses client.x()" — the unibooking call behind a control. Quiet: it is a
+/* "Uses client.x()": the unibooking call behind a control. Quiet: it is a
    reference for developers, not part of the task at hand. */
 .api-hint {
   margin: 0.4rem 0 0;
@@ -2313,7 +1874,7 @@ textarea:focus-visible,
 }
 
 .api-hint code {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono), monospace;
   font-size: 11.5px;
   color: var(--pine);
   overflow-wrap: anywhere;

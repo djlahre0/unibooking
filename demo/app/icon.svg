@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .sheet { fill: #0f5c4a; }
+    .ring { fill: #12211f; }
+    .u { stroke: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .sheet { fill: #3e9c83; }
+      .ring { fill: #e4ebe8; }
+      .u { stroke: #0e1614; }
+    }
+  </style>
+  <rect class="sheet" x="1.5" y="4" width="29" height="26.5" rx="7"/>
+  <rect class="ring" x="8" y="1" width="3.4" height="7" rx="1.7"/>
+  <rect class="ring" x="20.6" y="1" width="3.4" height="7" rx="1.7"/>
+  <path class="u" d="M10.5 12.5v5.5a5.5 5.5 0 0 0 11 0v-5.5" fill="none" stroke-width="3.2" stroke-linecap="round"/>
+</svg>

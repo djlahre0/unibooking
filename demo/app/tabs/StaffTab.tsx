@@ -82,7 +82,7 @@ export default function StaffTab(props: StaffTabProps) {
   if (!P) {
     return (
       <div className="fade-in">
-        <div className="empty-state">Select a provider in the Connect tab first.</div>
+        <div className="empty-state">Choose a provider in the sidebar to start.</div>
       </div>
     );
   }
@@ -290,10 +290,10 @@ export default function StaffTab(props: StaffTabProps) {
                     >
                       <span className="roster-name">{m.name}</span>
                       <span className="roster-cell roster-clip" data-label="Email">
-                        {m.email || '—'}
+                        {m.email || '-'}
                       </span>
                       <span className="roster-cell" data-label="Phone">
-                        {m.phone || '—'}
+                        {m.phone || '-'}
                       </span>
                       <span className="roster-cell" data-label="Performs">
                         {!showsServices ? null : !reported ? (

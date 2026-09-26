@@ -174,7 +174,7 @@ describe('CalendarTab', { timeout: 20_000 }, () => {
     await userEvent.click(row);
     expect(screen.getByRole('dialog', { name: 'Event: Team sync' })).toBeTruthy();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await userEvent.click(screen.getByRole('button', { name: /^🗑 Delete$/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
     await waitFor(() =>
       expect(calendarCall).toHaveBeenCalledWith('deleteEvent', {
         calendarId: 'jane@gmail.com',

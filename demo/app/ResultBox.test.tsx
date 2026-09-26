@@ -13,7 +13,7 @@ const bookingsResult = {
     bookings: [
       {
         id: 'b1',
-        title: 'Haircut — Priya Raman',
+        title: 'Haircut: Priya Raman',
         range: { start: '2026-09-13T09:00:00-07:00', end: '2026-09-13T09:30:00-07:00' },
         customer: { name: 'Priya Raman' },
         staffId: 'staff-1',
@@ -21,7 +21,7 @@ const bookingsResult = {
       },
       {
         id: 'b2',
-        title: 'Colour — Marcus Webb',
+        title: 'Colour: Marcus Webb',
         range: { start: '2026-09-14T10:00:00-07:00', end: '2026-09-14T11:00:00-07:00' },
         customer: { name: 'Marcus Webb' },
         staffId: 'staff-2',
@@ -38,7 +38,7 @@ describe('ResultBox with a bookings payload', () => {
     // Start time, title, customer, staff and status -- the columns the
     // design system calls out for the schedule view.
     expect(screen.getByText('09:00')).toBeDefined();
-    expect(screen.getByText('Haircut — Priya Raman')).toBeDefined();
+    expect(screen.getByText('Haircut: Priya Raman')).toBeDefined();
     expect(screen.getByText('Priya Raman')).toBeDefined();
     expect(screen.getByText('staff-1')).toBeDefined();
     expect(screen.getByText('confirmed')).toBeDefined();

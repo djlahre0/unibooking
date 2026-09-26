@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { patchUiState, type Theme } from '../lib/ui-state';
 import { useUiState } from '../lib/use-ui-state';
+import { MonitorIcon, MoonIcon, SunIcon } from './components/icons';
 
-const OPTIONS: { value: Theme; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
+const OPTIONS: { value: Theme; label: string; icon: ReactNode }[] = [
+  { value: 'system', label: 'System', icon: <MonitorIcon size={15} /> },
+  { value: 'light', label: 'Light', icon: <SunIcon size={15} /> },
+  { value: 'dark', label: 'Dark', icon: <MoonIcon size={15} /> },
 ];
 
 /**
@@ -21,10 +22,12 @@ export function applyTheme(theme: Theme): void {
   else root.setAttribute('data-theme', theme);
 }
 
+/** A three-way icon switch. Each button keeps its word as its accessible name
+ *  and tooltip, so it reads the same to a screen reader as the old labels. */
 export default function ThemeToggle() {
   const { theme } = useUiState();
 
-  // Syncing an external system (the document element) with React state — the
+  // Syncing an external system (the document element) with React state: the
   // case effects are actually for. layout.tsx applies the same value before
   // first paint, so this is a no-op on load and only does work on a change.
   useEffect(() => {
@@ -37,11 +40,13 @@ export default function ThemeToggle() {
         <button
           key={o.value}
           type="button"
-          className={`btn btn-sm ${theme === o.value ? 'btn-primary' : 'btn-secondary'}`}
+          className={`theme-toggle-btn ${theme === o.value ? 'is-active' : ''}`}
           aria-pressed={theme === o.value}
+          aria-label={o.label}
+          title={`${o.label} theme`}
           onClick={() => patchUiState({ theme: o.value })}
         >
-          {o.label}
+          {o.icon}
         </button>
       ))}
     </div>

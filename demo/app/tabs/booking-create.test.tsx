@@ -51,7 +51,6 @@ const wrap = (async (
 
 const props = {
   selectedProvider: 'google',
-  providerInfo: { label: 'Google Calendar' } as never,
   conn: { creds: {} },
   defaultRange: {
     start: '2026-09-14T00:00:00Z',
@@ -79,7 +78,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Create Booking form', () => {
-  it('is valid on first render — no hidden constraint blocks submission', () => {
+  it('is valid on first render, no hidden constraint blocks submission', () => {
     // A `step`/`min` mismatch or an unsatisfiable `required` makes a browser
     // refuse to submit with NO visible error and no console message, which is
     // exactly how the availability form silently broke.
@@ -255,7 +254,7 @@ describe('cancel vs delete', () => {
     const user = userEvent.setup();
     render(<BookingsTab {...props} />);
 
-    await user.click(screen.getByRole('button', { name: /^🚫 Cancel$/ }));
+    await user.click(screen.getByRole('button', { name: /^Cancel$/ }));
     await user.type(screen.getByLabelText('Booking ID'), 'e1');
     await user.type(screen.getByLabelText('Reason'), 'Room gone');
     await user.click(screen.getByRole('button', { name: /Cancel Event/ }));
@@ -263,7 +262,7 @@ describe('cancel vs delete', () => {
     expect(markCancelled.mock.calls[0]!.slice(2)).toEqual(['e1', 'Room gone']);
     expect(cancel).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: /^🗑 Delete$/ }));
+    await user.click(screen.getByRole('button', { name: /^Delete$/ }));
     await user.type(screen.getByLabelText('Booking ID'), 'e2');
     // Permanent, so it asks first; declining sends nothing.
     const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -280,7 +279,7 @@ describe('cancel vs delete', () => {
   it('update offers a status: calendar statuses on a calendar, platform ones elsewhere', async () => {
     const user = userEvent.setup();
     render(<BookingsTab {...props} />);
-    await user.click(screen.getByRole('button', { name: /^✏️ Update$/ }));
+    await user.click(screen.getByRole('button', { name: /^Update$/ }));
     const select = screen.getByLabelText('New Status') as HTMLSelectElement;
     expect([...select.options].map((o) => o.text)).toEqual([
       'Leave unchanged',
@@ -296,7 +295,7 @@ describe('cancel vs delete', () => {
     cleanup();
 
     render(<BookingsTab {...props} selectedProvider="square" />);
-    await user.click(screen.getByRole('button', { name: /^✏️ Update$/ }));
+    await user.click(screen.getByRole('button', { name: /^Update$/ }));
     expect(
       [...(screen.getByLabelText('New Status') as HTMLSelectElement).options].map((o) => o.value),
     ).toEqual(['', 'confirmed', 'pending', 'completed', 'no_show']);
@@ -306,7 +305,7 @@ describe('cancel vs delete', () => {
     const user = userEvent.setup();
     render(<BookingsTab {...props} selectedProvider="square" />);
     expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: /^🗑 Cancel$/ }));
+    await user.click(screen.getByRole('button', { name: /^Cancel$/ }));
     await user.type(screen.getByLabelText('Booking ID'), 'b9');
     await user.click(screen.getByRole('button', { name: /Cancel Booking/ }));
     await vi.waitFor(() => expect(cancel).toHaveBeenCalled());

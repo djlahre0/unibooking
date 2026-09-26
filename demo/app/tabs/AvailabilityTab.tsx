@@ -7,6 +7,7 @@ import { browserZone, toInstant } from '../../lib/datetime';
 import ResultBox from '../ResultBox';
 import ApiHint from '../ApiHint';
 import PersistedForm from '../PersistedForm';
+import { ClockIcon, SearchIcon } from '../components/icons';
 
 export type AvailabilityTabProps = {
   selectedProvider: string;
@@ -32,6 +33,18 @@ export type AvailabilityTabProps = {
 const day = (instant: string): string => instant.slice(0, 10);
 const clock = (instant: string): string => instant.slice(11, 16);
 
+/** Why the slot length matters for this provider. Busy-time calendars and
+ *  start-only platforms need it to size a slot; the rest return whole slots. */
+function slotLengthHint(provider: string, label: string): string {
+  if (provider === 'google' || provider === 'outlook') {
+    return `${label} returns busy time only, so this sets the length of each free slot.`;
+  }
+  if (['acuity', 'calendly', 'setmore', 'zenoti'].includes(provider)) {
+    return `${label} returns start times only, so this sets each slot's length.`;
+  }
+  return `${label} returns complete slots; this is only used where a slot has no end.`;
+}
+
 export default function AvailabilityTab({
   selectedProvider,
   providerInfo,
@@ -47,7 +60,7 @@ export default function AvailabilityTab({
 
   // The visitor's own zone cannot be a `defaultValue`: the server render has
   // no access to it, so writing it into the HTML would break hydration. Filled
-  // in after mount instead, and only when still blank — PersistedForm's own
+  // in after mount instead, and only when still blank: PersistedForm's own
   // restore effect runs first (child effects before parent), so a zone the
   // visitor previously typed always wins over this default.
   useEffect(() => {
@@ -59,13 +72,18 @@ export default function AvailabilityTab({
     <div className="fade-in" ref={root}>
       {!selectedProvider ? (
         <div className="empty-state">
-          <span className="icon">🕐</span>
-          Select a provider in the Connect tab first
+          <span className="icon">
+            <ClockIcon size={18} />
+          </span>
+          Choose a provider in the sidebar to start.
         </div>
       ) : (
         <div className="card">
           <div className="card-title">
-            <span className="icon">🕐</span> Search Availability — {providerInfo?.label}
+            <span className="icon">
+              <ClockIcon size={18} />
+            </span>{' '}
+            Search open slots
           </div>
           <p
             style={{
@@ -74,7 +92,7 @@ export default function AvailabilityTab({
               marginBottom: '1rem',
             }}
           >
-            <code>client.searchAvailability(query)</code> — only works when{' '}
+            <code>client.searchAvailability(query)</code> only works when{' '}
             <code>capabilities.availability</code> is <code>true</code>
           </p>
           <PersistedForm
@@ -172,14 +190,14 @@ export default function AvailabilityTab({
                   min="1"
                   // No `step`: it defaults to 1, so any whole number of
                   // minutes is valid. `step="5"` with `min="1"` would make the
-                  // valid sequence 1, 6, 11 … — the default of 30 would be a
+                  // valid sequence 1, 6, 11 …: the default of 30 would be a
                   // stepMismatch and the browser would silently refuse to
                   // submit the form, with no visible error.
                   className="form-input"
                   defaultValue="30"
                 />
                 <small style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
-                  Google returns busy intervals, so it needs this to size each free slot.
+                  {slotLengthHint(selectedProvider, providerInfo?.label ?? 'This provider')}
                 </small>
               </div>
               <div className="form-group">
@@ -222,7 +240,13 @@ export default function AvailabilityTab({
               disabled={busy('avail')}
               style={{ marginTop: '1rem' }}
             >
-              {busy('avail') ? '...' : '🔍 Search Slots'}
+              {busy('avail') ? (
+                '...'
+              ) : (
+                <>
+                  <SearchIcon /> Search Slots
+                </>
+              )}
             </button>
             <ApiHint call="client.searchAvailability({ range, serviceId, staffId, durationMinutes })" />
           </PersistedForm>

@@ -8,7 +8,7 @@ import { todayIn, shiftDate } from '../../lib/calendar/agenda';
 /**
  * Every date default in the explorer must be computed from today, never
  * written into the source. A literal date is correct on the day it is typed
- * and drifts further into the past every day after — the Availability tab
+ * and drifts further into the past every day after: the Availability tab
  * still defaulted to 2026-07-20 two months later, so the first search ran
  * against a window the sample seed (today-7..today+21) does not cover and
  * came back empty.
@@ -46,7 +46,7 @@ function expectFreshDates(container: HTMLElement) {
   for (const value of dates) {
     expect(value, `${value} should be YYYY-MM-DD`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // ISO dates compare correctly as strings.
-    expect(value >= today, `${value} is before today — a stale hardcoded default`).toBe(true);
+    expect(value >= today, `${value} is before today: a stale hardcoded default`).toBe(true);
   }
   for (const value of valuesOf(container, 'time')) {
     expect(value, `${value} should be HH:MM`).toMatch(/^\d{2}:\d{2}$/);

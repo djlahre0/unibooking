@@ -2,12 +2,9 @@
 
 import { instantToZoned, type Booking } from 'unibooking';
 import { dayLabel, shiftDate } from '../../lib/calendar/agenda';
-import {
-  EVENT_STATUS_LABELS,
-  eventStatus,
-  type EventStatus,
-} from '../../lib/cancel-event';
+import { EVENT_STATUS_LABELS, eventStatus, type EventStatus } from '../../lib/cancel-event';
 import ApiHint from '../ApiHint';
+import { PencilIcon, PinnedIcon, TrashIcon } from '../components/icons';
 
 function when(b: Booking, tz: string): string {
   if (b.allDay) {
@@ -52,7 +49,10 @@ export default function EventDetails({
   return (
     <div className="card cal-details" role="dialog" aria-label={`Event: ${booking.title}`}>
       <div className="card-title">
-        <span className="icon">📌</span> {booking.title}
+        <span className="icon">
+          <PinnedIcon size={18} />
+        </span>{' '}
+        {booking.title}
       </div>
       <dl className="cal-fields">
         <dt>When</dt>
@@ -118,7 +118,7 @@ export default function EventDetails({
           onClick={onEdit}
           disabled={readOnly || busy}
         >
-          ✏️ Edit
+          <PencilIcon /> Edit
         </button>
         <button
           className="btn btn-secondary btn-sm cal-danger"
@@ -126,7 +126,7 @@ export default function EventDetails({
           onClick={onDelete}
           disabled={readOnly || busy}
         >
-          🗑 Delete
+          <TrashIcon /> Delete
         </button>
         <button className="btn btn-secondary btn-sm" type="button" onClick={onClose}>
           Close

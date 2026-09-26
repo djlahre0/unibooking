@@ -40,7 +40,7 @@ function collect(form: HTMLFormElement): Record<string, string> {
 }
 
 export type PersistedFormProps = {
-  /** "<tab>:<op>" — a tab may hold several mutually exclusive forms. */
+  /** "<tab>:<op>": a tab may hold several mutually exclusive forms. */
   formKey: string;
   children: ReactNode;
   onSubmit?: (e: FormEvent<HTMLFormElement>) => void;

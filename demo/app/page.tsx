@@ -1,14 +1,9 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useMemo, useEffect, useSyncExternalStore } from 'react';
+import Link from 'next/link';
 import { type ActionResult, getCapabilities } from '../lib/call';
-import {
-  PROVIDER_META as PROVIDERS,
-  isLocal,
-  LOCAL_PROVIDERS,
-  DIRECT_PROVIDERS,
-  PROXY_PROVIDERS,
-} from '../lib/providers';
+import { PROVIDER_META as PROVIDERS, isLocal } from '../lib/providers';
 import { ENVIRONMENTS } from '../lib/environments';
 import { resetSample } from '../lib/sample/store';
 import { todayIn, shiftDate } from '../lib/calendar/agenda';
@@ -32,7 +27,6 @@ import {
 } from '../lib/ui-state';
 import { useUiState } from '../lib/use-ui-state';
 import ConnectPanel from './ConnectPanel';
-import ThemeToggle from './ThemeToggle';
 import EnvironmentControl from './EnvironmentControl';
 import PersistenceControls from './PersistenceControls';
 import CalendarTab from './calendar/CalendarTab';
@@ -46,39 +40,13 @@ import ServicesTab from './tabs/ServicesTab';
 import StaffTab from './tabs/StaffTab';
 import MappingTab from './tabs/MappingTab';
 import CalendarSyncTab from './tabs/CalendarSyncTab';
-import { tabUnsupported } from '../lib/provider-picker';
 import UtilitiesTab from './tabs/UtilitiesTab';
 import WebhooksTab from './tabs/WebhooksTab';
+import SiteHeader from './components/SiteHeader';
+import ExplorerSidebar, { type CalendarTarget } from './components/ExplorerSidebar';
+import { BookIcon } from './components/icons';
+import { EXPLORER_SECTIONS, sectionById } from '../lib/explorer-sections';
 
-/** Grouped so eleven-plus tabs read as three steps: connect, do the work,
- *  then the developer tools. Order within a group is the order shown. */
-const TABS = [
-  { id: 'calendar', label: 'My Calendar', group: 'Start' },
-  { id: 'connect', label: 'Connect', group: 'Start' },
-  { id: 'capabilities', label: 'Capabilities', group: 'Start' },
-  { id: 'bookings', label: 'Bookings', group: 'Work' },
-  { id: 'availability', label: 'Availability', group: 'Work' },
-  { id: 'customers', label: 'Clients', group: 'Work' },
-  { id: 'classes', label: 'Classes', group: 'Work' },
-  { id: 'services', label: 'Services', group: 'Work' },
-  { id: 'staff', label: 'Staff', group: 'Work' },
-  { id: 'mapping', label: 'Mapping', group: 'Work' },
-  { id: 'sync', label: 'Calendar Sync', group: 'Work' },
-  { id: 'catalog', label: 'Catalog & Health', group: 'Tools' },
-  { id: 'utilities', label: 'Utilities', group: 'Tools' },
-  { id: 'webhooks', label: 'Webhooks', group: 'Tools' },
-];
-const TAB_GROUPS = ['Start', 'Work', 'Tools'] as const;
-
-/* ═══════════════════════════════════════════════════════════
-   Provider rail
-
-   The library's central claim is that most providers refuse browser calls,
-   which is why unibooking has to run server-side for them. The rail argues
-   that case with information architecture instead of a banner: providers are
-   grouped by how they actually run, read straight from lib/providers.ts so
-   this list can never drift from the transport split the demo actually uses.
-   ═══════════════════════════════════════════════════════════ */
 /** Shared empty object, so `creds` keeps a stable identity across renders. */
 const EMPTY_CREDS: Record<string, string> = {};
 
@@ -100,7 +68,7 @@ const RESULT_KEYS = [
 
 /**
  * A stored result, back as an ActionResult. A payload too large to save comes
- * back as a plain error whose message says so — ResultBox already renders
+ * back as a plain error whose message says so: ResultBox already renders
  * `error.message`, so nothing there needs to know about this. Parse failures
  * yield null rather than throwing: a hand-edited localStorage must never
  * white-screen the page.
@@ -123,12 +91,6 @@ function savedResult(state: UiState, key: string): ActionResult | null {
     return null;
   }
 }
-
-const PROVIDER_GROUPS: { heading: string; ids: string[]; dot: 'indigo' | 'pine' | 'amber' }[] = [
-  { heading: 'Runs on this device', ids: [...LOCAL_PROVIDERS], dot: 'indigo' },
-  { heading: 'Runs in your browser', ids: [...DIRECT_PROVIDERS], dot: 'pine' },
-  { heading: 'Runs via your server', ids: [...PROXY_PROVIDERS], dot: 'amber' },
-];
 
 /* ═══════════════════════════════════════════════════════════
    Mount-time client state
@@ -166,30 +128,13 @@ const readServerMountState = () => SERVER_MOUNT_STATE;
 export default function Home() {
   const mounted = useSyncExternalStore(neverChanges, readMountState, readServerMountState);
 
-  // What the visitor was last doing. Never holds a credential — those stay in
+  // What the visitor was last doing. Never holds a credential: those stay in
   // cred-storage behind its opt-in toggle. See lib/ui-state.ts.
   const ui = useUiState();
 
-  // The header is pinned, and the provider rail sticks beneath it by offsetting
-  // itself with --app-header-h; measured rather than hardcoded because the
-  // tagline wraps at some widths.
-  const headerRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const root = document.documentElement;
-    const sync = () => root.style.setProperty('--app-header-h', `${el.offsetHeight}px`);
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      root.style.removeProperty('--app-header-h');
-    };
-  }, []);
   // A tab saved by an older version may no longer exist ('staffsvc' became
   // Services + Staff); fall back rather than render an empty page.
-  const activeTab = TABS.some((t) => t.id === ui.activeTab)
+  const activeTab = EXPLORER_SECTIONS.some((t) => t.id === ui.activeTab)
     ? ui.activeTab
     : ui.activeTab === 'staffsvc'
       ? 'services'
@@ -210,7 +155,7 @@ export default function Home() {
   // are DERIVED per provider rather than held in one flat state object: the
   // selected provider is restored from the store after mount, and a flat
   // `creds` would be momentarily blank for a provider that has a saved entry
-  // — which the debounced save effect below reads as "every field is empty"
+  // which the debounced save effect below reads as "every field is empty"
   // and answers with clearProvider(), silently deleting what the visitor
   // asked to be remembered. Deriving also avoids a setState-in-effect
   // cascade. `credEdits` holds only what has been typed this session.
@@ -239,20 +184,38 @@ export default function Home() {
     refreshCalendarStatus();
   }, [refreshCalendarStatus]);
 
-  // The calendar OAuth callback lands on /?tab=calendar, and that must win
-  // over whatever tab was persisted — otherwise a returning visitor is bounced
-  // away from the calendar they just connected. Adopting it INTO the store
-  // (rather than holding it as a separate source of truth) also means a later
-  // reload stays put, after CalendarTab strips the query string.
-  // Read in an effect, never during render: `window` does not exist on the
-  // server, so reading it while rendering would break hydration.
+  // Deep links: the calendar OAuth callback lands on /?tab=calendar, and the
+  // docs and search link straight to /?tab=<section> or /?provider=<id>.
+  // Those must win over whatever was persisted, otherwise a returning
+  // visitor is bounced away from the calendar they just connected, or from
+  // the section they clicked through to. Adopting them INTO the store (rather
+  // than holding them as a separate source of truth) also means a later
+  // reload stays put. Read in an effect, never during render: `window` does
+  // not exist on the server, so reading it while rendering would break
+  // hydration.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'calendar') {
-      patchUiState({ activeTab: 'calendar' });
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    const provider = params.get('provider');
+    const patch: Partial<UiState> = {};
+    if (tab && EXPLORER_SECTIONS.some((t) => t.id === tab)) patch.activeTab = tab;
+    if (
+      provider &&
+      Object.hasOwn(PROVIDERS, provider) &&
+      provider !== loadUiState().selectedProvider
+    ) {
+      const saved = loadState().providers[provider];
+      patch.selectedProvider = provider;
+      patch.env = saved?.env ?? 'prod';
+      patch.baseUrl = saved?.baseUrl ?? ENVIRONMENTS[provider]?.prod ?? '';
+      // Same rule as selectProvider: a result from the previous provider must
+      // never be shown under the new one.
+      patch.results = {};
     }
+    if (Object.keys(patch).length > 0) patchUiState(patch);
   }, []);
 
-  /* Results — derived from the store, overridden by this session's live calls.
+  /* Results: derived from the store, overridden by this session's live calls.
      Derived rather than held in `useState` + adopted in an effect for the same
      reason as `creds` above: the store's real values only arrive on the render
      AFTER hydration, and adopting them with setState in an effect is both a
@@ -407,7 +370,7 @@ export default function Home() {
     // adapter falls back to its own built-in default instead of an explicit
     // override. This has a surprising consequence: Phorest's `eu` region URL is
     // byte-identical to its `prod` URL, so selecting "eu" sends no override at
-    // all — the UI shows `eu` selected while the outgoing request carries no
+    // all: the UI shows `eu` selected while the outgoing request carries no
     // explicit host. That's correct (the table's `prod` is contractually equal
     // to the adapter's default, enforced by environments-drift.test.ts) but
     // non-obvious, hence this note.
@@ -431,7 +394,7 @@ export default function Home() {
       if (hasValue) {
         saveProvider(selectedProvider, { creds, env, baseUrl });
       } else {
-        // Every field is empty/whitespace — keep storage in sync by removing
+        // Every field is empty/whitespace: keep storage in sync by removing
         // the entry instead of writing back an empty one. This is what makes
         // "Clear this provider" and "Clear all saved" stick: those handlers
         // reset `creds` to {}, which lands here 300ms later.
@@ -446,11 +409,11 @@ export default function Home() {
   // no matter which control triggered it.
   const selectProvider = useCallback(
     (id: string) => {
-      // Re-selecting the already-selected provider is a no-op, not a switch —
+      // Re-selecting the already-selected provider is a no-op, not a switch:
       // running the reset below would blank creds the user just typed
       // (Remember off means nothing was saved yet to reload from).
       if (id === selectedProvider) return;
-      // Flush a pending save for the OUTGOING provider before switching —
+      // Flush a pending save for the OUTGOING provider before switching:
       // otherwise the debounce effect's cleanup just clearTimeout()s it and
       // credentials typed within the last ~300ms are silently lost. Capture
       // the outgoing values now, before any setter below changes them.
@@ -472,7 +435,7 @@ export default function Home() {
       const saved = loadState().providers[id];
       // No creds reset needed: `creds` derives from credEdits[id] falling back
       // to this provider's own saved entry, so switching already shows the
-      // right values — and any edits typed for the incoming provider earlier
+      // right values, and any edits typed for the incoming provider earlier
       // in this session are preserved rather than silently dropped.
       patchUiState({
         selectedProvider: id,
@@ -486,215 +449,91 @@ export default function Home() {
     [selectedProvider, creds, env, baseUrl, remember, clearAllResults],
   );
 
+  const section = sectionById(activeTab);
+
+  // Which calendar the explorer's calls land on, for the three calendar
+  // providers. Signed in through My Calendar, the explore route targets the
+  // account's primary calendar; with pasted credentials it is the
+  // calendarId / calendarUrl field, whose absence means the provider's
+  // default, except on Apple, where a collection URL is required.
+  const calendarTarget = ((): CalendarTarget | undefined => {
+    if (!['google', 'outlook', 'apple'].includes(selectedProvider)) return undefined;
+    if (conn.signedIn) {
+      const who = calendarStatus?.connection?.account;
+      return {
+        value: 'Primary calendar',
+        detail: `Signed in${who?.email || who?.name ? ` as ${who.email ?? who.name}` : ''}`,
+        tone: 'ok',
+        changeIn: 'calendar',
+      };
+    }
+    if (selectedProvider === 'apple') {
+      const url = creds.calendarUrl?.trim();
+      if (!url) {
+        return {
+          value: 'None chosen',
+          detail: 'Required for events: find one with listCalendars',
+          tone: 'warn',
+          changeIn: 'connect',
+        };
+      }
+      const segment = url.replace(/\/+$/, '').split('/').pop() ?? url;
+      let name = segment;
+      try {
+        name = decodeURIComponent(segment);
+      } catch {
+        // Keep the raw segment.
+      }
+      return { value: name, detail: 'calendarUrl', full: url, tone: 'ok', changeIn: 'connect' };
+    }
+    const id = creds.calendarId?.trim();
+    if (!id || id === 'primary') {
+      return {
+        value: selectedProvider === 'google' ? 'Primary calendar' : 'Default calendar',
+        detail: id ? 'calendarId: primary' : 'Default: set calendarId to change',
+        tone: 'ok',
+        changeIn: 'connect',
+      };
+    }
+    return { value: id, detail: 'calendarId', full: id, tone: 'ok', changeIn: 'connect' };
+  })();
+
   return (
-    <div className="app-container">
-      {/* ─── Header (pinned) ─── */}
-      <header className="app-header" ref={headerRef}>
-        <div className="app-header-brand">
-          <h1>unibooking</h1>
-          <p>Unified CRUD for 17 booking &amp; calendar providers. Interactive API explorer.</p>
-        </div>
-        <div className="app-header-actions">
-          {/* The provider every tab is working against, always in view. A
-              button: changing it is the Connect tab's job. */}
-          <button
-            type="button"
-            className={`header-provider ${selectedProvider ? '' : 'is-empty'}`}
-            onClick={() => setActiveTab('connect')}
-            title={selectedProvider ? 'Change provider in the Connect tab' : undefined}
-            aria-label={
-              selectedProvider
-                ? `Provider: ${providerInfo?.label ?? selectedProvider}. Change it in Connect.`
-                : 'No provider selected. Choose one in Connect.'
-            }
-          >
-            <span
-              className={`status-dot ${selectedProvider ? 'connected' : ''}`}
-              aria-hidden="true"
-            />
-            <span className="header-provider-name">
-              {selectedProvider ? (providerInfo?.label ?? selectedProvider) : 'Choose a provider'}
-            </span>
-          </button>
-          <nav className="header-links" aria-label="Project links">
-            <a
-              className="header-link header-link-github"
-              href="https://github.com/djlahre0/unibooking"
-              target="_blank"
-              rel="noreferrer"
-              title="GitHub repository"
-              aria-label="GitHub repository"
-            >
-              <svg
-                width="22"
-                height="22"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-              </svg>
-            </a>
-            <a
-              className="header-link header-link-npm"
-              href="https://www.npmjs.com/package/unibooking"
-              target="_blank"
-              rel="noreferrer"
-              title="npm package"
-              aria-label="npm package"
-            >
-              <svg
-                width="22"
-                height="22"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm10.666 6.666H8v-4H6.666v4H2.667v-5.334h8v5.334zm10.667-1.334h-2.667v2.668H16v-2.668h-2.667v-4h8v4z" />
-              </svg>
-            </a>
-          </nav>
-          <ThemeToggle />
-        </div>
-      </header>
+    <div className="app-shell">
+      <SiteHeader />
+      <div className="explorer-shell">
+        <ExplorerSidebar
+          selectedProvider={selectedProvider}
+          onSelectProvider={selectProvider}
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          calendar={calendarTarget}
+        />
 
-      {/* ─── Provider select (< 900px only; the rail below is hidden there) ─── */}
-      <div className="provider-select-bar">
-        <label className="form-label" htmlFor="provider-select-mobile">
-          Provider
-        </label>
-        <select
-          id="provider-select-mobile"
-          className="form-select"
-          value={selectedProvider}
-          onChange={(e) => e.target.value && selectProvider(e.target.value)}
-        >
-          <option value="">Choose a provider…</option>
-          {PROVIDER_GROUPS.map((group) => (
-            <optgroup key={group.heading} label={group.heading}>
-              {group.ids.map((id) => (
-                <option key={id} value={id}>
-                  {PROVIDERS[id]?.label ?? id}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </div>
-
-      <div className="main-layout">
-        {/* ─── Provider rail (>= 900px); grouped by how each provider actually
-            runs, read from lib/providers.ts so this can't drift from the
-            transport split the demo relies on. ─── */}
-        <aside className="provider-rail" aria-label="Providers">
-          {PROVIDER_GROUPS.map((group) => (
-            <div className="rail-group" key={group.heading}>
-              <h2 className="rail-heading">{group.heading}</h2>
-              <ul className="rail-list">
-                {group.ids.map((id) => (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      className={`rail-item ${selectedProvider === id ? 'selected' : ''}`}
-                      aria-pressed={selectedProvider === id}
-                      onClick={() => selectProvider(id)}
-                    >
-                      <span className={`rail-dot rail-dot-${group.dot}`} aria-hidden="true" />
-                      {PROVIDERS[id]?.label ?? id}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', padding: '0 0.5rem' }}>
-            <a
-              href="https://github.com/djlahre0/unibooking"
-              target="_blank"
-              rel="noreferrer"
-              title="GitHub Repository"
-              style={{
-                color: 'var(--text-secondary)',
-                textDecoration: 'none',
-                transition: 'color 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                fontSize: '0.8rem',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
-              onMouseOut={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-              </svg>
-              GitHub
-            </a>
-            <a
-              href="https://www.npmjs.com/package/unibooking"
-              target="_blank"
-              rel="noreferrer"
-              title="npm Package"
-              style={{
-                color: 'var(--text-secondary)',
-                textDecoration: 'none',
-                transition: 'color 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                fontSize: '0.8rem',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.color = '#cb3837')}
-              onMouseOut={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm10.666 6.666H8v-4H6.666v4H2.667v-5.334h8v5.334zm10.667-1.334h-2.667v2.668H16v-2.668h-2.667v-4h8v4z" />
-              </svg>
-              npm
-            </a>
-          </div>
-        </aside>
-
-        <main className="content-area">
-          {/* ─── Tab strip ─── */}
-          <nav className="tabs" role="tablist" aria-label="Sections">
-            {TAB_GROUPS.map((group) => (
-              <div key={group} className="tab-group" role="presentation">
-                <span className="tab-group-label" aria-hidden="true">
-                  {group}
-                </span>
-                {TABS.map((t, i) => {
-                  if (t.group !== group) return null;
-                  // Dimmed, not hidden: the tab still opens and explains
-                  // itself, but a glance shows what this provider can't do.
-                  const unsupported = tabUnsupported(t.id, selectedProvider);
-                  return (
-                    <button
-                      key={t.id}
-                      id={`tab-${t.id}`}
-                      role="tab"
-                      aria-selected={activeTab === t.id}
-                      tabIndex={activeTab === t.id ? 0 : -1}
-                      className={`tab ${activeTab === t.id ? 'active' : ''} ${unsupported ? 'tab-muted' : ''}`}
-                      title={unsupported || undefined}
-                      onClick={() => setActiveTab(t.id)}
-                      onKeyDown={(e) => {
-                        let idx = i;
-                        if (e.key === 'ArrowRight') idx = (i + 1) % TABS.length;
-                        else if (e.key === 'ArrowLeft') idx = (i - 1 + TABS.length) % TABS.length;
-                        else return;
-                        e.preventDefault();
-                        setActiveTab(TABS[idx].id);
-                        document.getElementById(`tab-${TABS[idx].id}`)?.focus();
-                      }}
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
+        <main className="explorer-main" id="main">
+          {section && (
+            <div className="explorer-head">
+              <div className="explorer-head-text">
+                <p className="explorer-eyebrow">
+                  Explorer · {section.group}
+                  {selectedProvider && (
+                    <>
+                      {' · '}
+                      <span className="explorer-provider">
+                        {providerInfo?.label ?? selectedProvider}
+                      </span>
+                    </>
+                  )}
+                </p>
+                <h1 className="explorer-title">{section.label}</h1>
+                <p className="explorer-desc">{section.description}</p>
               </div>
-            ))}
-          </nav>
+              <Link className="explorer-doc-link" href={section.doc}>
+                <BookIcon size={14} />
+                Read the docs
+              </Link>
+            </div>
+          )}
 
           {/* ═══ CONNECT TAB ═══ */}
           {activeTab === 'calendar' && (
@@ -778,7 +617,7 @@ export default function Home() {
                 }}
                 // PersistenceControls owns the confirmation now, because it
                 // clears the UI state and the sample data alongside these
-                // credentials — one prompt naming all three, not two prompts.
+                // credentials: one prompt naming all three, not two prompts.
                 onClearAll={() => {
                   clearAll();
                   setCredEdits({});
@@ -795,7 +634,6 @@ export default function Home() {
           {activeTab === 'capabilities' && (
             <CapabilitiesTab
               selectedProvider={selectedProvider}
-              providerInfo={providerInfo}
               capsResult={capsResult}
               setCapsResult={setCapsResult}
               wrap={wrap}
@@ -808,7 +646,6 @@ export default function Home() {
           {activeTab === 'bookings' && (
             <BookingsTab
               selectedProvider={selectedProvider}
-              providerInfo={providerInfo}
               conn={conn}
               defaultRange={defaultRange}
               bookingResult={bookingResult}
@@ -922,7 +759,6 @@ export default function Home() {
           {activeTab === 'catalog' && (
             <CatalogTab
               selectedProvider={selectedProvider}
-              providerInfo={providerInfo}
               conn={conn}
               catalogResult={catalogResult}
               setCatalogResult={setCatalogResult}

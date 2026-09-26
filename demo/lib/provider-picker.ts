@@ -79,7 +79,8 @@ const TAB_NEEDS: Record<string, (c: Capabilities) => boolean> = {
   mapping: (c) => c.staffDirectory || c.serviceCatalog,
   // Your project <-> the selected calendar provider only.
   sync: (c) => c.calendarList,
-  webhooks: (c) => c.webhooks,
+  // Webhooks is not listed: its verifier picks its own provider and never
+  // calls the selected one, so it works whatever is selected.
 };
 
 /** Why a tab does nothing for this provider, or '' when it is usable. */

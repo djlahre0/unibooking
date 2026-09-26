@@ -10,12 +10,18 @@ import {
   callListStaff,
   providerCapabilities,
 } from '../../lib/call';
-import type { ProviderMeta } from '../../lib/providers';
 import ResultBox from '../ResultBox';
+import {
+  BadgeIcon,
+  ClockIcon,
+  FolderIcon,
+  LayersIcon,
+  PulseIcon,
+  TagIcon,
+} from '../components/icons';
 
 export type CatalogTabProps = {
   selectedProvider: string;
-  providerInfo: ProviderMeta | null;
   conn: Connection;
   catalogResult: ActionResult | null;
   setCatalogResult: (r: ActionResult | null) => void;
@@ -31,7 +37,6 @@ export type CatalogTabProps = {
 
 export default function CatalogTab({
   selectedProvider,
-  providerInfo,
   conn,
   catalogResult,
   setCatalogResult,
@@ -44,13 +49,18 @@ export default function CatalogTab({
     <div className="fade-in">
       {!selectedProvider ? (
         <div className="empty-state">
-          <span className="icon">📚</span>
-          Select a provider in the Connect tab first
+          <span className="icon">
+            <LayersIcon size={18} />
+          </span>
+          Choose a provider in the sidebar to start.
         </div>
       ) : (
         <div className="card">
           <div className="card-title">
-            <span className="icon">📚</span> Catalog &amp; Health — {providerInfo?.label}
+            <span className="icon">
+              <LayersIcon size={18} />
+            </span>{' '}
+            Catalog &amp; connection health
           </div>
 
           <p
@@ -61,7 +71,7 @@ export default function CatalogTab({
             }}
           >
             <code>checkConnection()</code> is on every adapter and does <strong>not</strong> throw
-            when credentials are dead — it returns <code>{'{ ok: false, reason }'}</code>. A network
+            when credentials are dead: it returns <code>{'{ ok: false, reason }'}</code>. A network
             blip or 5xx still throws, so a transient fault is never mistaken for a revoked
             integration.
           </p>
@@ -73,8 +83,8 @@ export default function CatalogTab({
             }}
           >
             <code>listServices()</code> / <code>listStaff()</code> need{' '}
-            <code>capabilities.serviceCatalog</code> / <code>capabilities.staffDirectory</code> —
-            which are <em>not</em> the same as <code>services</code> / <code>staff</code>, those
+            <code>capabilities.serviceCatalog</code> / <code>capabilities.staffDirectory</code>.
+            Those are <em>not</em> the same as <code>services</code> / <code>staff</code>, which
             only say a booking can reference one.
           </p>
 
@@ -86,7 +96,7 @@ export default function CatalogTab({
                 wrap('catalog', () => callCheckConnection(selectedProvider, conn), setCatalogResult)
               }
             >
-              ❤️ Check Connection
+              <PulseIcon /> Check Connection
             </button>
             <button
               className="btn btn-sm btn-secondary"
@@ -99,7 +109,7 @@ export default function CatalogTab({
                 )
               }
             >
-              🧾 List Services
+              <TagIcon /> List Services
             </button>
             <button
               className="btn btn-sm btn-secondary"
@@ -112,7 +122,7 @@ export default function CatalogTab({
                 )
               }
             >
-              🧑‍🔧 List Staff
+              <BadgeIcon /> List Staff
             </button>
             {caps?.serviceCategories && (
               <button
@@ -126,7 +136,7 @@ export default function CatalogTab({
                   )
                 }
               >
-                🗂️ List Categories
+                <FolderIcon /> List Categories
               </button>
             )}
             {caps?.businessHours && (
@@ -141,7 +151,7 @@ export default function CatalogTab({
                   )
                 }
               >
-                🕙 Business Hours
+                <ClockIcon /> Business Hours
               </button>
             )}
           </div>
@@ -155,7 +165,7 @@ export default function CatalogTab({
               }}
             >
               This provider links staff to services, so each <code>Service</code> carries{' '}
-              <code>staffIds</code> and you can filter either way —{' '}
+              <code>staffIds</code> and you can filter either way: {' '}
               <code>listServices({'{ staffId }'})</code> or{' '}
               <code>listStaff({'{ serviceId }'})</code>. An empty <code>staffIds</code> means nobody
               is assigned; <em>absent</em> means the provider did not say.
@@ -169,8 +179,8 @@ export default function CatalogTab({
               marginTop: '1rem',
             }}
           >
-            To add, edit, deactivate or delete services and staff, or change who performs what,
-            use the <strong>Services</strong> and <strong>Staff</strong> tabs.
+            To add, edit, deactivate or delete services and staff, or change who performs what, use
+            the <strong>Services</strong> and <strong>Staff</strong> tabs.
           </p>
 
           {catalogResult && (

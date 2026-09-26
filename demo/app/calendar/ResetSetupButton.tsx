@@ -6,7 +6,7 @@ import type { OAuthProvider } from '../../lib/calendar/types';
 
 /**
  * Unsets the operator's saved OAuth registration so the setup form returns
- * and a different client id/secret can be entered — the alternative being to
+ * and a different client id/secret can be entered: the alternative being to
  * hand-edit `.oauth-apps.json` and restart the server.
  *
  * Rendered only for a localhost visitor, which is convenience: the DELETE
@@ -14,9 +14,9 @@ import type { OAuthProvider } from '../../lib/calendar/types';
  * production, loopback-only, rate limited), so this button being absent is
  * never what stops anyone.
  *
- * Shared by both places that show a configured provider — the My Calendar
+ * Shared by both places that show a configured provider: the My Calendar
  * grid (ConnectCards) and the Connect tab's single-provider area
- * (ConnectPanel) — so the wording and the confirm can't drift apart.
+ * (ConnectPanel), so the wording and the confirm can't drift apart.
  */
 export default function ResetSetupButton({
   provider,

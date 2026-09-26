@@ -8,7 +8,7 @@ import CatalogTab from './CatalogTab';
 import WebhooksTab from './WebhooksTab';
 
 /**
- * Every visible form label must actually be associated with its control —
+ * Every visible form label must actually be associated with its control:
  * either by wrapping it, or by `htmlFor` pointing at the control's `id`. A
  * bare `<label>Start</label>` next to an unlabelled `<input>` looks correct on
  * screen and is invisible to a screen reader, which announces the field as

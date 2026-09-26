@@ -132,7 +132,7 @@ export default function CustomersTab({
   if (!P) {
     return (
       <div className="fade-in">
-        <div className="empty-state">Select a provider in the Connect tab first.</div>
+        <div className="empty-state">Choose a provider in the sidebar to start.</div>
       </div>
     );
   }
@@ -286,13 +286,13 @@ export default function CustomersTab({
                         >
                           <span className="roster-name">{c.name || c.email || c.phone || c.id}</span>
                           <span className="roster-cell roster-clip" data-label="Email">
-                            {c.email || '—'}
+                            {c.email || '-'}
                           </span>
                           <span className="roster-cell" data-label="Phone">
-                            {c.phone || '—'}
+                            {c.phone || '-'}
                           </span>
                           <span className="roster-cell" data-label="Added">
-                            {added(c.createdAt) || '—'}
+                            {added(c.createdAt) || '-'}
                           </span>
                         </button>
                         {isOpen ? (

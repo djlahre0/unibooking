@@ -25,6 +25,12 @@ afterEach(cleanup);
 
 const tab = (name: RegExp) => screen.getByRole('tab', { name });
 
+/** Choose a provider the way a visitor does: open the picker, click one. */
+async function pickProvider(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  await user.click(screen.getByLabelText('Provider'));
+  await user.click(screen.getByRole('option', { name }));
+}
+
 describe('page persistence', () => {
   it('opens on the persisted tab', () => {
     patchUiState({ activeTab: 'webhooks' });
@@ -58,7 +64,7 @@ describe('page persistence', () => {
   it('persists a provider choice', async () => {
     const user = userEvent.setup();
     render(<Home />);
-    await user.selectOptions(screen.getByLabelText('Provider'), 'square');
+    await pickProvider(user, /^Square/);
     await vi.waitFor(() => expect(loadUiState().selectedProvider).toBe('square'));
   });
 
@@ -157,7 +163,7 @@ describe('page persistence', () => {
       results: { caps: { at: '2026-09-20T10:00:00.000Z', json: '{"ok":true}' } },
     });
     render(<Home />);
-    await user.selectOptions(screen.getByLabelText('Provider'), 'acuity');
+    await pickProvider(user, /^Acuity/);
     await vi.waitFor(() => expect(loadUiState().results).toEqual({}));
   });
 
@@ -171,7 +177,7 @@ describe('page persistence', () => {
       }),
     );
     render(<Home />);
-    await user.selectOptions(screen.getByLabelText('Provider'), 'square');
+    await pickProvider(user, /^Square/);
     await vi.waitFor(() => expect(loadUiState().selectedProvider).toBe('square'));
     expect(localStorage.getItem(UI_KEY) ?? '').not.toContain('super-secret-token');
   });

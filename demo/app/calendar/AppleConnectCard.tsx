@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { connectApple } from '../../lib/calendar/api';
+import { CloudIcon } from '../components/icons';
 
 /**
  * Apple's connect form. Apple offers third parties no OAuth for calendars, so
@@ -38,7 +39,7 @@ export default function AppleConnectCard({ onConnected }: { onConnected: () => v
       }}
     >
       <div className="cal-connect-head">
-        <span aria-hidden="true">⬜</span> Apple iCloud
+        <CloudIcon /> Apple iCloud
       </div>
       <p className="cal-muted">
         Apple uses an <strong>app-specific password</strong> instead of a sign-in button. Create one

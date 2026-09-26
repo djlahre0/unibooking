@@ -10,6 +10,7 @@ import {
 import type { EventInput } from '../../lib/calendar/types';
 import TimezoneField from './TimezoneField';
 import ApiHint from '../ApiHint';
+import { PencilIcon, PlusIcon } from '../components/icons';
 
 /**
  * Create / edit an event. The form speaks in dates, times and a timezone; the
@@ -47,7 +48,9 @@ export default function EventForm({
       }}
     >
       <div className="card-title">
-        <span className="icon">{mode === 'new' ? '➕' : '✏️'}</span>
+        <span className="icon">
+          {mode === 'new' ? <PlusIcon size={18} /> : <PencilIcon size={18} />}
+        </span>
         {mode === 'new' ? 'New event' : 'Edit event'}
       </div>
 

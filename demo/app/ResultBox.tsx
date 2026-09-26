@@ -65,7 +65,7 @@ function dateOf(instant: string | undefined): string | undefined {
   return instant ? INSTANT_RE.exec(instant)?.[1] : undefined;
 }
 function timeOf(instant: string | undefined): string {
-  if (!instant) return '—';
+  if (!instant) return '-';
   return INSTANT_RE.exec(instant)?.[2] ?? instant;
 }
 
@@ -74,7 +74,7 @@ function timeOf(instant: string | undefined): string {
  *  the symbol/placement; the /100 conversion is fixed because the demo has
  *  no per-currency minor-unit table and the design brief's example is /100. */
 function formatMoney(price: Money | undefined): string {
-  if (!price) return '—';
+  if (!price) return '-';
   const major = price.amount / 100;
   try {
     return new Intl.NumberFormat('en-US', {
@@ -109,7 +109,7 @@ const STATUS_TONE: Record<string, 'pine' | 'amber' | 'rose' | 'inkfaint'> = {
 };
 
 function StatusBadge({ status }: { status?: string }) {
-  if (!status) return <span className="rb-status rb-status-inkfaint">—</span>;
+  if (!status) return <span className="rb-status rb-status-inkfaint">-</span>;
   const tone = STATUS_TONE[status] ?? 'inkfaint';
   return <span className={`rb-status rb-status-${tone}`}>{status.replace('_', ' ')}</span>;
 }
@@ -166,9 +166,9 @@ function Schedule({ bookings }: { bookings: BookingLike[] }) {
               {g.items.map((b, i) => (
                 <tr key={b.id ?? i}>
                   <td className="rb-mono">{timeOf(b.range?.start)}</td>
-                  <td>{b.title || '—'}</td>
-                  <td>{b.customer?.name ?? b.customer?.email ?? '—'}</td>
-                  <td className="rb-mono">{b.staffId ?? '—'}</td>
+                  <td>{b.title || '-'}</td>
+                  <td>{b.customer?.name ?? b.customer?.email ?? '-'}</td>
+                  <td className="rb-mono">{b.staffId ?? '-'}</td>
                   <td>
                     <StatusBadge status={b.status} />
                   </td>
@@ -197,9 +197,9 @@ function ServicesTable({ services }: { services: ServiceLike[] }) {
       <tbody>
         {services.map((s, i) => (
           <tr key={s.id ?? i}>
-            <td>{s.name || '—'}</td>
+            <td>{s.name || '-'}</td>
             <td className="rb-mono">
-              {s.durationMinutes != null ? `${s.durationMinutes} min` : '—'}
+              {s.durationMinutes != null ? `${s.durationMinutes} min` : '-'}
             </td>
             <td className="rb-mono">{formatMoney(s.price)}</td>
             <td>
@@ -226,8 +226,8 @@ function StaffTable({ staff }: { staff: StaffLike[] }) {
       <tbody>
         {staff.map((s, i) => (
           <tr key={s.id ?? i}>
-            <td>{s.name || '—'}</td>
-            <td className="rb-mono">{s.email ?? '—'}</td>
+            <td>{s.name || '-'}</td>
+            <td className="rb-mono">{s.email ?? '-'}</td>
             <td>
               <ActiveBadge active={s.active} />
             </td>
@@ -252,9 +252,9 @@ function SlotsTable({ slots }: { slots: SlotLike[] }) {
       <tbody>
         {slots.map((s, i) => (
           <tr key={i}>
-            <td className="rb-mono">{s.start ?? '—'}</td>
-            <td className="rb-mono">{s.end ?? '—'}</td>
-            <td className="rb-mono">{s.staffId ?? '—'}</td>
+            <td className="rb-mono">{s.start ?? '-'}</td>
+            <td className="rb-mono">{s.end ?? '-'}</td>
+            <td className="rb-mono">{s.staffId ?? '-'}</td>
           </tr>
         ))}
       </tbody>

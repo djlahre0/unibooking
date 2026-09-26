@@ -11,6 +11,7 @@ import {
 import type { ProviderMeta } from '../../lib/providers';
 import ResultBox from '../ResultBox';
 import PersistedForm from '../PersistedForm';
+import { BanIcon, GroupIcon, PlusIcon, SearchIcon } from '../components/icons';
 
 export type ClassesTabProps = {
   selectedProvider: string;
@@ -64,7 +65,7 @@ function when(iso: string): string {
 }
 
 /** The badge a class gets. `full` is authoritative and can disagree with the
- *  numbers — a provider may close a class while spots remain — so it wins. */
+ *  numbers, a provider may close a class while spots remain, so it wins. */
 function badgeFor(k: ClassRow): { text: string; tone: string } {
   if (k.status === 'cancelled') return { text: 'cancelled', tone: 'badge-danger' };
   if (k.status === 'completed') return { text: 'finished', tone: 'badge-muted' };
@@ -100,8 +101,10 @@ export default function ClassesTab({
     return (
       <div className="fade-in">
         <div className="empty-state">
-          <span className="icon">🧘</span>
-          Select a provider in the Connect tab first
+          <span className="icon">
+            <GroupIcon size={18} />
+          </span>
+          Choose a provider in the sidebar to start.
         </div>
       </div>
     );
@@ -111,12 +114,17 @@ export default function ClassesTab({
     <div className="fade-in">
       <div className="card">
         <div className="card-title">
-          <span className="icon">🧘</span> Group Classes — {providerInfo?.label}
+          <span className="icon">
+            <GroupIcon size={18} />
+          </span>{' '}
+          Group classes
         </div>
 
         {!supported ? (
           <div className="empty-state">
-            <span className="icon">🚫</span>
+            <span className="icon">
+              <BanIcon size={18} />
+            </span>
             <div>
               <strong>{providerInfo?.label}</strong> has no group-class concept.
               <p
@@ -192,7 +200,7 @@ export default function ClassesTab({
               </div>
               <div className="op-row">
                 <button className="btn btn-sm btn-primary" disabled={busy('classes')} type="submit">
-                  🔍 List Classes
+                  <SearchIcon /> List Classes
                 </button>
               </div>
             </PersistedForm>
@@ -200,7 +208,7 @@ export default function ClassesTab({
             {classes.length > 0 && (
               <div style={{ marginTop: '1.25rem' }}>
                 <div className="form-label">
-                  {classes.length} class{classes.length === 1 ? '' : 'es'} — pick one to enroll
+                  {classes.length} class{classes.length === 1 ? '' : 'es'}: pick one to enroll
                 </div>
                 <ul style={{ listStyle: 'none', padding: 0, margin: '0.5rem 0 0' }}>
                   {classes.map((k) => {
@@ -314,7 +322,7 @@ export default function ClassesTab({
                       {caps?.classWaitlist === false && (
                         <em style={{ color: 'var(--text-muted)' }}>
                           {' '}
-                          — {providerInfo?.label} has no waitlist, so a full class still conflicts
+                          {providerInfo?.label} has no waitlist, so a full class still conflicts
                         </em>
                       )}
                     </span>
@@ -326,7 +334,7 @@ export default function ClassesTab({
                     disabled={busy('classes')}
                     type="submit"
                   >
-                    ✍️ Enroll
+                    <PlusIcon /> Enroll
                   </button>
                 </div>
               </PersistedForm>
@@ -340,7 +348,7 @@ export default function ClassesTab({
               }}
             >
               A full, cancelled or finished class throws <code>CONFLICT</code> before anything is
-              written — the capacity check runs here, not after the provider rejects the write.
+              written: the capacity check runs here, not after the provider rejects the write.
             </p>
           </>
         )}

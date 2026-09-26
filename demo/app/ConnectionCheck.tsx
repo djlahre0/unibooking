@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { callCheckConnection, type ActionResult, type Connection } from '../lib/call';
+import { CheckIcon, WarnIcon, XIcon } from './components/icons';
 
 export type Verdict = {
   tone: 'ok' | 'bad' | 'warn';
@@ -195,7 +196,13 @@ export default function ConnectionCheck({
         <div className={`conn-verdict conn-verdict-${current.verdict.tone}`} role="status">
           <div className="conn-verdict-title">
             <span aria-hidden="true">
-              {current.verdict.tone === 'ok' ? '✓' : current.verdict.tone === 'warn' ? '!' : '✗'}
+              {current.verdict.tone === 'ok' ? (
+                <CheckIcon size={15} />
+              ) : current.verdict.tone === 'warn' ? (
+                <WarnIcon size={15} />
+              ) : (
+                <XIcon size={15} />
+              )}
             </span>{' '}
             {current.verdict.title}
             <span className="conn-verdict-ms">{current.ms} ms</span>

@@ -121,7 +121,7 @@ describe('PersistedForm', () => {
     await user.type(screen.getByLabelText('Title'), 'Trim');
     await user.type(screen.getByLabelText('Secret'), 'live-secret');
     await user.click(screen.getByRole('button', { name: 'Go' }));
-    // The password still reaches the handler — it is only never PERSISTED.
+    // The password still reaches the handler: it is only never PERSISTED.
     expect(seen.title).toBe('Trim');
     expect(seen.secret).toBe('live-secret');
   });

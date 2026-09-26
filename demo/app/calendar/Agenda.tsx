@@ -5,6 +5,7 @@ import type { AgendaDay, WindowDays } from '../../lib/calendar/agenda';
 import { MAX_EVENTS_NOTICE } from './constants';
 import TimezoneField from './TimezoneField';
 import ApiHint from '../ApiHint';
+import { CalendarIcon, PinIcon } from '../components/icons';
 
 export default function Agenda({
   days,
@@ -94,7 +95,9 @@ export default function Agenda({
       {loading ? <div className="loading">Loading events…</div> : null}
       {!loading && days.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">🗓</span>
+          <span className="icon">
+            <CalendarIcon />
+          </span>
           No events in this range.
         </div>
       ) : null}
@@ -112,7 +115,9 @@ export default function Agenda({
                 <span className="agenda-time">{item.timeLabel}</span>
                 <span className="agenda-title">{item.booking.title}</span>
                 {item.booking.location ? (
-                  <span className="agenda-location">📍 {item.booking.location}</span>
+                  <span className="agenda-location">
+                    <PinIcon size={13} /> {item.booking.location}
+                  </span>
                 ) : null}
                 {item.booking.status !== 'confirmed' ? (
                   <span className="info-badge warn">{item.booking.status}</span>
