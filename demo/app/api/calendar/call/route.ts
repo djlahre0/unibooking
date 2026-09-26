@@ -23,7 +23,7 @@ export const runtime = 'nodejs';
  *
  * A dead grant (refresh refused, or the provider answering AUTH) clears the
  * session and answers `reconnect: true`. A transient fault (network, timeout,
- * rate limit, 5xx) does not — a blip must never disconnect a working account.
+ * rate limit, 5xx) does not: a blip must never disconnect a working account.
  */
 export async function POST(req: Request): Promise<Response> {
   const config = readCalendarConfig();

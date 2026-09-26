@@ -172,7 +172,7 @@ async function createEventInvitee(
   });
   const resource = asRecord(res?.resource, 'calendly', 'create.resource');
   // The create response may be the scheduled event itself, or an invitee that
-  // references its event by URI — handle both.
+  // references its event by URI: handle both.
   if (typeof resource.start_time === 'string') return toBookingFromEvent(resource);
   const eventUri = resource.event ?? resource.uri;
   return getEvent(http, c, String(eventUri ?? ''));
@@ -217,7 +217,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
     async listServices(query) {
       const c = await http.resolve();
       // event_types is scoped to a user or organization, and the token alone
-      // does not say which — so resolve the current user first. One extra
+      // does not say which, so resolve the current user first. One extra
       // request for the whole list, never one per event type.
       const me = await http.request(c, { path: 'users/me' });
       const user = reqString(String(me?.resource?.uri ?? ''), 'calendly', 'users.me.resource.uri');
@@ -296,8 +296,8 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         const eventType =
           input.serviceId ??
           reqString(String(current.event_type ?? ''), 'calendly', 'scheduled_event.event_type');
-        // Carry the original invitee — including their timezone, which the
-        // create endpoint requires — across to the new booking.
+        // Carry the original invitee, including their timezone, which the
+        // create endpoint requires: across to the new booking.
         let customer: Customer | undefined;
         let inviteeTimezone: string | undefined;
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
@@ -345,7 +345,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
       if (input.status === 'cancelled') {
         const uuid = uuidFromUri(id);
         // The cancellation endpoint returns a Cancellation resource
-        // ({canceled_by, reason, canceler_type, created_at}) — no uri, no
+        // ({canceled_by, reason, canceler_type, created_at}), no uri, no
         // start_time, no end_time. Feeding it to toBookingFromEvent always threw
         // UPSTREAM, so discard it and re-read the event instead.
         await http.request(c, {
@@ -360,7 +360,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         const uuid = uuidFromUri(id);
         // A no-show rides on the INVITEE, not the event: read the event's
         // invitees and flag the first one. `invitee_no_shows` returns an
-        // InviteeNoShow resource (uri/invitee/created_at) — no start_time — so
+        // InviteeNoShow resource (uri/invitee/created_at), no start_time, so
         // discard it and re-read the event, like the cancellation branch does.
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
         const first = asArray(invitees?.collection, 'calendly', 'invitees')[0];

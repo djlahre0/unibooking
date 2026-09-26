@@ -6,21 +6,21 @@ import { resolveSessionSecret, type SecretOverrides } from './secret';
 import type { CalendarProvider, OAuthProvider } from './types';
 
 /**
- * My Calendar configuration — SERVER ONLY. The demo needs no environment
+ * My Calendar configuration: SERVER ONLY. The demo needs no environment
  * variables: the cookie-sealing key is resolved by `./secret` (env override,
- * else a generated + persisted file, else an in-memory key for this process —
+ * else a generated + persisted file, else an in-memory key for this process:
  * see that module's doc comment), so `enabled` is true in the normal case.
  *
  * The one-click "Continue with Google/Microsoft" app an operator registers
  * once, for every later visitor to sign in through, comes from either of two
- * sources — env, or the operator's own saved setup — in this precedence:
+ * sources, env, or the operator's own saved setup, in this precedence:
  *
  *   1. GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET/TENANT in the
  *      environment. Optional, and kept as a higher-precedence override for
  *      hosting that manages secrets that way (e.g. Vercel project settings).
  *   2. Otherwise, whatever the operator saved from the My Calendar or
  *      Connect tab while visiting from localhost (see the loopback-gated
- *      setup route) — persisted to `./oauth-apps.ts`'s git-ignored file, the
+ *      setup route): persisted to `./oauth-apps.ts`'s git-ignored file, the
  *      same way `./secret.ts` persists the cookie-sealing key.
  *
  *   APP_URL   Optional public origin, for deployments behind a proxy where
@@ -59,7 +59,7 @@ const ENV_KEYS: Record<OAuthProvider, readonly [string, string]> = {
  * Whether this provider's credentials come from the environment rather than
  * `.oauth-apps.json`. `readCalendarConfig` below prefers env over the saved
  * file, so deleting the file entry for an env-configured provider would
- * report success and change nothing the visitor can see — the reset route
+ * report success and change nothing the visitor can see: the reset route
  * checks this first and says to change the env vars instead.
  */
 export function isConfiguredByEnv(
@@ -80,7 +80,7 @@ export function readCalendarConfig(
   // explicitly but it's too short. Silently falling back to the generated,
   // per-instance key (./secret) here would quietly reintroduce the exact
   // multi-instance session bug that override exists to prevent (see
-  // README.md's serverless caveat) — better to fail loudly instead. Nothing
+  // README.md's serverless caveat): better to fail loudly instead. Nothing
   // set at all is the normal case: it resolves through `resolveSessionSecret`
   // below and stays enabled.
   const problem =
@@ -90,7 +90,7 @@ export function readCalendarConfig(
   const enabled = problem === undefined;
   const secret = enabled ? resolveSessionSecret({ env, ...secretOverrides }).secret : '';
 
-  // The operator's own saved setup — lower precedence than env, read
+  // The operator's own saved setup: lower precedence than env, read
   // unconditionally (cheap and cached; see oauth-apps.ts) so `enabled` alone
   // still gates the `providers` booleans below exactly as before.
   const apps = readOAuthApps(oauthAppsOverrides);
@@ -138,7 +138,7 @@ export function scopesFor(provider: OAuthProvider): string[] {
 }
 
 /** The library's OAuth client for a configured provider. Throws if the
- *  provider is not configured — callers check `providers[p]` first. */
+ *  provider is not configured: callers check `providers[p]` first. */
 export function oauthClient(
   config: CalendarConfig,
   provider: OAuthProvider,
@@ -155,7 +155,7 @@ export function oauthClient(
 /** A visitor's own client id/secret, as posted to the connect route for
  *  "bring your own OAuth app". `tenant` is Microsoft-only (a visitor's own
  *  Entra app registration may be restricted to one directory); Google
- *  ignores it if present. Absent, Microsoft's own default (`common`) applies —
+ *  ignores it if present. Absent, Microsoft's own default (`common`) applies:
  *  see `customOAuthClient` below. */
 export interface CustomOAuthCreds {
   clientId: string;
@@ -166,11 +166,11 @@ export interface CustomOAuthCreds {
 /** The upper bound on how long a submitted client id/secret/tenant may be.
  *  Generous for every real provider's own format (Google's client ids and
  *  secrets are well under 200 chars; Microsoft's are GUID/base64-ish and
- *  shorter still) — this exists only to reject obvious junk before it is
+ *  shorter still): this exists only to reject obvious junk before it is
  *  ever used, not to encode a real provider limit. */
 const MAX_CUSTOM_CRED_LEN = 512;
 
-/** True for a non-empty, sanely-bounded string — what a submitted client id,
+/** True for a non-empty, sanely-bounded string: what a submitted client id,
  *  client secret or tenant must be before it touches anything. Anything else
  *  is INVALID_INPUT, checked by the caller before any request is made. */
 export function isSaneCred(v: unknown): v is string {
@@ -181,15 +181,15 @@ export function isSaneCred(v: unknown): v is string {
 
 /**
  * The library's OAuth client built directly from a visitor-supplied client
- * id/secret — "bring your own OAuth app". Deliberately never reads
+ * id/secret: "bring your own OAuth app". Deliberately never reads
  * `config.google`/`config.microsoft`: this is the visitor's own app, not the
  * deployer's, and the two must never be conflated (refreshing a token later
  * has to use the SAME client id/secret that requested it). The authorize and
  * token URLs still come from the library's fixed `googleOAuth`/`outlookOAuth`
- * helpers — only the id/secret/tenant are attacker-controlled input, never a
+ * helpers, only the id/secret/tenant are attacker-controlled input, never a
  * host, so this cannot become an SSRF vector. `creds.tenant` reaches
  * `outlookOAuth` through the spread below, which already defaults an absent
- * tenant to `common` (see src/oauth/microsoft.ts) — Google's client silently
+ * tenant to `common` (see src/oauth/microsoft.ts): Google's client silently
  * ignores the extra property.
  */
 export function customOAuthClient(

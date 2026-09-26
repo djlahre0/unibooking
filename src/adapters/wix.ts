@@ -28,13 +28,13 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * for customer resolution.
  *
  * Auth: bring your own OAuth access token (Wix app instance / member / user
- * token). It is sent verbatim in the `Authorization` header — no `Bearer`
+ * token). It is sent verbatim in the `Authorization` header, no `Bearer`
  * prefix, which is how Wix expects app tokens.
  *
  * NOTE: the paths and payload shapes here match the published reference. The
- * fields `listBookings` filters on — the `startDate` date window, `status`,
+ * fields `listBookings` filters on: the `startDate` date window, `status`,
  * `contactDetails.contactId`, and the staff/resource path
- * `bookedEntity.item.slot.resource.id` — are exactly the ones Wix documents as
+ * `bookedEntity.item.slot.resource.id`: are exactly the ones Wix documents as
  * filterable in "Extended Bookings: Supported Filters and Sorting".
  */
 export type WixCredentials = {
@@ -99,7 +99,7 @@ function requireService(serviceId: string | undefined): string {
       provider: 'wix',
       code: 'INVALID_INPUT',
       message:
-        'Wix availability (Time Slots V2) requires a serviceId — it is mandatory except when paging by cursor',
+        'Wix availability (Time Slots V2) requires a serviceId: it is mandatory except when paging by cursor',
     });
   }
   return serviceId;
@@ -118,7 +118,7 @@ function requireRevision(revision: unknown, id: string): string | number {
   return revision as string | number;
 }
 
-/** The bookable slot lives under `bookedEntity.slot` (single session) — Wix also
+/** The bookable slot lives under `bookedEntity.slot` (single session): Wix also
  *  supports `bookedEntity.schedule` for classes, which we surface via `raw`. */
 function slotOf(b: Record<string, any>): Record<string, any> | undefined {
   const entity = b.bookedEntity;
@@ -190,7 +190,7 @@ function splitName(name: string): { firstName: string; lastName?: string } {
   return { firstName: first ?? name, ...(rest.length ? { lastName: rest.join(' ') } : {}) };
 }
 
-/** CRM Contacts v4 `info.name` shape ({ first, last }) — distinct from the
+/** CRM Contacts v4 `info.name` shape ({ first, last }): distinct from the
  *  booking `contactDetails` shape ({ firstName, lastName }). */
 function contactName(name: string): { first: string; last?: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
@@ -253,7 +253,7 @@ async function findOrCreateContact(
     if (found?.id) return String(found.id);
   }
   const info = {
-    // CRM Contacts v4 `info.name` is { first, last } — NOT { firstName, lastName }
+    // CRM Contacts v4 `info.name` is { first, last }, NOT { firstName, lastName }
     // (that shape is right for booking.contactDetails, but wrong here, so the
     // contact's name was being silently dropped).
     ...(customer.name ? { name: contactName(customer.name) } : {}),
@@ -268,7 +268,7 @@ async function findOrCreateContact(
   return reqString(String(created?.contact?.id ?? ''), 'wix', 'contact.id');
 }
 
-/** Reader V2 has NO GET-by-id — you query `extended-bookings` with a filter. Each
+/** Reader V2 has NO GET-by-id: you query `extended-bookings` with a filter. Each
  *  result is an ExtendedBooking wrapper whose `.booking` holds the real booking.
  *  Returns the raw booking objects plus the next cursor. */
 async function queryExtendedBookings(
@@ -355,7 +355,7 @@ export const wix = defineAdapter<WixCredentials>({
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'POST',
-        // Note v1, not v2 — the Staff Members API is the documented way in.
+        // Note v1, not v2: the Staff Members API is the documented way in.
         // Wix auto-manages a resource per staff member and states that
         // staff-linked resources must NOT be driven through Resources V2.
         path: 'bookings/v1/staff-members/query',
@@ -367,7 +367,7 @@ export const wix = defineAdapter<WixCredentials>({
             },
             // The endpoint returns ONLY service providers unless a
             // serviceProvider filter is present. Asking for both keeps
-            // non-providers visible as `active: false` instead of vanishing —
+            // non-providers visible as `active: false` instead of vanishing:
             // past bookings still reference them.
             filter: { serviceProvider: { $in: [true, false] } },
           },
@@ -454,7 +454,7 @@ export const wix = defineAdapter<WixCredentials>({
         contactId = await findOrCreateContact(http, c, input.customer);
       }
       const cust = input.customer;
-      // Wix create requires a participant count — either `totalParticipants` or
+      // Wix create requires a participant count, either `totalParticipants` or
       // `participantsChoices`. Default to 1 unless the caller supplies either.
       const hasParticipants =
         input.providerOptions?.totalParticipants !== undefined ||
@@ -523,7 +523,7 @@ export const wix = defineAdapter<WixCredentials>({
         assertValidRange(input.range, 'wix');
         // `revision` is REQUIRED on reschedule (optimistic concurrency). The slot
         // identifiers have no canonical field, so they come through
-        // providerOptions — echo back the full slot you got from
+        // providerOptions: echo back the full slot you got from
         // `searchAvailability` (its `raw`) rather than assembling one by hand.
         const {
           revision: optRevision,
@@ -577,7 +577,7 @@ export const wix = defineAdapter<WixCredentials>({
     async cancelBooking(id, options) {
       const c = await http.resolve();
       // `revision` is REQUIRED on cancel. `CancelOptions` has no field to carry
-      // one, so it is always read back first — and if it can't be resolved we
+      // one, so it is always read back first, and if it can't be resolved we
       // fail here rather than sending a request Wix is certain to reject.
       // (`updateBooking({ status: 'cancelled' })` accepts one via providerOptions.)
       const revision = requireRevision(await currentRevision(http, c, id), id);
@@ -641,11 +641,11 @@ export const wix = defineAdapter<WixCredentials>({
           provider: 'wix',
           code: 'INVALID_INPUT',
           message:
-            'Wix availability (Time Slots V2) is local-time — pass range.timezone (an IANA zone)',
+            'Wix availability (Time Slots V2) is local-time: pass range.timezone (an IANA zone)',
         });
       }
       const c = await http.resolve();
-      // List Availability Time Slots covers appointment-based services only —
+      // List Availability Time Slots covers appointment-based services only:
       // class and course sessions come from List Event Time Slots instead.
       const res = await http.request(c, {
         method: 'POST',
@@ -659,7 +659,7 @@ export const wix = defineAdapter<WixCredentials>({
           // means the bookable ones.
           bookable: true,
           // `availableResources` comes back empty unless the request asks for
-          // resources — either this staff filter or a caller-supplied
+          // resources, either this staff filter or a caller-supplied
           // `includeResourceTypeIds` (passed through providerOptions below).
           ...(query.staffId ? { resourceTypes: [{ resourceIds: [query.staffId] }] } : {}),
           ...query.providerOptions,
@@ -671,7 +671,7 @@ export const wix = defineAdapter<WixCredentials>({
           ? localToInstant(local, tz, (ms) => formatWithOffset(ms, 0))
           : undefined;
       return slots.flatMap((s: any): AvailabilitySlot[] => {
-        // A TimeSlot carries only localStartDate/localEndDate — there is no
+        // A TimeSlot carries only localStartDate/localEndDate, there is no
         // offset-bearing pair and no duration to derive an end from.
         const start = toInstant(s.localStartDate);
         const end = toInstant(s.localEndDate);

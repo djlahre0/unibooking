@@ -55,7 +55,7 @@ function item(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * UpsertCatalogObject's reply envelope — verified against live Square.
+ * UpsertCatalogObject's reply envelope: verified against live Square.
  *
  * Note this is NOT the RetrieveCatalogObject envelope: the retrieve returns
  * `{ object }`, the upsert returns `{ catalog_object, id_mappings }`. Mocking

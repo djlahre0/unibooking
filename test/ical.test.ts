@@ -140,7 +140,7 @@ describe('ical: multistatus XML decoding', () => {
 
 describe('ical: value sanitization', () => {
   // A CRLF in an opaque value (UID, CAL-ADDRESS) would end the content line and
-  // start a new property line — letting a caller-supplied id rewrite the event.
+  // start a new property line: letting a caller-supplied id rewrite the event.
   const injected = (ics: string): boolean => ics.split('\r\n').includes('SUMMARY:injected');
 
   it('does not let a newline in the UID inject an iCalendar property', () => {
@@ -379,7 +379,7 @@ describe('patchICS TZID preservation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Client-side recurrence expansion (RRULE / EXDATE) — the CalDAV fallback for
+// Client-side recurrence expansion (RRULE / EXDATE): the CalDAV fallback for
 // servers that ignore <C:expand>. Governing rule: an unsupported RRULE part
 // must return the event UNCHANGED rather than emit wrong occurrences.
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * unibooking — stateless, unified CRUD over booking & calendar providers.
+ * unibooking: stateless, unified CRUD over booking & calendar providers.
  *
  * Import the core here; import adapters from their own subpath so you only
  * bundle what you use:
@@ -74,7 +74,7 @@ export {
   type QueryValue,
 } from './http';
 
-// What each provider requires to connect, as data — field names, labels and
+// What each provider requires to connect, as data: field names, labels and
 // which values are secret. Metadata only: the package ships no credential.
 // Safe in a browser (a connect form needs it); the per-tenant wiring that
 // consumes it lives behind `unibooking/connections`, which is server-only.

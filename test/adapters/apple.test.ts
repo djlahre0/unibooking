@@ -253,7 +253,7 @@ describe('apple: update does GET then PUT', () => {
       'series-weekly::20260720T090000Z',
     ]);
     expect(bookings.every((b) => b.seriesId === 'series-weekly')).toBe(true);
-    // raw stays the honest master (still carries the RRULE) — there is no
+    // raw stays the honest master (still carries the RRULE), there is no
     // per-occurrence server payload to attribute to each instance.
     expect(bookings.every((b) => String(b.raw).includes('RRULE:FREQ=WEEKLY'))).toBe(true);
   });

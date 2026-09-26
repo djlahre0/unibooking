@@ -68,7 +68,7 @@ export interface AdapterDef<TCreds extends ProviderCredentials> {
   allowCrossOrigin?: boolean;
   /** Build the method implementations against a ready HTTP context. `env`
    *  carries the client's clock (`ClientOptions.now`), for adapters whose
-   *  answer depends on the current time — never read `Date.now()` directly,
+   *  answer depends on the current time, never read `Date.now()` directly,
    *  or tests cannot pin it. */
   build: (http: HttpContext<TCreds>, env: AdapterEnv) => AdapterMethods;
 }
@@ -113,7 +113,7 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
         return m.cancelBooking(id, options);
       },
       // `ListBookingsQuery.status` is documented without caveat, but most
-      // providers have no status filter to forward it to — Google, Square,
+      // providers have no status filter to forward it to: Google, Square,
       // Mindbody, Setmore, Acuity and Vagaro all returned cancelled bookings
       // from a `status: 'confirmed'` query. Adapters forward whatever their
       // provider supports (it is cheaper upstream and keeps pages dense); this
@@ -129,7 +129,7 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
         return { ...result, bookings: result.bookings.filter((b) => b.status === query.status) };
       },
       // Chronological order is part of the canonical result, not something each
-      // adapter re-derives — see `sortSlots` for why provider order isn't it.
+      // adapter re-derives: see `sortSlots` for why provider order isn't it.
       searchAvailability: async (query) => sortSlots(await m.searchAvailability(query)),
       checkConnection: m.checkConnection,
       // `limit` is documented on both queries without caveat, but several
@@ -140,7 +140,7 @@ export function defineAdapter<TCreds extends ProviderCredentials>(
       //
       // Truncation is applied ONLY on a terminal page. If the provider handed
       // back a cursor it is paginating for itself, and slicing there would
-      // silently strip the items between the cut and the next page — the caller
+      // silently strip the items between the cut and the next page: the caller
       // would page forward and never see them.
       ...(m.listServices
         ? {
@@ -328,15 +328,15 @@ function assertVersioned(def: { id: ProviderId; capabilities: Capabilities }): v
 /**
  * Trim bookings to the canonical range.
  *
- * Several list endpoints take whole DATES rather than instants — Acuity's
+ * Several list endpoints take whole DATES rather than instants: Acuity's
  * `minDate`/`maxDate`, Phorest's `from_date`/`to_date`, Setmore's
- * `startDate`/`endDate`, Zenoti's date pair — so they answer with the entire
+ * `startDate`/`endDate`, Zenoti's date pair, so they answer with the entire
  * start and end days no matter what times were asked for. Vagaro is worse: its
  * endpoint takes no window at all and returns the customer's whole history.
  *
  * Same half-open convention as `slotsWithinRange`: kept when the booking
  * *starts* at or after `range.start` and strictly before `range.end`. Note this
- * is a deliberate choice of "starts within" over "overlaps" — it matches what
+ * is a deliberate choice of "starts within" over "overlaps": it matches what
  * the date-granular providers are being asked for and keeps paging honest. It is
  * applied per-adapter rather than in `defineAdapter` precisely because providers
  * that filter server-side (Google, Outlook, Graph) return bookings that merely
@@ -365,7 +365,7 @@ const DEAD_CONNECTION_CODES = new Set<ErrorCode>(['AUTH', 'FORBIDDEN', 'NOT_FOUN
  *
  * A dead connection is the expected answer to `checkConnection`, so it is
  * returned rather than thrown. A network blip, timeout, rate limit or 5xx is
- * NOT evidence that a salon revoked access — those rethrow, so a consumer
+ * NOT evidence that a salon revoked access: those rethrow, so a consumer
  * cannot mistake a transient failure for a revoked integration and disconnect
  * a healthy one.
  */
@@ -393,7 +393,7 @@ export async function probeConnection(
  *
  *  Only trims a TERMINAL page. When the provider returned a cursor it is paging
  *  for itself, and slicing there would silently strip the items between the cut
- *  and the next page — the caller would page forward and never see them. */
+ *  and the next page: the caller would page forward and never see them. */
 function capPage<K extends string, T>(
   result: { [P in K]: T[] } & { nextPageToken?: string },
   key: K,
@@ -469,7 +469,7 @@ export function asArray(v: unknown, provider: ProviderId, ctx: string): any[] {
  *  Several providers return prices as decimal strings or floats. Rounds rather
  *  than truncates so `"45.005"` cannot silently lose a cent downward, and
  *  returns undefined for anything unparseable or negative rather than emitting a
- *  bogus amount. The currency is always the caller's problem — a `Money` without
+ *  bogus amount. The currency is always the caller's problem: a `Money` without
  *  one is unusable, so `price` is omitted rather than guessed. */
 export function decimalToMinorUnits(value: unknown): number | undefined {
   if (value === null || value === undefined || value === '') return undefined;

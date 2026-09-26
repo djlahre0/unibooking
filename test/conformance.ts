@@ -60,7 +60,7 @@ export function assertCanonicalBooking(b: Booking, provider: ProviderId): void {
   expect(b.provider).toBe(provider);
   expect(typeof b.title).toBe('string');
   // Canonical instants must carry an explicit offset (Z or ±HH:MM), not merely
-  // be parseable — an offset-less string is an ambiguous instant.
+  // be parseable: an offset-less string is an ambiguous instant.
   expect(
     isInstant(b.range.start),
     `range.start is an offset-bearing instant: ${b.range.start}`,
@@ -121,7 +121,7 @@ function assertCanonical(provider: ProviderId, result: any): void {
   }
   // A ClassSession also carries `provider` and `range`, so it must be matched
   // before the Booking branch below or it would be checked against the wrong
-  // status enum. `full` is the discriminator — bookings have no such field.
+  // status enum. `full` is the discriminator: bookings have no such field.
   if (typeof result === 'object' && 'provider' in result && 'full' in result) {
     assertCanonicalClassSession(result, provider);
     return;
@@ -151,7 +151,7 @@ function assertCanonical(provider: ProviderId, result: any): void {
 }
 
 /** Drive every method of an adapter against mocked HTTP and assert the
- *  canonical contract holds — the shared test kit every adapter runs. */
+ *  canonical contract holds: the shared test kit every adapter runs. */
 export function runConformance(config: ConformanceConfig): void {
   describe(`conformance: ${config.provider}`, () => {
     let agent: MockAgent;
@@ -224,7 +224,7 @@ export function runConformance(config: ConformanceConfig): void {
 
     it('capability↔method: enumeration methods match their flags', () => {
       const client = config.makeClient();
-      // checkConnection is unconditional — the whole point is that a call site
+      // checkConnection is unconditional: the whole point is that a call site
       // can use it as a health check without first consulting a flag.
       expect(typeof client.checkConnection, 'checkConnection is present').toBe('function');
       expect(

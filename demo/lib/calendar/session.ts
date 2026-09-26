@@ -2,7 +2,7 @@ import type { CalendarConfig } from './config';
 import type { Account, OAuthProvider } from './types';
 
 /**
- * The My Calendar session — SERVER ONLY.
+ * The My Calendar session: SERVER ONLY.
  *
  * Tokens (or the Apple app-specific password) live in an encrypted, HttpOnly
  * cookie rather than a database, so the demo server stays stateless: it holds
@@ -11,7 +11,7 @@ import type { Account, OAuthProvider } from './types';
  * Sealing is AES-256-GCM with a key derived from SESSION_SECRET by HKDF-SHA256.
  * The cookie NAME is bound in as additional authenticated data, so a value
  * sealed for the short-lived OAuth-flow cookie can't be replayed as a session.
- * An expiry travels inside the ciphertext and is checked on unseal — the
+ * An expiry travels inside the ciphertext and is checked on unseal: the
  * cookie's own Max-Age is only a hint to the browser.
  *
  * Microsoft's tokens push a sealed session past the ~4 KB a single cookie may
@@ -34,7 +34,7 @@ export interface StoredTokens {
   scope?: string;
 }
 
-/** The visitor's own OAuth app, sealed alongside the tokens it issued —
+/** The visitor's own OAuth app, sealed alongside the tokens it issued:
  *  "bring your own OAuth app". Present only when this session was connected
  *  that way; absent for the deployer's env-configured app. Never returned to
  *  the page (see status/route.ts): the session cookie is the only place it
@@ -44,7 +44,7 @@ export interface CustomApp {
   clientId: string;
   clientSecret: string;
   /** Microsoft-only: the visitor's own Entra app may be restricted to one
-   *  directory. Absent means Microsoft's own `common` default applies —
+   *  directory. Absent means Microsoft's own `common` default applies:
    *  never read from env (see lib/calendar/config.ts). Ignored for Google. */
   tenant?: string;
 }
@@ -55,7 +55,7 @@ export type CalendarSession =
 
 /** The in-flight OAuth handshake: what the callback must see echoed back.
  *  `custom` carries a "bring your own OAuth app" visitor's client id/secret
- *  through the short-lived sign-in cookie — the callback has no server-side
+ *  through the short-lived sign-in cookie: the callback has no server-side
  *  record of this visitor's app, so it can only get them back this way. */
 export interface FlowState {
   provider: OAuthProvider;

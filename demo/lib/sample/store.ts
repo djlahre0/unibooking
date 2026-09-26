@@ -63,7 +63,7 @@ function isBookingShape(v: unknown): boolean {
 
 /**
  * Shape guard: a corrupt or older payload is discarded rather than trusted.
- * Checked one level into each collection, not just that it is an array — a
+ * Checked one level into each collection, not just that it is an array: a
  * bare `{}` inside `bookings` would otherwise sail through and reach the UI.
  */
 function isSampleData(value: unknown): value is SampleData {
@@ -99,7 +99,7 @@ export function loadSample(storage?: Storage): SampleData {
     }
   }
   // Only trust the fallback if IT was produced by this same storage (by
-  // reference) — otherwise an unrelated Storage instance would inherit
+  // reference), otherwise an unrelated Storage instance would inherit
   // whatever another one last held, and never get its own write.
   if (memory && memory.store === store) return memory.data;
   const tz = browserZone();

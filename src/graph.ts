@@ -58,7 +58,7 @@ export function parseGraphError(
 /**
  * Prefer header: UTC times, plus immutable ids.
  *
- * Graph event ids are NOT stable by default — the docs state the value "changes
+ * Graph event ids are NOT stable by default: the docs state the value "changes
  * when the item is moved from one container (such as a folder or calendar) to
  * another". For a booking library whose contract is "persist this id, call
  * getBooking(id) later", that is a durability defect, so we opt into

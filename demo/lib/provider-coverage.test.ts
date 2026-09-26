@@ -10,7 +10,7 @@ import { ENVIRONMENTS } from './environments';
 
 /**
  * Every adapter the library ships must be fully wired into the demo. A provider
- * that is present in one map and absent from another does not fail loudly — it
+ * that is present in one map and absent from another does not fail loudly: it
  * silently vanishes from the picker, or reaches a transport that refuses it, and
  * looks to the visitor like the provider simply is not supported.
  *

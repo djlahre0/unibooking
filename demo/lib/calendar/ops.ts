@@ -17,7 +17,7 @@ import type { CalendarOp, EventInput } from './types';
 
 /**
  * The server side of My Calendar: turn a session into a unibooking client and
- * run one operation on it — SERVER ONLY.
+ * run one operation on it: SERVER ONLY.
  *
  * Every provider call goes through the library's adapters, so the demo carries
  * no provider logic of its own. OAuth sessions are wrapped in
@@ -109,7 +109,7 @@ const EVENT_STRINGS = ['title', 'start', 'end', 'timezone', 'description', 'loca
  * `EventInput` declares. Checked HERE, once, rather than field-by-field
  * downstream: `toUpdate` used to call `.trim()` on whatever arrived and turned
  * a malformed body into an internal TypeError, and a non-boolean `allDay` was
- * silently dropped by `details()` — so the update still went out to the
+ * silently dropped by `details()`, so the update still went out to the
  * provider, minus the field the caller asked for. Both now fail closed.
  */
 function eventOf(client: BookingClient, args: Args): EventInput {

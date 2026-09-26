@@ -29,7 +29,7 @@ describe('time', () => {
   });
 
   it('addMinutes uses fixed-offset math (not zone/DST aware) by design', () => {
-    // Across the US spring-forward, a fixed -08:00 offset stays -08:00 — the
+    // Across the US spring-forward, a fixed -08:00 offset stays -08:00: the
     // result is the correct absolute instant, not a zone-shifted wall clock.
     expect(addMinutes('2026-03-08T01:30:00-08:00', 60)).toBe('2026-03-08T02:30:00-08:00');
   });

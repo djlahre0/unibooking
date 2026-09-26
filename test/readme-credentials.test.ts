@@ -19,7 +19,7 @@ function expectedRow(id: string): string {
   const fields = PROVIDER_CREDENTIALS[id as keyof typeof PROVIDER_CREDENTIALS][0]!.fields;
   const fmt = (list: typeof fields) => list.map((f) => `\`${f.key}\``).join(', ');
   const req = fmt(fields.filter((f) => f.required));
-  const opt = fmt(fields.filter((f) => !f.required)) || '—';
+  const opt = fmt(fields.filter((f) => !f.required)) || '-';
   return `| \`${id}\` | ${req} | ${opt} |`;
 }
 

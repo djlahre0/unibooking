@@ -402,7 +402,7 @@ describe('square: customer resolution + version fetch', () => {
   it('rejects a create Square would 400 on, naming the missing field', async () => {
     const client = square({ accessToken: 't', locationId: 'LOC1' });
     // NOTE: tsconfig sets `exactOptionalPropertyTypes`, so each case builds its
-    // object literally — `{ ...base, staffId: undefined }` does not compile.
+    // object literally: `{ ...base, staffId: undefined }` does not compile.
     const common = { title: 'Cut', range: RANGE, customer: { id: 'CUST1' } };
 
     await expect(
@@ -427,7 +427,7 @@ describe('square: customer resolution + version fetch', () => {
       message: expect.stringContaining('serviceId'),
     });
 
-    // Nothing was sent — the guard is client-side.
+    // Nothing was sent: the guard is client-side.
     agent.assertNoPendingInterceptors();
   });
 
@@ -444,7 +444,7 @@ describe('square: customer resolution + version fetch', () => {
     );
 
     const client = square({ accessToken: 't', locationId: 'LOC1' });
-    // No staffId, no serviceId, no version — the caller has taken over the
+    // No staffId, no serviceId, no version: the caller has taken over the
     // segment, so the guard must not second-guess them.
     await client.createBooking({
       title: 'Cut',
@@ -535,7 +535,7 @@ describe('square: customer resolution + version fetch', () => {
 
   /**
    * Square's customer search index is eventually consistent: a customer created
-   * now is not findable for a second or two (measured against live Square — a
+   * now is not findable for a second or two (measured against live Square: a
    * miss at 0.9s, a hit at 2.3s). So two findOrCreate calls for the same person
    * in quick succession both miss the index and both reach the create.
    *

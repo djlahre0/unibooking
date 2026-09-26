@@ -174,7 +174,7 @@ export async function syncProjectCalendars(input: ProjectSyncInput): Promise<{
       }
     } catch (err) {
       complete = false;
-      report.errors.push({ bookingId: '—', message: `Could not read a calendar: ${(err as Error).message}` });
+      report.errors.push({ bookingId: '-', message: `Could not read a calendar: ${(err as Error).message}` });
     }
   }
 

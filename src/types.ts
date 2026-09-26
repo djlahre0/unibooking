@@ -1,5 +1,5 @@
 /**
- * Canonical types. Intentionally lean — only fields that make sense across
+ * Canonical types. Intentionally lean, only fields that make sense across
  * (almost) every provider live here. Anything provider-specific goes in `raw`
  * or `providerOptions`, never bolted onto the core shape.
  */
@@ -53,13 +53,13 @@ export interface Capabilities {
    *  listed. Calendar providers only. */
   calendarWrite: boolean;
   /** `listServices()` is available. Deliberately distinct from `services`,
-   *  which only says bookings *reference* a service — a provider can have one
+   *  which only says bookings *reference* a service: a provider can have one
    *  without the other, and several do. */
   serviceCatalog: boolean;
   /** `listStaff()` is available. Distinct from `staff` for the same reason. */
   staffDirectory: boolean;
   /** `createService()` / `updateService()` / `setServiceActive()` are available.
-   *  Far rarer than reading — most providers' catalogs are read-only to
+   *  Far rarer than reading: most providers' catalogs are read-only to
    *  third parties. */
   serviceCatalogWrite: boolean;
   /** `createStaff()` / `updateStaff()` are available. Deactivating and
@@ -77,19 +77,19 @@ export interface Capabilities {
    *  is the only way to retire one. */
   serviceDelete: boolean;
   /** `listCalendars()` is available: the account's calendars can be enumerated
-   *  and one picked to target. Plain calendar providers only — booking
+   *  and one picked to target. Plain calendar providers only: booking
    *  platforms have one schedule per business, not a list of calendars. */
   calendarList: boolean;
   /** `listClasses()` / `getClass()` are available. False for every provider
-   *  with no group-class concept — the plain calendars (Google, Outlook,
+   *  with no group-class concept: the plain calendars (Google, Outlook,
    *  Apple) have events, which carry no capacity or enrollment. */
   classCatalog: boolean;
   /** `enrollInClass()` is available. Distinct from `classCatalog` for the same
    *  reason `serviceCatalogWrite` is distinct from `serviceCatalog`: a provider
    *  can publish its schedule without letting third parties enroll into it. */
   classEnrollment: boolean;
-  /** Services and staff carry each other's ids — `Service.staffIds` and/or
-   *  `Staff.serviceIds` — so a caller can tell who performs what without
+  /** Services and staff carry each other's ids: `Service.staffIds` and/or
+   *  `Staff.serviceIds`, so a caller can tell who performs what without
    *  guessing. Also enables the `staffId`/`serviceId` filters on the list
    *  queries. */
   staffServiceAssignment: boolean;
@@ -101,7 +101,7 @@ export interface Capabilities {
   serviceCategories: boolean;
   /** `getBusinessHours()` is available: the recurring weekly opening hours of
    *  the business or location. Distinct from availability, which answers "is
-   *  this specific slot bookable" — opening hours are the weekly pattern. */
+   *  this specific slot bookable": opening hours are the weekly pattern. */
   businessHours: boolean;
   /** A full class can be joined via `enrollInClass({ allowWaitlist: true })`,
    *  yielding a booking with `status: 'waitlisted'`. When false, a full class
@@ -112,7 +112,7 @@ export interface Capabilities {
   changeFeed: boolean;
   /** `watchBookings()` / `renewWatch()` / `stopWatch()` are available: the
    *  provider notifies a URL you host when bookings change. Distinct from
-   *  `webhooks`, which says a signature verifier exists — a provider can sign
+   *  `webhooks`, which says a signature verifier exists: a provider can sign
    *  webhooks you configure in its dashboard without offering an API to
    *  subscribe. */
   changeNotifications: boolean;
@@ -123,7 +123,7 @@ export interface Capabilities {
 }
 
 /** An absolute time span. `start`/`end` are RFC3339 timestamps **with offset**
- *  (unambiguous instants). `timezone` is an IANA name for display only — it
+ *  (unambiguous instants). `timezone` is an IANA name for display only: it
  *  never changes which instant `start`/`end` refer to. Invariant: `end > start`. */
 export interface TimeRange {
   start: string;
@@ -162,7 +162,7 @@ export interface UpdateCalendarInput {
 }
 
 /**
- * A client record as the provider holds it — what `customers.list/get/create/
+ * A client record as the provider holds it: what `customers.list/get/create/
  * update` return. Distinct from `Customer`, which is the loose "who is this
  * booking for" input: here `id` is always present, and it is the stable
  * provider id to link a record on your side to.
@@ -235,7 +235,7 @@ export interface Booking {
   customer?: Customer;
   staffId?: string;
   serviceId?: string;
-  /** Set when this booking is an enrollment in a group class — the
+  /** Set when this booking is an enrollment in a group class: the
    *  `ClassSession.id` it was created against. Only `enrollInClass` sets it;
    *  ordinary appointments leave it unset. */
   classId?: string;
@@ -252,7 +252,7 @@ export interface Booking {
    *  `2026-09-22T00:00:00Z` is the single day 21 Sep). */
   allDay?: boolean;
   /** Set on one occurrence of a recurring series: the id that addresses the
-   *  whole series. `id` itself addresses only this occurrence — updating or
+   *  whole series. `id` itself addresses only this occurrence: updating or
    *  cancelling by `id` changes this one; by `seriesId`, all of them. Calendar
    *  providers (google, outlook, apple) set it; booking platforms leave it
    *  unset. */
@@ -273,7 +273,7 @@ export interface CreateBookingInput {
   staffId?: string;
   serviceId?: string;
   /** Passed to providers that support it (e.g. Square `idempotency_key`) so a
-   *  network retry can't double-book. Ignored by providers without support —
+   *  network retry can't double-book. Ignored by providers without support:
    *  check `capabilities.idempotency`. */
   idempotencyKey?: string;
   /** Ask the provider to notify the customer/attendees about the new booking.
@@ -287,7 +287,7 @@ export interface CreateBookingInput {
   location?: string;
   /** Create a whole-day event. The event's dates are the calendar dates of
    *  `range.start` and `range.end` as written in their own offsets, end
-   *  exclusive — so `2026-09-21T00:00:00+05:30` .. `2026-09-22T00:00:00+05:30`
+   *  exclusive, so `2026-09-21T00:00:00+05:30` .. `2026-09-22T00:00:00+05:30`
    *  is the single day 21 Sep. Honored by calendar providers; ignored elsewhere. */
   allDay?: boolean;
   /** Escape hatch for provider-specific required fields
@@ -351,7 +351,7 @@ export interface ListBookingsResult {
 
 export interface SyncBookingsQuery {
   /** The `syncToken` of the previous completed round. Omit for the first,
-   *  full sync — which returns every booking as an upsert. */
+   *  full sync, which returns every booking as an upsert. */
   syncToken?: string;
   /** Continue a round: the previous page's `nextPageToken`. Send the same
    *  `syncToken` and `range` as the round's first page. */
@@ -422,7 +422,7 @@ export interface AvailabilityQuery {
    *  can start at :00, :15, :30, :45). Default: back-to-back slots of
    *  `durationMinutes`. */
   intervalMinutes?: number;
-  /** Only offer slots inside these weekly hours — the staff member's schedule
+  /** Only offer slots inside these weekly hours: the staff member's schedule
    *  or the business's opening hours (`getBusinessHours()` returns this shape).
    *  Without it, any free time in `range` is offered, including the night. */
   workingHours?: WorkingHours;
@@ -439,7 +439,7 @@ export interface AvailabilityQuery {
   providerOptions?: Record<string, unknown>;
 }
 
-/** Recurring weekly hours, anchored in a zone — a staff schedule or opening
+/** Recurring weekly hours, anchored in a zone: a staff schedule or opening
  *  hours. `BusinessHours` from `getBusinessHours()` fits whenever it carries a
  *  timezone. */
 export interface WorkingHours {
@@ -469,7 +469,7 @@ export interface Money {
 
 export interface Service {
   /** The id that `CreateBookingInput.serviceId` accepts for this provider. Not
-   *  always the provider's most obvious "service" id — Square's booking API
+   *  always the provider's most obvious "service" id: Square's booking API
    *  takes the item *variation* id, so that adapter flattens each catalog item
    *  into one Service per variation. */
   id: string;
@@ -498,7 +498,7 @@ export interface Staff {
   active: boolean;
   /** Services this member can perform, as `Service.id` values. Present only
    *  where `capabilities.staffServiceAssignment` is true, and only on the
-   *  providers that report it from the staff side — several model the link on
+   *  providers that report it from the staff side: several model the link on
    *  the service instead, where it surfaces as `Service.staffIds`. */
   serviceIds?: string[];
   raw: unknown;
@@ -531,7 +531,7 @@ export interface HoursPeriod {
   /** Local wall-clock `HH:MM` (24h) in `BusinessHours.timezone`. */
   start: string;
   /** Local wall-clock `HH:MM`. May be less than or equal to `start` for a
-   *  window that runs past midnight — compare dates, not strings. */
+   *  window that runs past midnight: compare dates, not strings. */
   end: string;
 }
 
@@ -596,7 +596,7 @@ export interface ListClassesQuery {
   /** Only occurrences of this class definition. */
   serviceId?: string;
   /** Maximum entries to return. Same terminal-page backstop as
-   *  `listServices` — see `ListServicesQuery.limit`. */
+   *  `listServices`: see `ListServicesQuery.limit`. */
   limit?: number;
   /** Opaque, provider-defined. Pass the previous result's `nextPageToken`. */
   pageToken?: string;
@@ -628,7 +628,7 @@ export interface ListServicesQuery {
   /** Only services in this category (a `ServiceCategory.id`). */
   categoryId?: string;
   /** Maximum entries to return. Forwarded to providers that support a page
-   *  size; for the several that do not, the page is trimmed locally instead —
+   *  size; for the several that do not, the page is trimmed locally instead:
    *  but only when it is the LAST page, since trimming a page that carries a
    *  `nextPageToken` would hide the entries between the cut and the next page. */
   limit?: number;
@@ -664,14 +664,14 @@ export interface CreateServiceInput {
   providerOptions?: Record<string, unknown>;
 }
 
-/** Partial update. Omitted fields are left untouched — an adapter must never
+/** Partial update. Omitted fields are left untouched: an adapter must never
  *  clear a field the caller did not mention. */
 export interface UpdateServiceInput {
   name?: string;
   description?: string;
   durationMinutes?: number;
   price?: Money;
-  /** Activate (`true`) or deactivate (`false`) in the same call — the same
+  /** Activate (`true`) or deactivate (`false`) in the same call: the same
    *  effect as `setServiceActive`, applied after the other fields. Available
    *  wherever `updateService` is (`serviceCatalogWrite`). */
   active?: boolean;
@@ -689,7 +689,7 @@ export interface UpdateStaffInput {
   name?: string;
   email?: string;
   phone?: string;
-  /** Activate or deactivate in the same call — the same effect as
+  /** Activate or deactivate in the same call: the same effect as
    *  `setStaffActive`, applied after the other fields. Needs
    *  `capabilities.staffDeactivate`; elsewhere it throws `UNSUPPORTED` rather
    *  than being silently ignored (Microsoft Bookings has no inactive state). */
@@ -699,7 +699,7 @@ export interface UpdateStaffInput {
 
 /** One calendar in a connected account. */
 export interface Calendar {
-  /** Exactly what this adapter accepts to target the calendar — Google and
+  /** Exactly what this adapter accepts to target the calendar: Google and
    *  Outlook `calendarId`, Apple `calendarUrl`. Same round-trip rule as
    *  `Service.id`: listing hands back the id that operations take. */
   id: string;
@@ -739,14 +739,14 @@ export interface ConnectionStatus {
   reason?: 'AUTH' | 'FORBIDDEN' | 'NOT_FOUND';
   /** The provider's own message, when it gave one. */
   message?: string;
-  /** Whatever identity the probe surfaced. All fields optional — providers
+  /** Whatever identity the probe surfaced. All fields optional: providers
    *  differ widely in what a probe returns. */
   account?: { id?: string; name?: string; email?: string };
   raw: unknown;
 }
 
 /** Credentials are never persisted by this package. With the function form of
- *  `CredsInput`, no token is even retained on the client — it is fetched fresh
+ *  `CredsInput`, no token is even retained on the client: it is fetched fresh
  *  per request. Each adapter narrows this to its own concrete credential type. */
 export interface ProviderCredentials {
   [key: string]: unknown;
@@ -798,7 +798,7 @@ export interface BookingClient {
   listBookings(query: ListBookingsQuery): Promise<ListBookingsResult>;
   /** Throws `UnibookingError('UNSUPPORTED')` when `capabilities.availability` is false. */
   searchAvailability(query: AvailabilityQuery): Promise<AvailabilitySlot[]>;
-  /** Present on every adapter. Never throws for a dead connection — that is the
+  /** Present on every adapter. Never throws for a dead connection, that is the
    *  expected answer, returned as `{ ok: false, reason }`. Genuine faults
    *  (network, timeout, rate limit, 5xx) still throw, so a transient blip is
    *  never mistaken for a revoked integration. */
@@ -842,7 +842,7 @@ export interface BookingClient {
    *  when `capabilities.changeNotifications` is true. */
   watchBookings?(input: WatchInput): Promise<Watch>;
   /** Extend a watch before `expiresAt`. Returns the watch to store from now on
-   *  — Google replaces the channel (new `id`), Graph extends the subscription.
+   *  Google replaces the channel (new `id`), Graph extends the subscription.
    *  Pass the same `input` the watch was created with. */
   renewWatch?(watch: Watch, input: WatchInput): Promise<Watch>;
   /** Stop notifications. A watch that already ended is not an error. */
@@ -852,7 +852,7 @@ export interface BookingClient {
    *
    *  Returns an ordinary `Booking` carrying `classId`, so cancelling an
    *  enrollment is just `cancelBooking(booking.id)` and enrollments show up in
-   *  `listBookings` alongside appointments — there is deliberately no parallel
+   *  `listBookings` alongside appointments, there is deliberately no parallel
    *  enrollment lifecycle to keep in sync.
    *
    *  Throws `CONFLICT` when the class is full and the waitlist is either not

@@ -237,7 +237,7 @@ describe('calendly: cancellation response is not a Booking', () => {
   it('re-reads the event instead of mapping the Cancellation resource', async () => {
     const pool = agent.get(ORIGIN);
     // POST /cancellation returns a Cancellation ({canceled_by, reason,
-    // canceler_type, created_at}) — no uri, no start_time, no end_time. Mapping
+    // canceler_type, created_at}), no uri, no start_time, no end_time. Mapping
     // it directly always threw UPSTREAM.
     pool.intercept({ path: '/scheduled_events/EVT1/cancellation', method: 'POST' }).reply(
       201,

@@ -2,7 +2,7 @@ import { instantToZoned, zonedToInstant, type Booking } from 'unibooking';
 
 /**
  * Pure agenda logic for My Calendar: the visible window, and events grouped by
- * day in the DISPLAY timezone the user picked — which may differ from the zone
+ * day in the DISPLAY timezone the user picked, which may differ from the zone
  * an event was created in. No React, no fetch; unit-tested on its own.
  *
  * Dates are `YYYY-MM-DD` strings throughout. Date arithmetic goes through
@@ -45,7 +45,7 @@ export function windowRange(
   };
 }
 
-/** `Mon, 21 Sep` — built by hand so it reads the same on every locale/ICU. */
+/** `Mon, 21 Sep`: built by hand so it reads the same on every locale/ICU. */
 export function dayLabel(date: string): string {
   const d = utcDate(date);
   return `${WEEKDAYS[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
@@ -67,7 +67,7 @@ export interface AgendaDay {
  * Group events into the window's days.
  *
  * - An all-day event's dates are the calendar dates in its range (UTC
- *   midnights, end exclusive — the canonical form), shown on every day it
+ *   midnights, end exclusive: the canonical form), shown on every day it
  *   covers and never shifted by the display zone: "all day on the 21st" is the
  *   21st everywhere.
  * - A timed event goes on its start day in the display zone; one already in

@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 /**
- * Test-only fetch router, installed with `vi.stubGlobal('fetch', …)` — the same
+ * Test-only fetch router, installed with `vi.stubGlobal('fetch', …)`: the same
  * way the proxy route's tests keep the suite offline. Every adapter and OAuth
  * client in the demo uses the global fetch, so this sees all of it.
  *

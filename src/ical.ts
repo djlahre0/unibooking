@@ -2,7 +2,7 @@ import { formatWithOffset } from './time';
 import { localToInstant, zoneOffsetMinutes } from './tz';
 
 /**
- * Minimal, dependency-free iCalendar (RFC 5545) reader/writer — enough for the
+ * Minimal, dependency-free iCalendar (RFC 5545) reader/writer: enough for the
  * CalDAV adapter's VEVENT round-trips. Handles line folding, the common DTSTART
  * forms (UTC `Z`, `TZID=`, `VALUE=DATE`, floating), and TZID → instant via the
  * platform `Intl` time-zone database.
@@ -16,7 +16,7 @@ export interface VEvent {
   end?: string;
   attendee?: { email?: string; name?: string };
   /** Present only on an overridden occurrence of a recurring series. Expanded
-   *  instances of one series share a DAV resource — this is what tells them
+   *  instances of one series share a DAV resource: this is what tells them
    *  apart. The raw property value, without its parameters. */
   recurrenceId?: string;
   /** `recurrenceId` as a canonical instant, read with its own parameters (a
@@ -65,7 +65,7 @@ function icalDateToInstant(value: string, params: Record<string, string>): strin
     return iso ? iso + 'Z' : undefined;
   }
   if (params.TZID) return zonedToInstant(value, params.TZID);
-  // Floating time: no zone info — treat as UTC (documented limitation).
+  // Floating time: no zone info: treat as UTC (documented limitation).
   const iso = basicToIsoLocal(value);
   return iso ? iso + 'Z' : undefined;
 }
@@ -159,7 +159,7 @@ export function parseICS(text: string): VEvent[] {
 
   // Depth of components nested inside the current VEVENT (VALARM, and anything
   // else a server may embed). Their properties describe the sub-component, not
-  // the event — an EMAIL VALARM carries its own SUMMARY/ATTENDEE/DURATION, which
+  // the event: an EMAIL VALARM carries its own SUMMARY/ATTENDEE/DURATION, which
   // would otherwise overwrite the booking's title, customer, and end time.
   let nested = 0;
 
@@ -179,7 +179,7 @@ export function parseICS(text: string): VEvent[] {
         // RFC5545 default end when neither DTEND nor DURATION is present: an
         // all-day (DATE) event lasts one day; a timed event has zero duration.
         // A zero-length event therefore reports `end === start`, which canonical
-        // *inputs* forbid — but reporting it truthfully beats inventing a
+        // *inputs* forbid, but reporting it truthfully beats inventing a
         // duration or dropping the event outright.
         if (cur.end === undefined && cur.start !== undefined) {
           cur.end = cur._allDayStart
@@ -297,7 +297,7 @@ export function parseICS(text: string): VEvent[] {
 }
 
 /** Apply an RFC5545 DURATION (e.g. `PT45M`, `PT1H`, `P1D`, `P1W`) to an instant.
- *  The week form (`dur-week`, e.g. `P1W`) is a standalone RFC5545 alternative —
+ *  The week form (`dur-week`, e.g. `P1W`) is a standalone RFC5545 alternative:
  *  omitting it made a valid week-long DURATION unparseable and collapse to a
  *  zero-length range. */
 function applyDuration(start: string, dur: string): string | undefined {
@@ -323,7 +323,7 @@ const DAY_MS = 86_400_000;
 
 /** Guards a runaway RRULE (e.g. unbounded DAILY over a decade-wide window) from
  *  hanging: never generate more than this many candidate occurrences. Hitting it
- *  stops generation — a partial result is acceptable for this fallback. */
+ *  stops generation: a partial result is acceptable for this fallback. */
 const RECURRENCE_HARD_CAP = 1000;
 
 /** iCalendar two-letter weekday → JS UTC day-of-week (Sun=0 … Sat=6). */
@@ -347,7 +347,7 @@ function daysInMonthUTC(year: number, month: number): number {
 
 /** Add `months` calendar months to a UTC instant, keeping the day-of-month and
  *  time-of-day. Returns undefined when the target month has no such day (e.g.
- *  the 31st of a 30-day month, or Feb 29 in a common year) — RFC 5545 says such
+ *  the 31st of a 30-day month, or Feb 29 in a common year): RFC 5545 says such
  *  invalid recurrence instances are ignored rather than rolled over. */
 function addMonthsUTC(baseMs: number, months: number): number | undefined {
   const d = new Date(baseMs);
@@ -370,7 +370,7 @@ function addMonthsUTC(baseMs: number, months: number): number | undefined {
 /** Shallow-clone the master as a concrete occurrence: DTSTART/DTEND set to this
  *  instant (duration preserved), RRULE dropped, and a synthetic RECURRENCE-ID at
  *  the occurrence start so expanded siblings sharing a booking id can be told
- *  apart. `raw` stays the master's raw — there is no per-occurrence server raw. */
+ *  apart. `raw` stays the master's raw, there is no per-occurrence server raw. */
 function toOccurrence(master: VEvent, startMs: number, durationMs: number): VEvent {
   const start = formatWithOffset(startMs, 0);
   const occ: VEvent = {
@@ -385,24 +385,24 @@ function toOccurrence(master: VEvent, startMs: number, durationMs: number): VEve
 }
 
 /**
- * Expand a recurring VEVENT into its concrete in-window occurrences — a bounded,
+ * Expand a recurring VEVENT into its concrete in-window occurrences: a bounded,
  * correct SUBSET of RFC 5545 recurrence, used ONLY as a client-side fallback when
  * a CalDAV server ignores `<C:expand>` and returns the unexpanded master (its
  * original DTSTART plus an RRULE). iCloud expands server-side; Fastmail and
  * Nextcloud/Baïkal may not.
  *
- * GOVERNING PRINCIPLE — never make output worse. When the RRULE uses any feature
+ * GOVERNING PRINCIPLE, never make output worse. When the RRULE uses any feature
  * this does not model, the event is returned UNCHANGED (`[event]`, today's
  * behavior) rather than emitting occurrences at the wrong times.
  *
  * SUPPORTED: FREQ ∈ DAILY|WEEKLY|MONTHLY|YEARLY; INTERVAL (default 1); COUNT;
  * UNTIL; WKST; and BYDAY as a plain weekday list (MO,TU,…,SU) for WEEKLY only.
- * FALLS BACK on any other part — BYSETPOS, BYMONTHDAY, BYMONTH, BYWEEKNO,
+ * FALLS BACK on any other part: BYSETPOS, BYMONTHDAY, BYMONTH, BYWEEKNO,
  * BYYEARDAY, BYHOUR/BYMINUTE/BYSECOND, numeric-prefixed BYDAY (e.g. 2MO), BYDAY
  * on a non-WEEKLY frequency, an unrecognized/invalid part, or an unusable value.
  *
  * Weekday and interval math run against the UTC day-of-week; local-weekday and
- * DST subtleties are NOT modeled (acceptable — the server-side expand is primary).
+ * DST subtleties are NOT modeled (acceptable: the server-side expand is primary).
  */
 export function expandRecurrence(event: VEvent, windowStart: string, windowEnd: string): VEvent[] {
   // Not a series master we can expand: no RRULE, an already-concrete override, or
@@ -475,7 +475,7 @@ export function expandRecurrence(event: VEvent, windowStart: string, windowEnd: 
   }
 
   // Candidate starts are generated in non-decreasing order and bounded by COUNT,
-  // UNTIL, the window's far edge, and the hard cap — so the loops always halt.
+  // UNTIL, the window's far edge, and the hard cap, so the loops always halt.
   const candidates: number[] = [];
   let occCount = 0;
 
@@ -511,7 +511,7 @@ export function expandRecurrence(event: VEvent, windowStart: string, windowEnd: 
       else if (freq === 'WEEKLY') s = startMs + n * interval * 7 * DAY_MS;
       else if (freq === 'MONTHLY') s = addMonthsUTC(startMs, n * interval);
       else s = addMonthsUTC(startMs, n * interval * 12); // YEARLY
-      if (s === undefined) continue; // invalid calendar date — ignored per RFC
+      if (s === undefined) continue; // invalid calendar date: ignored per RFC
       if (untilMs !== undefined && s > untilMs) break;
       if (s >= winEndMs) break; // monotonic: nothing later can overlap
       candidates.push(s);
@@ -538,7 +538,7 @@ export function instantToICalUTC(instant: string): string {
 
 /** Drop characters that would break out of a content line (CR/LF and other C0
  *  controls). UID and CAL-ADDRESS are opaque tokens rather than TEXT values, so
- *  they are sanitized rather than backslash-escaped — escaping them would not
+ *  they are sanitized rather than backslash-escaped: escaping them would not
  *  round-trip, and a raw newline would let a caller-supplied id inject
  *  arbitrary iCalendar properties. */
 function sanitizeValue(s: string): string {
@@ -645,7 +645,7 @@ function propertyName(line: string): string {
 
 /** Ordinal of the VEVENT that represents the series master: the first one with
  *  no RECURRENCE-ID. RFC5545 does not require the master to precede its
- *  overrides, so "the first VEVENT" can be an overridden occurrence — editing
+ *  overrides, so "the first VEVENT" can be an overridden occurrence: editing
  *  that would silently change one instance instead of the series. */
 function masterEventOrdinal(lines: string[]): number {
   const overridden: boolean[] = [];
@@ -682,7 +682,7 @@ function masterEventOrdinal(lines: string[]): number {
  * uses instead of rebuilding from the lean model, so a round-trip can't silently
  * drop event data. DTSTAMP is always refreshed; a property that is set but absent
  * is inserted before END:VEVENT. `targetOrdinal` picks another VEVENT (by
- * position) to patch instead — an occurrence override.
+ * position) to patch instead: an occurrence override.
  */
 export function patchICS(raw: string, changes: PatchVEventInput, targetOrdinal?: number): string {
   const lines = unfoldLines(raw);
@@ -752,12 +752,12 @@ export function patchICS(raw: string, changes: PatchVEventInput, targetOrdinal?:
       out.push(line);
       continue;
     }
-    // Only rewrite top-level VEVENT properties — never lines inside a nested
+    // Only rewrite top-level VEVENT properties, never lines inside a nested
     // VALARM, or a VTIMEZONE's STANDARD/DAYLIGHT (which also carry DTSTART).
     if (inTargetEvent && stack[stack.length - 1] === 'VEVENT') {
       const name = propertyName(line);
       // RFC5545 §3.6.1 forbids DTEND and DURATION in one VEVENT. When a
-      // reschedule writes a DTEND, an existing DURATION must go — otherwise the
+      // reschedule writes a DTEND, an existing DURATION must go, otherwise the
       // object carries two conflicting ends and a server may reject it or pick
       // the stale one.
       if (name === 'DURATION' && changes.end !== undefined) continue;
@@ -864,7 +864,7 @@ function veventBlocks(lines: string[]): VEventBlock[] {
   return blocks;
 }
 
-/** How the series master writes its DTSTART — the form RECURRENCE-ID and
+/** How the series master writes its DTSTART: the form RECURRENCE-ID and
  *  EXDATE must use too (RFC 5545 §3.8.4.4: "the same value type as DTSTART"). */
 type DateForm = { kind: 'date' } | { kind: 'zoned'; tzid: string } | { kind: 'utc' | 'floating' };
 
@@ -923,9 +923,9 @@ function sameInstant(a: string | undefined, b: string): boolean {
 /**
  * Change one occurrence of a recurring series without touching the rest: the
  * override VEVENT for `ref` is patched when one exists, otherwise one is created
- * — a copy of the master (alarms and attendees included, recurrence rules
+ * a copy of the master (alarms and attendees included, recurrence rules
  * excluded) pinned to the occurrence by RECURRENCE-ID in the master's own date
- * form — and then patched. Throws when the document has no series master.
+ * form, and then patched. Throws when the document has no series master.
  */
 export function overrideICS(raw: string, ref: OccurrenceRef, changes: PatchVEventInput): string {
   const lines = unfoldLines(raw);
@@ -1088,7 +1088,7 @@ const XML_ENTITIES: Record<string, string> = {
 /** Decode XML character data. Numeric character references matter as much as the
  *  named entities: sabre-based servers (Nextcloud, Baïkal, …) routinely escape
  *  the CR in folded calendar-data as `&#13;`, and leaving it encoded made every
- *  ICS line end in a literal `&#13;` — so `BEGIN:VEVENT` never matched and
+ *  ICS line end in a literal `&#13;`, so `BEGIN:VEVENT` never matched and
  *  `listBookings` silently returned nothing. Single pass, so an escaped `&amp;`
  *  can't be re-expanded into the entity it encodes. */
 export function unescapeXml(s: string): string {

@@ -33,7 +33,7 @@ import { slotsWithinRange } from '../availability';
  * **Center-timezone caveat.** Booking *slots* are not *_utc: their `Time` is
  * center-local wall clock with no offset, and neither the API nor the canonical
  * model carries the center's zone. The adapter's single stated assumption is
- * therefore that **the caller expresses times in the center's own UTC offset** —
+ * therefore that **the caller expresses times in the center's own UTC offset**:
  * slot starts are anchored in `range.start`'s offset (`anchorSlotTime`) and
  * booking-time matching compares wall clocks (`matchesRequestedTime`). Pass
  * ranges in the center's offset, or slots will be anchored to the wrong instant.
@@ -76,7 +76,7 @@ function lastDateTouched(range: TimeRange): string {
 }
 
 /** Anchor a slot `Time` as an absolute instant. Slot times are center-local wall
- *  clock with no offset, so — per the center-timezone caveat on this module —
+ *  clock with no offset, so: per the center-timezone caveat on this module:
  *  they are read in the offset of the caller's own range rather than fabricating
  *  a `Z`, which would claim a UTC instant the value is not. */
 function anchorSlotTime(time: unknown, offsetSource: string): string | undefined {
@@ -95,7 +95,7 @@ function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolea
   // Wall-clock match: Zenoti slot Time is center-local without an offset, so also match
   // the local components of requestedStart. Callers should express the booking time in
   // the center's local offset for this to line up.
-  // TODO: verify against live API — full tz-awareness needs the center timezone, which
+  // TODO: verify against live API: full tz-awareness needs the center timezone, which
   // the canonical model doesn't carry.
   const reqLocal = requestedStart.replace(/([+-]\d{2}:?\d{2}|Z)$/, '');
   return slotTime.slice(0, 19) === reqLocal.slice(0, 19);
@@ -104,7 +104,7 @@ function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolea
 function mapStatus(s: unknown): BookingStatus {
   // Zenoti returns integer codes; some list endpoints return strings. Handle both.
   // The documented enum is NoShow=-2, Cancelled=-1, New=0, Closed=1, Checkin=2,
-  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21 — note that -2
+  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21: note that -2
   // and -1 are no-show and cancelled in that order, and that 3/5/6/99 do not exist.
   const n = typeof s === 'number' ? s : Number(s);
   if (!Number.isNaN(n)) {
@@ -315,7 +315,7 @@ function pagingOf(query: { limit?: number; pageToken?: string } | undefined): {
 
 /** Zenoti reports no reliable total, so a full page means there may be
  *  another. Without a token at all, everything past the first page was
- *  unreachable — including through `getService`/`getStaff`. */
+ *  unreachable, including through `getService`/`getStaff`. */
 function nextPageIf(count: number, paging: { page: number; size: number }): string | undefined {
   return count > 0 && count >= paging.size ? String(paging.page + 1) : undefined;
 }
@@ -337,7 +337,7 @@ async function resolveGuestId(
 
 /** Identifies an existing appointment to reschedule in place. When present,
  *  Zenoti moves that appointment to the new slot instead of creating a fresh
- *  booking — so no cancellation, no new id, and no cancellation fee. */
+ *  booking, so no cancellation, no new id, and no cancellation fee. */
 interface RescheduleTarget {
   invoiceId: string;
   invoiceItemId: string;
@@ -354,7 +354,7 @@ async function bookAndConfirm(
   extra: Record<string, unknown> | undefined,
   reschedule?: RescheduleTarget,
 ): Promise<string> {
-  // Use the wall-clock date the caller expressed, NOT the UTC date — a late
+  // Use the wall-clock date the caller expressed, NOT the UTC date: a late
   // center-local start (e.g. 10pm -05:00 = 03:00Z next day) must book on the
   // caller's day, or Zenoti returns slots for the wrong date and we spuriously
   // report CONFLICT. (listBookings already slices the literal date this way.)
@@ -381,7 +381,7 @@ async function bookAndConfirm(
       ...extra,
     },
   });
-  // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+  // Create-booking responds `{"id": "15b0cc65-…", "error": null}`: a top-level `id`.
   const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
   const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
   const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
@@ -465,7 +465,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         const s = asRecord(raw, 'zenoti', 'service');
         const duration = Number(s.duration);
         // Zenoti nests the sale price under `price`, with the currency as a
-        // separate numeric code we cannot map to ISO-4217 — so price is left off
+        // separate numeric code we cannot map to ISO-4217, so price is left off
         // rather than paired with a guess.
         return {
           id: reqString(String(s.id ?? ''), 'zenoti', 'service.id'),
@@ -624,7 +624,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       }
       const c = await http.resolve();
       // `start_date` and `end_date` are whole dates, must differ, and `end_date`
-      // is EXCLUSIVE — so a same-day window (09:00 → 17:00) collapses to nothing.
+      // is EXCLUSIVE, so a same-day window (09:00 → 17:00) collapses to nothing.
       // Ask for every date the window touches, plus one, then trim below.
       const startDate = query.range.start.slice(0, 10);
       const lastDate = lastDateTouched(query.range);
@@ -674,7 +674,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         });
       }
       const durationMinutes = query.durationMinutes;
-      // A booking — and therefore its slot list — is scoped to one date. Fanning
+      // A booking, and therefore its slot list, is scoped to one date. Fanning
       // out over a range would create one throwaway booking per day upstream, so
       // reject a multi-day window rather than silently answering for day one.
       const date = query.range.start.slice(0, 10);
@@ -685,7 +685,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           message: `Zenoti availability covers a single center-local date; ${date} and ${lastDateTouched(query.range)} span more than one`,
         });
       }
-      // Zenoti has no stateless availability endpoint — create a transient booking
+      // Zenoti has no stateless availability endpoint: create a transient booking
       // and read its slots. The booking is unconfirmed and Zenoti expires it.
       const booking = await http.request(c, {
         method: 'POST',
@@ -704,12 +704,12 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
               ],
             },
           ],
-          // Same escape hatch createBooking honors — availability must be
+          // Same escape hatch createBooking honors: availability must be
           // requested under the same provider-specific fields it will be booked with.
           ...bookingExtras(query.providerOptions),
         },
       });
-      // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+      // Create-booking responds `{"id": "15b0cc65-…", "error": null}`: a top-level `id`.
       const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
       const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
       const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');

@@ -3,7 +3,7 @@ import type { ProviderId } from './types';
 /**
  * What each provider requires to connect, as data.
  *
- * This is metadata only — field names, labels and whether a value is secret.
+ * This is metadata only: field names, labels and whether a value is secret.
  * It holds no credential, and the package ships none: every value described
  * here is supplied by the consumer, from their own environment or their own
  * users. Nothing in this module is browser-unsafe, so it lives at the package
@@ -17,7 +17,7 @@ import type { ProviderId } from './types';
 
 /** How a set of fields authenticates. */
 export type AuthKind =
-  /** A token minted by an OAuth flow — see `unibooking/oauth/*`. */
+  /** A token minted by an OAuth flow: see `unibooking/oauth/*`. */
   | 'oauth'
   /** An API key, or a key pair, issued from the provider's dashboard. */
   | 'keys'
@@ -42,7 +42,7 @@ export interface CredentialField {
 
 /**
  * One way to authenticate with a provider. Most providers have exactly one.
- * Acuity has two — HTTP Basic or an OAuth bearer — and a flat field list
+ * Acuity has two, HTTP Basic or an OAuth bearer, and a flat field list
  * cannot express "either these or that one", which is why this is a set
  * rather than a single array.
  */
@@ -351,7 +351,7 @@ export function authKinds(provider: ProviderId): AuthKind[] {
 
 /**
  * The fields that must be supplied. With no `kind`, the provider's first
- * credential set is used — the one a consumer should offer by default.
+ * credential set is used: the one a consumer should offer by default.
  */
 export function requiredCredentials(provider: ProviderId, kind?: AuthKind): CredentialField[] {
   const sets = PROVIDER_CREDENTIALS[provider];

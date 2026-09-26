@@ -51,7 +51,7 @@ import { zenoti } from './adapters/zenoti';
  * providers.
  *
  * **Server-only.** This module imports `src/oauth/*`, which must never reach a
- * browser bundle — which is why it is the `unibooking/connections` subpath and
+ * browser bundle, which is why it is the `unibooking/connections` subpath and
  * not part of the package root. The credential schema it builds on IS at the
  * root, because a consumer's connect form needs it client-side.
  *
@@ -73,7 +73,7 @@ export interface ConnectionRecord {
  *
  * Encrypting `tokens` and `fields` at rest is your responsibility: they are
  * live credentials. Use your platform's KMS, or `node:crypto` with a key from
- * your environment — never a key committed to your repository.
+ * your environment, never a key committed to your repository.
  */
 export interface ConnectionStore {
   get(tenantId: string, provider: ProviderId): Promise<ConnectionRecord | undefined>;
@@ -172,7 +172,7 @@ export interface ConnectionOptions {
  * For an OAuth provider with a refresh token, credentials resolve through
  * `withAutoRefresh`, so an expiring token is refreshed and written back
  * through `store.put` **before** the request goes out. A failed write aborts
- * the request rather than proceeding with tokens the store never received —
+ * the request rather than proceeding with tokens the store never received:
  * that ordering is what stops a refresh token being lost permanently.
  *
  * A fresh client is returned per call. There is deliberately no cross-tenant

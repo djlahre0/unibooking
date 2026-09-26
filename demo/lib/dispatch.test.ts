@@ -7,7 +7,7 @@ import { dispatch } from './dispatch';
  * its adapter refuses an availability query without a positive
  * `durationMinutes` ("pass a positive durationMinutes to size each slot").
  * The demo never forwarded the field, so Search Availability against Google
- * could not succeed from the UI at all — it failed INVALID_INPUT every time.
+ * could not succeed from the UI at all: it failed INVALID_INPUT every time.
  */
 function capturing() {
   const seen: { query?: Record<string, unknown> } = {};

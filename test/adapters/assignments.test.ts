@@ -152,7 +152,7 @@ describe('square staff/service assignment', () => {
       JSON.stringify({ team_members: [{ id: 'tm_1', given_name: 'Ana', status: 'ACTIVE' }] }),
       { headers: JSON_HEADERS },
     );
-    // No catalog interceptor registered — a call would fail outright.
+    // No catalog interceptor registered: a call would fail outright.
     const { staff } = await sq().listStaff!();
     expect(staff).toHaveLength(1);
     agent.assertNoPendingInterceptors();

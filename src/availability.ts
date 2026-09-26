@@ -19,11 +19,11 @@ import { zoneOffsetMinutes } from './tz';
  * and the day-fan-out adapters concatenate one day's answer after another. That
  * left `slots[0]` meaning "first thing the provider happened to mention" rather
  * than "earliest opening", and made the same logical availability come back in a
- * different order per provider — the exact cross-provider variance this package
+ * different order per provider: the exact cross-provider variance this package
  * exists to erase. `defineAdapter` applies this to every adapter's
  * `searchAvailability` so no adapter has to remember.
  *
- * The sort is by instant, not string — `08:00-07:00` is later than `12:00Z`
+ * The sort is by instant, not string: `08:00-07:00` is later than `12:00Z`
  * despite sorting earlier lexically. It is stable, so slots sharing a start keep
  * the provider's own order (usually staff order), and it copies rather than
  * mutating the caller's array. An unparseable start sorts last instead of being
@@ -40,9 +40,9 @@ export function sortSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
 /**
  * Clip a slot list to the window the caller actually asked for.
  *
- * Several providers answer availability at DATE granularity — Acuity's
+ * Several providers answer availability at DATE granularity: Acuity's
  * `availability/times`, Vagaro's `appointmentDate`, Setmore's `selected_date`,
- * Zenoti's booking `date` — or hand back a whole staff shift (Mindbody's
+ * Zenoti's booking `date`, or hand back a whole staff shift (Mindbody's
  * `Availabilities[]`). In every one of those cases the upstream request cannot
  * express `range` any finer than a day, so a partial-day query comes back
  * carrying the entire business day and the adapter has to do the narrowing
@@ -51,7 +51,7 @@ export function sortSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
  *
  * The window is half-open on the START instant: a slot is bookable if it begins
  * at or after `range.start` and strictly before `range.end`. The end is
- * deliberately not bounded — for a start-only provider the slot length comes
+ * deliberately not bounded, for a start-only provider the slot length comes
  * from the service duration, so the last bookable start of a window routinely
  * runs past it, and that slot is still real.
  */
@@ -97,11 +97,11 @@ export interface ComputeSlotsInput {
   /** The window to search. `timezone`, when set and no `workingHours` are
    *  given, is the zone the `intervalMinutes` grid is anchored in. */
   range: TimeRange;
-  /** Length of each slot — normally the service's duration. */
+  /** Length of each slot: normally the service's duration. */
   durationMinutes: number;
   /** Minutes between candidate starts. Setting it (or `workingHours`) puts
    *  starts on a grid counted from the start of each opening period, or from
-   *  local midnight without hours — so a gap that opens at 10:10 offers 10:30,
+   *  local midnight without hours, so a gap that opens at 10:10 offers 10:30,
    *  not 10:10. Omitted along with `workingHours`, slots run back-to-back from
    *  the start of each free gap, emitted in UTC. */
   intervalMinutes?: number;
@@ -415,7 +415,7 @@ function zoneOrUndefined(zone: string | undefined): string | undefined {
 }
 
 /**
- * Slots from one source minus busy time from another — a booking platform's
+ * Slots from one source minus busy time from another: a booking platform's
  * slots for a staff member, less the events on that person's own Google or
  * Outlook calendar. Buffers work as in `computeSlots`.
  */

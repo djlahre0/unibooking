@@ -24,7 +24,7 @@ describe('codeForStatus mapping', () => {
     [410, 'NOT_FOUND'],
     [409, 'CONFLICT'],
     // 412 Precondition Failed = an If-Match/If-None-Match failure (CalDAV
-    // optimistic-concurrency / create-only), i.e. a version conflict — and it
+    // optimistic-concurrency / create-only), i.e. a version conflict, and it
     // must be non-retryable so withRetry can't clobber a concurrent edit.
     [412, 'CONFLICT'],
     [429, 'RATE_LIMIT'],
@@ -96,7 +96,7 @@ describe('http client', () => {
       provider: 'boulevard',
       baseUrl: 'https://api.test/v1/',
       creds: { token: 'secret' },
-      // An async AuthFn — Boulevard computes an HMAC token per request.
+      // An async AuthFn: Boulevard computes an HMAC token per request.
       auth: async (c) => ({ headers: { authorization: `Signed ${c.token}` } }),
       options: {
         fetch: async (_url, init) => {

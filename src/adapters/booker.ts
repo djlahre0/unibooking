@@ -23,7 +23,7 @@ import { assertValidRange, formatWithOffset } from '../time';
 import { localToInstant, zoneOffsetMinutes } from '../tz';
 
 /**
- * Booker (Mindbody Booker, booker.com) — salon/spa platform, API v4.1 with v5
+ * Booker (Mindbody Booker, booker.com): salon/spa platform, API v4.1 with v5
  * auth.
  *
  * Auth is a bearer access token **plus** an API subscription key header. Mint
@@ -33,11 +33,11 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * token has no refresh token, so use the function credential form to re-mint
  * it. This package ships no Booker OAuth helper and never stores the token.
  *
- * IMPORTANT — two time hazards, both load-bearing:
+ * IMPORTANT: two time hazards, both load-bearing:
  *
  * 1. Booker serialises datetimes in .NET form, `/Date(1758067200000-0500)/`.
  * 2. **Booker's server always speaks Eastern Time.** That epoch, rendered in
- *    `America/New_York`, is the *business's local wall clock* — not the real
+ *    `America/New_York`, is the *business's local wall clock*, not the real
  *    instant. So recovering a true instant means rendering the epoch in Eastern,
  *    taking those wall-clock digits, and re-anchoring them in the location's own
  *    zone. Writes go back through the same transform in reverse.
@@ -58,7 +58,7 @@ export type BookerCredentials = {
   /** Sent as `Ocp-Apim-Subscription-Key`. Booker rejects calls without it. */
   subscriptionKey: string;
   locationId: string;
-  /** Location IANA zone (e.g. `America/Chicago`). Strongly recommended — see
+  /** Location IANA zone (e.g. `America/Chicago`). Strongly recommended: see
    *  the Eastern-time note above. Defaults to `America/New_York`, which is
    *  Booker's own server zone and so a no-op transform. */
   timezone?: string;
@@ -226,7 +226,7 @@ function toService(raw: unknown): Service {
     ...(typeof t.Description === 'string' && t.Description ? { description: t.Description } : {}),
     ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
     ...(price ? { price } : {}),
-    // Booker names categories without ids, so the name is the id — the same
+    // Booker names categories without ids, so the name is the id: the same
     // choice Acuity forces, and it keeps `listCategories` joinable.
     ...(category ? { categoryId: category, categoryName: category } : {}),
     ...(employeeIds ? { staffIds: employeeIds } : {}),
@@ -280,7 +280,7 @@ function toClassSession(raw: unknown, zone: string): ClassSession {
     ...(hasBooked ? { booked } : {}),
     ...(hasCapacity && hasBooked ? { available: Math.max(0, capacity - booked) } : {}),
     // `HasClassFilled` is Booker's own answer and can disagree with the counts
-    // (members-only, not enrollable, already started) — prefer it, exactly as
+    // (members-only, not enrollable, already started): prefer it, exactly as
     // the canonical `full` contract requires.
     full:
       k.HasClassFilled === true ||
@@ -316,7 +316,7 @@ const LOOKUP_PAGE_SIZE = 500;
 const LOOKUP_MAX_PAGES = 40;
 
 const NO_AVAILABILITY =
-  'searchAvailability — Booker exposes appointment (non-class) time slots through an ' +
+  'searchAvailability: Booker exposes appointment (non-class) time slots through an ' +
   'endpoint whose shape is not publicly documented, so this adapter will not guess at it. ' +
   'Class availability IS supported: use listClasses().';
 
@@ -488,7 +488,7 @@ export const booker = defineAdapter<BookerCredentials>({
         const to = new Date(env.now() + span).toISOString();
         // Walk the window page by page. Reading only the first page reported a
         // real appointment as NOT_FOUND at any location with more than one
-        // page of appointments in the window — i.e. almost every live salon.
+        // page of appointments in the window, i.e. almost every live salon.
         let found: Record<string, any> | undefined;
         for (let page = 1; page <= LOOKUP_MAX_PAGES && found === undefined; page++) {
           const rows = results(
@@ -515,7 +515,7 @@ export const booker = defineAdapter<BookerCredentials>({
       updateBooking: async () =>
         unsupported(
           'booker',
-          'updateBooking — Booker exposes no documented appointment update endpoint ' +
+          'updateBooking: Booker exposes no documented appointment update endpoint ' +
             '(only confirm and cancel). Cancel and rebook instead.',
         ),
 
@@ -604,7 +604,7 @@ export const booker = defineAdapter<BookerCredentials>({
           body: { LocationID: c.locationId },
         });
         // Booker names categories without giving them ids, so the name is the
-        // id — matching what `toService` writes into `categoryId`.
+        // id: matching what `toService` writes into `categoryId`.
         const seen = new Map<string, ServiceCategory>();
         for (const raw of results(res, 'Treatments')) {
           const t = asRecord(raw, 'booker', 'treatment');
@@ -734,7 +734,7 @@ export const booker = defineAdapter<BookerCredentials>({
 function weekdayOf(value: unknown): Weekday | undefined {
   if (typeof value === 'number' && Number.isInteger(value)) {
     // 0 = Sunday .. 6 = Saturday. Anything outside that is malformed, and
-    // wrapping it modulo 7 would invent a day the business never claimed —
+    // wrapping it modulo 7 would invent a day the business never claimed:
     // the caller would see opening hours that do not exist. Drop it instead;
     // the original stays in `raw`.
     if (value < 0 || value > 6) return undefined;

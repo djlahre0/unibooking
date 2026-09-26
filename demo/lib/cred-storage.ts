@@ -5,12 +5,12 @@
  * writes: every mutator below is a load-modify-write against that single key,
  * with no cross-tab coordination, so two tabs open at once can each read
  * stale state and clobber one another's entry. What the single key does buy
- * is simplicity — clearing everything is one removal, and a future shape
+ * is simplicity: clearing everything is one removal, and a future shape
  * change or a corrupt payload can be discarded wholesale instead of crashing
  * on stale JSON.
  *
  * `storage` is injectable because vitest runs in the node environment, where
- * localStorage does not exist — the same idiom the library uses for `fetch`.
+ * localStorage does not exist: the same idiom the library uses for `fetch`.
  *
  * SECURITY: localStorage is readable by any script on this origin. That is the
  * accepted cost of the feature. Remembering is ON by default (so a reload
@@ -41,7 +41,7 @@ export type SavedState = {
   chosen?: boolean;
 };
 
-/** A fresh empty state, never shared — callers may mutate `.providers` freely. */
+/** A fresh empty state, never shared: callers may mutate `.providers` freely. */
 function emptyState(): SavedState {
   return { remember: DEFAULT_REMEMBER, providers: {} };
 }
@@ -67,12 +67,12 @@ function isState(
   return isPlainObject(v) && typeof v.remember === 'boolean' && isPlainObject(v.providers);
 }
 
-/** A provider entry parsed from localStorage — attacker-influenceable, so checked field-by-field. */
+/** A provider entry parsed from localStorage: attacker-influenceable, so checked field-by-field. */
 function isSavedProvider(v: unknown): v is SavedProvider {
   return isPlainObject(v) && isPlainObject(v.creds) && typeof v.env === 'string';
 }
 
-/** Never throws. Any failure — absent, corrupt, blocked — yields empty state. */
+/** Never throws. Any failure, absent, corrupt, blocked, yields empty state. */
 export function loadState(storage?: Storage): SavedState {
   const s = resolve(storage);
   if (!s) return emptyState();
@@ -104,7 +104,7 @@ function write(state: SavedState, storage?: Storage): void {
   try {
     s.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
-    // Quota exceeded or storage disabled — the UI keeps working in memory.
+    // Quota exceeded or storage disabled: the UI keeps working in memory.
   }
 }
 
@@ -143,7 +143,7 @@ export function storageAvailable(storage?: Storage): boolean {
   } catch {
     return false;
   } finally {
-    // Best-effort cleanup — a throwing removeItem must not mask the result above.
+    // Best-effort cleanup: a throwing removeItem must not mask the result above.
     try {
       s.removeItem(probe);
     } catch {

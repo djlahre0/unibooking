@@ -25,7 +25,7 @@ export const SQUARE_APPOINTMENT_SCOPES = [
  * The extra scopes the catalog/staff write methods need.
  *
  * Deliberately NOT part of the default list. Requesting write access you do not
- * use is a needless escalation, and scopes cannot be widened quietly later —
+ * use is a needless escalation, and scopes cannot be widened quietly later:
  * adding one forces **every already-connected merchant to re-consent**. So this
  * is opt-in and explicit:
  *
@@ -46,7 +46,7 @@ export interface SquareOAuthConfig extends OAuthConfig {
 }
 
 /**
- * Square OAuth2. **Server-only** — takes a client secret.
+ * Square OAuth2. **Server-only**: takes a client secret.
  *
  * Square deviates from the standard token response in one way that matters: it
  * returns `expires_at` as an **RFC3339 string**, not `expires_in` seconds. A

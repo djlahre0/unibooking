@@ -29,7 +29,7 @@ export interface CalendarStatus {
   /** Which connect options this deployment offers. */
   providers: Record<CalendarProvider, boolean>;
   /** True only when THIS status request itself arrived over loopback (see
-   *  `isLoopbackRequest` in lib/calendar/http.ts) — never from a
+   *  `isLoopbackRequest` in lib/calendar/http.ts), never from a
    *  client-supplied header, so a remote visitor cannot make this true for
    *  themselves. Gates whether an unconfigured provider's card offers the
    *  operator's one-time OAuth app setup form, or just says the deployment
@@ -37,7 +37,7 @@ export interface CalendarStatus {
   isLocalhost: boolean;
   /** `custom: true` means this connection used a visitor-supplied "bring your
    *  own OAuth app" client id/secret rather than the deployer's env-configured
-   *  app — the fact only, never the id or secret itself (those never leave
+   *  app: the fact only, never the id or secret itself (those never leave
    *  the sealed session cookie). */
   connection: null | { provider: CalendarProvider; account: Account; custom?: boolean };
 }

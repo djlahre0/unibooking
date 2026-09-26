@@ -1,5 +1,5 @@
 /**
- * Demo UI state — what you were doing, so a reload does not throw it away.
+ * Demo UI state: what you were doing, so a reload does not throw it away.
  *
  * SECURITY: this store NEVER holds a credential, token or secret. Those live
  * in cred-storage.ts behind its opt-in toggle. `PersistedForm` enforces that
@@ -7,7 +7,7 @@
  * webhook tab persists only its provider selection, never its HMAC fields.
  *
  * `storage` is injectable because vitest runs in the node environment, where
- * localStorage does not exist — the same idiom as cred-storage.ts and
+ * localStorage does not exist: the same idiom as cred-storage.ts and
  * sample/store.ts.
  */
 export const UI_KEY = 'unibooking:demo:ui:v1';
@@ -25,7 +25,7 @@ export interface UiState {
   selectedProvider: string;
   env: string;
   baseUrl: string;
-  /** Keyed "<tab>:<op>" — a tab can hold several mutually exclusive forms. */
+  /** Keyed "<tab>:<op>": a tab can hold several mutually exclusive forms. */
   forms: Record<string, Record<string, string>>;
   /** The webhook tab's PROVIDER only. Its fields are HMAC secrets; see R1. */
   webhookProvider: string;
@@ -60,7 +60,7 @@ let disabled = false;
 const listeners = new Set<() => void>();
 let storageBound = false;
 
-/** Tests only — drops the cache, the disabled flag and the listener set. */
+/** Tests only: drops the cache, the disabled flag and the listener set. */
 export function __resetUiState(): void {
   cache = null;
   disabled = false;

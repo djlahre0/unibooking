@@ -8,7 +8,7 @@ import { zoneOffsetMinutes } from './tz';
  *  - Arithmetic preserves the input's offset so the displayed wall-clock stays
  *    meaningful (e.g. `15:00-07:00` + 45m = `15:45-07:00`, not a UTC `Z` form).
  *  - `end` must be strictly after `start`.
- * No date library — just careful epoch math, exhaustively unit-tested.
+ * No date library, just careful epoch math, exhaustively unit-tested.
  */
 
 const OFFSET_RE = /([+-]\d{2}:\d{2}|Z)$/i;
@@ -133,7 +133,7 @@ function offsetAt(timeZone: string, epochMs: number): number {
  *
  * A time inside a DST gap resolves forward (02:30 on a spring-forward day is
  * 03:30); a time that happens twice in an overlap resolves to the earlier one.
- * Throws RangeError for malformed or impossible input or an unknown zone —
+ * Throws RangeError for malformed or impossible input or an unknown zone:
  * never falling back to UTC, which would silently move the event by hours.
  */
 export function zonedToInstant(localDateTime: string, timeZone: string): string {
@@ -199,7 +199,7 @@ export function instantToZoned(instant: string, timeZone: string): { date: strin
 const DATE_PREFIX = /^(\d{4}-\d{2}-\d{2})T/;
 
 /** The calendar dates of an all-day range, read as written in each endpoint's
- *  own offset (the caller's wall clock, never UTC — midnight +05:30 is still
+ *  own offset (the caller's wall clock, never UTC: midnight +05:30 is still
  *  the 21st), end exclusive. A range whose end date is its start date covers no
  *  whole day and is rejected rather than rounded. */
 export function allDayDates(

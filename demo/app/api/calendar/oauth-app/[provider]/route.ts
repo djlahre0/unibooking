@@ -21,7 +21,7 @@ import { allow } from '@/lib/rate-limit';
 export const runtime = 'nodejs';
 
 /**
- * The operator's one-time OAuth app registration — SERVER ONLY writes, and
+ * The operator's one-time OAuth app registration: SERVER ONLY writes, and
  * the secret is never echoed back in the response (see writeOAuthApp's doc
  * comment on oauth-apps.ts, and status/route.ts, which reports only whether
  * a provider is configured).
@@ -31,8 +31,8 @@ export const runtime = 'nodejs';
  * id/secret into their own short-lived sign-in cookie, used once, for their
  * own account, and is left working unchanged. This route instead persists
  * ONE app registration, server-side, that every later visitor then signs
- * into via the ordinary one-click "Continue with…" button — GET on
- * connect/[provider]/route.ts, also unchanged — which is exactly why this
+ * into via the ordinary one-click "Continue with…" button: GET on
+ * connect/[provider]/route.ts, also unchanged, which is exactly why this
  * route is restricted to the machine running the deployment: anyone who
  * could reach it remotely could plant an app every later visitor would then
  * unknowingly sign in through.
@@ -46,7 +46,7 @@ export async function POST(
   const origin = appOrigin(req, config);
   if (!sameOrigin(req, origin)) return forbidden();
   // Setup does not exist in production, and this check comes FIRST because the
-  // loopback test below trusts the `Host` header — which a non-browser client
+  // loopback test below trusts the `Host` header, which a non-browser client
   // (curl) can simply forge. On a reachable deployment that alone would let a
   // stranger plant an OAuth app every later visitor unknowingly signs in
   // through. NODE_ENV is set by the server process, not by the request, so it
@@ -70,7 +70,7 @@ export async function POST(
     );
   }
   // Validated before anything touches them, and this message never repeats
-  // what was submitted — no secret in an error, ever.
+  // what was submitted, no secret in an error, ever.
   if (!isSaneCred(body.clientId) || !isSaneCred(body.clientSecret)) {
     return json(
       {
@@ -97,7 +97,7 @@ export async function POST(
         ok: false,
         error: {
           code: 'UPSTREAM',
-          message: "Could not save — this deployment's filesystem is read-only.",
+          message: "Could not save: this deployment's filesystem is read-only.",
         },
       },
       500,
@@ -155,7 +155,7 @@ export async function DELETE(
         ok: false,
         error: {
           code: 'UPSTREAM',
-          message: "Could not reset — this deployment's filesystem is read-only.",
+          message: "Could not reset: this deployment's filesystem is read-only.",
         },
       },
       500,

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const SRC = resolve(fileURLToPath(new URL('../src', import.meta.url)));
 
 /** Resolve a relative import specifier to a file under src/, or undefined for
- *  a bare package specifier (there are none — the library has no runtime deps). */
+ *  a bare package specifier (there are none: the library has no runtime deps). */
 function resolveImport(fromFile: string, spec: string): string | undefined {
   if (!spec.startsWith('.')) return undefined;
   const base = join(dirname(fromFile), spec);

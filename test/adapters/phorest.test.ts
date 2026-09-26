@@ -24,7 +24,7 @@ const APPT = {
 };
 
 // BookingResponse carries the new appointment id under
-// clientAppointmentSchedules[].serviceSchedules[] — never at the top level.
+// clientAppointmentSchedules[].serviceSchedules[], never at the top level.
 const BOOKING_RESPONSE = {
   bookingStatus: 'CONFIRMED',
   clientId: 'cli1',
@@ -145,7 +145,7 @@ runConformance({
 });
 
 // createBooking is a two-call flow (POST /booking then GET /appointment), which a
-// single-interceptor runConformance case can't express — test it explicitly.
+// single-interceptor runConformance case can't express: test it explicitly.
 describe('phorest multi-call flows', () => {
   let agent: MockAgent;
   let previous: Dispatcher;
@@ -237,7 +237,7 @@ describe('phorest multi-call flows', () => {
   it('updateBooking derives the reschedule date in UTC, so it can cross days', async () => {
     intercept('GET', `${P}/appointment/ap123`, { ...APPT, version: 3 });
     const putBody = capturePut();
-    // 20:00-07:00 on the 20th is 03:00Z on the 21st — the UTC day, not the local one.
+    // 20:00-07:00 on the 20th is 03:00Z on the 21st: the UTC day, not the local one.
     await makeClient().updateBooking('ap123', {
       range: { start: '2026-07-20T20:00:00-07:00', end: '2026-07-20T20:45:00-07:00' },
     });
@@ -295,7 +295,7 @@ describe('phorest multi-call flows', () => {
           clientSchedules: [{ serviceSchedules: [{ endTime: '2026-07-20T10:00:00Z' }] }],
         },
         {
-          // Offset-less local time — parseable, but an ambiguous instant.
+          // Offset-less local time: parseable, but an ambiguous instant.
           startTime: '2026-07-20T22:00:00',
           clientSchedules: [{ serviceSchedules: [{ endTime: '2026-07-20T23:00:00Z' }] }],
         },
@@ -308,7 +308,7 @@ describe('phorest multi-call flows', () => {
       links: [],
     });
     const slots = await makeClient().searchAvailability({ range: RANGE, serviceId: 'svc1' });
-    // Only the well-formed fixture entry survives — it fans out to its two
+    // Only the well-formed fixture entry survives: it fans out to its two
     // staff schedules. The three malformed entries are dropped.
     expect(slots).toHaveLength(2);
     expect(slots.map((s) => s.staffId)).toEqual(['staff1', 'staff2']);

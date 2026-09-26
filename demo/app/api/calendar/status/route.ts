@@ -15,10 +15,10 @@ export async function GET(req: Request): Promise<Response> {
     ...(config.problem ? { problem: config.problem } : {}),
     providers: config.providers,
     // Computed fresh per request from THIS request's own address, never
-    // cached or trusted from the client — see isLoopbackRequest's doc comment.
+    // cached or trusted from the client: see isLoopbackRequest's doc comment.
     isLocalhost: isLoopbackRequest(req),
     // `custom` is a fact ("a bring-your-own app is in use"), never the id or
-    // secret — those live only in the sealed session cookie and are never
+    // secret: those live only in the sealed session cookie and are never
     // read back out into a response body.
     connection: session
       ? {

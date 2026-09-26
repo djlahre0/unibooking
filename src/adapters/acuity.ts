@@ -47,7 +47,7 @@ const BASE = 'https://acuityscheduling.com/api/v1/';
 // Acuity has no per-occurrence class id: `/availability/classes` identifies an
 // occurrence by appointmentTypeID + datetime, and enrolling is a POST to
 // `/appointments` with that same pair. So `ClassSession.id` carries both, which
-// is exactly the contract the `Service.id` doc-comment sets out — the canonical
+// is exactly the contract the `Service.id` doc-comment sets out: the canonical
 // id is whatever that provider's write path accepts.
 const CLASS_ID_SEP = '@';
 
@@ -136,7 +136,7 @@ function toClassSession(raw: unknown, currency?: string): ClassSession {
       ? { booked: Math.max(0, capacity - remaining) }
       : {}),
     ...(remaining !== undefined ? { available: remaining } : {}),
-    // `slotsAvailable` is Acuity's own remaining count — authoritative.
+    // `slotsAvailable` is Acuity's own remaining count: authoritative.
     full: remaining !== undefined ? remaining <= 0 : false,
     status: Date.parse(start) < Date.now() ? 'completed' : 'scheduled',
     ...(amount !== undefined && currency ? { price: { amount, currency } } : {}),
@@ -163,7 +163,7 @@ function offsetToken(iso: string): string {
 
 /** Acuity's `availability/times` is single-date, so a multi-day range needs one
  *  call per day. Bound the fan-out so an over-wide range can't issue hundreds of
- *  requests (Vagaro 31, Setmore 62 — same idea, same contract). */
+ *  requests (Vagaro 31, Setmore 62: same idea, same contract). */
 const MAX_AVAILABILITY_DAYS = 31;
 
 /** The `YYYY-MM-DD` dates (in `range.start`'s offset) that the window overlaps.
@@ -198,7 +198,7 @@ function splitName(name: string): { firstName: string; lastName: string } {
   return { firstName: first ?? name, lastName: rest.join(' ') };
 }
 
-/** Acuity marks firstName, lastName and email required on POST /appointments —
+/** Acuity marks firstName, lastName and email required on POST /appointments:
  *  email being "optional for admins" only. We send `admin=true` exactly when a
  *  staffId is present, so email is enforced only on the non-admin path, which is
  *  the one that previously produced an opaque upstream 400. */
@@ -271,7 +271,7 @@ function toBooking(raw: unknown): Booking {
     ...(a.appointmentTypeID !== undefined ? { serviceId: String(a.appointmentTypeID) } : {}),
     ...(customer ? { customer } : {}),
     // A no-show IS a cancelled appointment in Acuity's model (`noShow` rides on
-    // top of `canceled`), so check the more specific flag first — testing
+    // top of `canceled`), so check the more specific flag first: testing
     // `canceled` first made 'no_show' unreachable on real data.
     status: a.noShow === true ? 'no_show' : a.canceled === true ? 'cancelled' : 'confirmed',
     raw: a,
@@ -422,7 +422,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
         const c = await http.resolve();
         const session = await fetchClass(input.classId);
         // Acuity has no class waitlist, so a full class is always a hard
-        // conflict — `allowWaitlist` cannot rescue it. Saying so explicitly
+        // conflict: `allowWaitlist` cannot rescue it. Saying so explicitly
         // beats letting Acuity reject the POST with a generic message.
         if (session.full) {
           throw new UnibookingError({
@@ -506,7 +506,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
       async listStaff() {
         const c = await http.resolve();
         // Acuity models staff as calendars, and `staffId` IS the calendarID that
-        // createBooking sends — so the id round-trips.
+        // createBooking sends, so the id round-trips.
         const res = await http.request(c, { path: 'calendars' });
         const staff = asArray(res, 'acuity', 'calendars').map((raw): Staff => {
           const k = asRecord(raw, 'acuity', 'calendar');
@@ -544,7 +544,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
           method: 'POST',
           path: 'appointments',
           // `admin=true` bypasses availability checks and unlocks `notes`, but Acuity
-          // REQUIRES a valid `calendarID` in admin mode — so only enable it when a
+          // REQUIRES a valid `calendarID` in admin mode, so only enable it when a
           // staffId (calendarID) is present; otherwise Acuity picks the calendar and
           // validates availability normally.
           query: {
@@ -623,7 +623,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
         const res = await http.request(c, {
           method: 'PUT',
           path: `appointments/${encodeURIComponent(id)}`,
-          // `notes` may only be written by an admin — without admin=true Acuity
+          // `notes` may only be written by an admin, without admin=true Acuity
           // silently drops it.
           query: { admin: true },
           body: {
@@ -641,7 +641,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
           path: `appointments/${encodeURIComponent(id)}/cancel`,
           query: {
             // Without admin=true, a cancellation past the account's client-cancel
-            // window fails with cancel_too_close / cancel_not_allowed — even on an
+            // window fails with cancel_too_close / cancel_not_allowed, even on an
             // admin key. Server-side API calls are administrative by nature.
             admin: true,
             ...(options?.notify === false ? { noEmail: true } : {}),
@@ -663,7 +663,7 @@ export const acuity = defineAdapter<AcuityCredentials>({
             // Acuity "calendar" is the closest thing to a staff filter.
             calendarID: query.staffId,
             // `noShow` rides on top of `canceled` (see `toBooking`), so a no_show
-            // query has to ask for cancelled rows too — leaving the default
+            // query has to ask for cancelled rows too: leaving the default
             // excluded exactly the appointments it was looking for.
             canceled: query.status === 'cancelled' || query.status === 'no_show' ? true : undefined,
           },

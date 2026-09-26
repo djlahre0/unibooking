@@ -10,7 +10,7 @@ import { verifyRs256Jwt } from '../crypto';
  * Pass the EXACT raw request body (the JWT string) and your app's public key PEM.
  */
 export interface WixWebhookInput {
-  /** The raw request body — a signed JWT. */
+  /** The raw request body: a signed JWT. */
   jwt: string;
   /** Your Wix app public key (SPKI PEM). */
   publicKey: string;

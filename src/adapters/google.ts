@@ -24,12 +24,12 @@ import type { HttpContext } from '../http';
 /**
  * Google Calendar (v3). A plain calendar: no native concept of staff or
  * services, so those capabilities are false. `availability` is derived from the
- * freeBusy API — free slots are the gaps between busy intervals — which returns
+ * freeBusy API, free slots are the gaps between busy intervals, which returns
  * busy blocks only, so `searchAvailability` requires a positive `durationMinutes`
  * to size each slot. The canonical slot rules (`intervalMinutes`,
  * `workingHours`, buffers, `minNoticeMinutes`) are applied locally, and slots
  * that have already started are dropped. `idempotency` is false because Google only accepts
- * client-supplied event ids in a restricted format — pass such an id via
+ * client-supplied event ids in a restricted format: pass such an id via
  * `providerOptions.id` if you need it.
  *
  * `listCalendars` reads the user's calendar list; each `Calendar.id` is a valid
@@ -155,7 +155,7 @@ function toCalendar(raw: unknown): Calendar {
 function pointToInstant(p: any): string | undefined {
   if (!p || typeof p !== 'object') return undefined;
   if (typeof p.dateTime === 'string') return p.dateTime;
-  // All-day event: date-only, and `end.date` is exclusive — appending midnight
+  // All-day event: date-only, and `end.date` is exclusive: appending midnight
   // UTC keeps the canonical `end > start` invariant.
   if (typeof p.date === 'string') return allDayInstant(p.date);
   return undefined;
@@ -194,7 +194,7 @@ function toGoogleStatus(s: BookingStatus | undefined): string | undefined {
 /** The guest a booking is for: the first attendee who is not the organizer,
  *  not the calendar this copy lives on (`self`) and not a room or resource.
  *  Google lists the organizer among the attendees whenever they also attend,
- *  which is every meeting created in its own UI — so `attendees[0]` named the
+ *  which is every meeting created in its own UI, so `attendees[0]` named the
  *  calendar owner as the customer of their own event. */
 function guestOf(attendees: unknown): any {
   if (!Array.isArray(attendees)) return undefined;
@@ -251,7 +251,7 @@ function toBooking(raw: unknown): Booking {
 }
 
 /** Google echoes the requested calendar id back as the `calendars` key, but it
- *  normalizes email-form ids to lowercase — so an exact match is not guaranteed
+ *  normalizes email-form ids to lowercase, so an exact match is not guaranteed
  *  even when the request carried the id verbatim. Widen the lookup rather than
  *  reporting a calendar Google actually answered for. */
 function resolveCalendarEntry(calendars: Record<string, any>, id: string): Record<string, any> {
@@ -552,14 +552,14 @@ export const google = defineAdapter<GoogleCredentials>({
     },
 
     /** events.watch: Google POSTs to `input.address` (headers only, no body)
-     *  whenever the calendar's events change — then call `syncBookings`. */
+     *  whenever the calendar's events change, then call `syncBookings`. */
     async watchBookings(input) {
       assertWatchInput(input);
       return openChannel(http, await http.resolve(), input);
     },
 
     /** Google channels cannot be extended: a new channel is opened, then the
-     *  old one stopped. Stopping is best effort — if it fails the old channel
+     *  old one stopped. Stopping is best effort, if it fails the old channel
      *  still expires by itself, and throwing would lose the new one. */
     async renewWatch(watch, input) {
       assertWatchInput(input);

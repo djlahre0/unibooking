@@ -109,7 +109,7 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
     const pool = agent.get('https://acuityscheduling.com');
     pool
       .intercept({ path: (p) => p.startsWith('/api/v1/appointments'), method: 'GET' })
-      // Acuity marks a no-show ON a canceled appointment — `noShow` never
+      // Acuity marks a no-show ON a canceled appointment: `noShow` never
       // arrives without `canceled`, so the mapping must prefer the former.
       .reply(
         200,
@@ -216,7 +216,7 @@ describe('acuity: status, timezone, validation, and update mapping', () => {
       .catch((e: any) => e);
     expect(err?.code).toBe('INVALID_INPUT');
     expect(err?.message).toContain('31');
-    // Rejected client-side — no interceptors were registered, so any request
+    // Rejected client-side, no interceptors were registered, so any request
     // would have surfaced as a network error instead.
   });
 

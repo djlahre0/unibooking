@@ -1,5 +1,5 @@
 /**
- * OAuth connect helpers — **server-only**.
+ * OAuth connect helpers: **server-only**.
  *
  * These take a client secret. Never import this subpath into browser code. No
  * adapter imports it, so bundling an adapter cannot pull it in by accident.

@@ -69,7 +69,7 @@ function collection(c: AppleCredentials): string {
     provider: 'apple',
     code: 'INVALID_INPUT',
     message:
-      'Apple event operations need calendarUrl — call listCalendars() and pass a Calendar.id as calendarUrl',
+      'Apple event operations need calendarUrl: call listCalendars() and pass a Calendar.id as calendarUrl',
   });
 }
 
@@ -233,7 +233,7 @@ function occurrenceIn(events: VEvent[], ref: OccurrenceRef): VEvent | undefined 
 function calendarQuery(startBasic: string, endBasic: string): string {
   // `<C:expand>` asks the server to return each in-window recurrence instance as
   // its own VEVENT (concrete DTSTART/DTEND, RRULE removed) rather than the
-  // unexpanded master — so a repeating series reports the right in-window times
+  // unexpanded master, so a repeating series reports the right in-window times
   // (RFC 4791 §9.6.5), matching how Google/Outlook expand recurrences. Its
   // start/end must be UTC "date with time" values, same as the time-range.
   // iCloud honors this; servers that ignore it (some Fastmail/Nextcloud/Baïkal
@@ -252,7 +252,7 @@ function calendarQuery(startBasic: string, endBasic: string): string {
 
 const now = (): string => new Date().toISOString();
 
-// CalDAV speaks iCalendar and WebDAV XML, never JSON — the shared default
+// CalDAV speaks iCalendar and WebDAV XML, never JSON: the shared default
 // `accept: application/json` would be wrong on every request here, and a strict
 // server may answer it with 406.
 const ACCEPT_ICS = { accept: 'text/calendar' };
@@ -292,7 +292,7 @@ export const apple = defineAdapter<AppleCredentials>({
   },
   baseUrl: BASE,
   // Collections live on whatever host discovery (or the caller's calendarUrl)
-  // names — iCloud answers from per-account partition hosts. Calendar writes
+  // names: iCloud answers from per-account partition hosts. Calendar writes
   // that take a caller-supplied URL are confined by `assertOwnCalendar`.
   allowCrossOrigin: true,
   auth: (c) => ({ headers: { authorization: `Basic ${btoa(`${c.username}:${c.appPassword}`)}` } }),
@@ -424,7 +424,7 @@ export const apple = defineAdapter<AppleCredentials>({
         throw notFound(id);
       }
       // Patch the fetched VCALENDAR in place rather than rebuilding from the lean
-      // model — otherwise RRULE, LOCATION, DESCRIPTION, extra attendees, alarms,
+      // model, otherwise RRULE, LOCATION, DESCRIPTION, extra attendees, alarms,
       // and VTIMEZONE would be silently dropped on every edit.
       const status = input.status !== undefined ? toICalStatus(input.status) : undefined;
       const changes = {
@@ -472,7 +472,7 @@ export const apple = defineAdapter<AppleCredentials>({
       return { ...toBooking(masterEvent(parseICS(ics))!), id, ...version };
     },
 
-    /** A resource id deletes the whole DAV resource — for a recurring series,
+    /** A resource id deletes the whole DAV resource, for a recurring series,
      *  every occurrence. An occurrence id removes that one occurrence with an
      *  EXDATE on the series (and drops its override), under the same ETag
      *  guard as an update. */
@@ -534,7 +534,7 @@ export const apple = defineAdapter<AppleCredentials>({
           parseICS(entry.ics)
             // Client-side RRULE fallback: a server-expanded instance has no RRULE
             // and passes through untouched, but a server that ignored `<C:expand>`
-            // returns the master (RRULE intact) — expand it locally to the right
+            // returns the master (RRULE intact): expand it locally to the right
             // in-window occurrences. All occurrences of one resource keep its id.
             .flatMap((ev) => expandRecurrence(ev, query.range.start, query.range.end))
             .filter((ev) => ev.start !== undefined && ev.end !== undefined)

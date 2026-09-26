@@ -72,15 +72,15 @@ export async function GET(
  * and secret instead of using the deployer's one-click button. Same PKCE +
  * state dance as GET above, but the authorize URL is built from the
  * visitor's own credentials (never `config.google`/`config.microsoft`), and
- * those credentials travel sealed in the flow cookie — never echoed back in
- * this response — so the callback, which has no server-side record of this
+ * those credentials travel sealed in the flow cookie, never echoed back in
+ * this response, so the callback, which has no server-side record of this
  * visitor's app, can complete the code exchange with the same app that
  * started it.
  *
  * A JSON body/response (not a raw redirect) so a bad client id/secret comes
  * back as an ordinary ActionResult the form can show inline, the same as
  * every other credential-entry flow in this demo; the browser then navigates
- * itself to the returned `url`. An optional `tenant` (Microsoft only — the
+ * itself to the returned `url`. An optional `tenant` (Microsoft only: the
  * visitor's own Entra app registration may be restricted to one directory)
  * travels the same way; Microsoft defaults it to `common` when omitted.
  */
@@ -108,7 +108,7 @@ export async function POST(
     );
   }
   // Validated before anything touches them, and this message never repeats
-  // what was submitted — no secret in an error, ever.
+  // what was submitted, no secret in an error, ever.
   if (!isSaneCred(body.clientId) || !isSaneCred(body.clientSecret)) {
     return json(
       {
@@ -118,7 +118,7 @@ export async function POST(
       400,
     );
   }
-  // Tenant is optional (Microsoft only — defaults to `common`), but if given
+  // Tenant is optional (Microsoft only: defaults to `common`), but if given
   // it gets the same sanity bound as the id/secret before it touches anything.
   if (body.tenant !== undefined && !isSaneCred(body.tenant)) {
     return json(

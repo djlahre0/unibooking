@@ -2,7 +2,7 @@ import { UnibookingError, codeForStatus } from '../errors';
 import { tokenFetch, unsupportedOAuth, type OAuthClient, type OAuthTokens } from './core';
 
 /**
- * Wix token exchange. **Partial** — no `authorizationUrl`.
+ * Wix token exchange. **Partial**, no `authorizationUrl`.
  *
  * Wix's token endpoint is conventional, but the grant is not: it is keyed on an
  * **`instanceId` obtained when the site owner installs your app**, not on
@@ -81,7 +81,7 @@ export function wixOAuth(config: WixOAuthConfig): OAuthClient {
 
     // `async` matters: the interface promises a Promise, so throwing
     // synchronously would escape a caller's .catch() and crash the request.
-    authorizationUrl: async () => unsupportedOAuth('wix', `authorizationUrl — ${NO_AUTHORIZE}`),
+    authorizationUrl: async () => unsupportedOAuth('wix', `authorizationUrl: ${NO_AUTHORIZE}`),
 
     /** `code` is the **instanceId** delivered by the app install. */
     exchangeCode(code) {

@@ -111,7 +111,7 @@ describe('defineAdapter: canonical guarantees applied to every adapter', () => {
 
     const confirmed = await client.listBookings({ range: RANGE, status: 'confirmed' });
     expect(confirmed.bookings.map((b) => b.id)).toEqual(['a', 'c']);
-    // Filtering a page must not end pagination — the next page may hold matches.
+    // Filtering a page must not end pagination: the next page may hold matches.
     expect(confirmed.nextPageToken).toBe('p2');
   });
 

@@ -36,7 +36,7 @@ const code = async (p: Promise<unknown>): Promise<string | undefined> => {
 };
 
 // ---------------------------------------------------------------------------
-// Microsoft Bookings — getStaffAvailability response shape
+// Microsoft Bookings: getStaffAvailability response shape
 // ---------------------------------------------------------------------------
 describe('AUDIT microsoft_bookings: searchAvailability', () => {
   const RANGE = { start: '2026-07-20T08:00:00Z', end: '2026-07-20T18:00:00Z' };
@@ -49,7 +49,7 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
     pool.intercept({ path: (p) => p.includes('/getStaffAvailability'), method: 'POST' }).reply(
       200,
       // Documented wrapper is `staffAvailabilityItem`, NOT the usual OData
-      // `value` — reading `value` returned an empty list for every business.
+      // `value`: reading `value` returned an empty list for every business.
       JSON.stringify({
         staffAvailabilityItem: [{ staffId: 'staff-1', availabilityItems: items }],
       }),
@@ -130,7 +130,7 @@ describe('AUDIT microsoft_bookings: searchAvailability', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Calendly — the create endpoint requires invitee.timezone
+// Calendly: the create endpoint requires invitee.timezone
 // ---------------------------------------------------------------------------
 describe('AUDIT calendly: createBooking', () => {
   it('always sends invitee.timezone (the API requires it; range.timezone is optional)', async () => {
@@ -247,13 +247,13 @@ describe('AUDIT square', () => {
         { headers: JSON_HEADERS },
       );
     await square({ accessToken: 't', locationId: 'L' }).createBooking({
-      title: 'Haircut — Jane',
+      title: 'Haircut: Jane',
       range: { start: '2026-07-20T22:00:00Z', end: '2026-07-20T22:30:00Z' },
       staffId: 'tm1',
       serviceId: 'sv1',
       providerOptions: { service_variation_version: 1 },
     });
-    expect(body.booking.customer_note).toBe('Haircut — Jane');
+    expect(body.booking.customer_note).toBe('Haircut: Jane');
   });
 
   it('rejects a status update rather than issuing a PUT that changes nothing', async () => {

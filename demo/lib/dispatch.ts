@@ -5,7 +5,7 @@ import { CALENDAR_PROVIDERS, markCancelled, setEventStatus, type EventStatus } f
 /**
  * The set of client-requiring operations. Shared verbatim by both transports:
  * the direct transport runs dispatch() in the browser, the proxy route runs the
- * identical dispatch() on the server — so the two paths can never drift apart.
+ * identical dispatch() on the server, so the two paths can never drift apart.
  */
 export type Op =
   | 'createBooking'
@@ -205,7 +205,7 @@ function activeOf(a: any): { active?: boolean } {
 
 /**
  * Run one operation against a BookingClient. Returns the success payload or
- * throws (UnibookingError for domain failures) — callers wrap via serializeError.
+ * throws (UnibookingError for domain failures): callers wrap via serializeError.
  */
 export async function dispatch(
   client: BookingClient,
@@ -295,7 +295,7 @@ export async function dispatch(
 
     case 'checkConnection':
       // Present on every adapter, so no capability guard. Note this resolves
-      // `{ ok: false }` for dead credentials rather than throwing — only a
+      // `{ ok: false }` for dead credentials rather than throwing, only a
       // transient fault reaches serializeError.
       return client.checkConnection();
 
@@ -512,7 +512,7 @@ export async function dispatch(
       const retried = withRetry(client, retryConfig);
       const result = await retried.listBookings({ range: RANGE(args) });
       return {
-        note: 'withRetry wrapped client used — transient errors auto-retry with exponential backoff',
+        note: 'withRetry wrapped client used: transient errors auto-retry with exponential backoff',
         retryConfig,
         result,
       };

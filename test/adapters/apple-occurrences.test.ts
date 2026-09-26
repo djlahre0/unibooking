@@ -5,7 +5,7 @@ import { apple } from '../../src/adapters/apple';
 /**
  * One occurrence of a recurring CalDAV series is addressable on its own, the
  * way Google instance ids and Outlook occurrence ids already are. Before this,
- * every expanded instance carried the resource id — so editing "this Monday's"
+ * every expanded instance carried the resource id, so editing "this Monday's"
  * instance rewrote the series master's DTSTART (moving the whole series and
  * erasing every earlier occurrence), and deleting it deleted the series.
  */

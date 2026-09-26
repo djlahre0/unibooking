@@ -10,7 +10,7 @@
  *
  * Only THREE providers publish a genuinely separate sandbox hostname. Several
  * others advertise a "sandbox" that is an account-level setting on the
- * production host — those are deliberately absent here:
+ * production host: those are deliberately absent here:
  *   - Calendly: the portal's Sandbox toggle is an OAuth app designation that
  *     only relaxes the redirect-URI scheme rule. No separate host.
  *   - Mindbody: sandbox is site ID -99 sent in the SiteId header.
@@ -35,7 +35,7 @@ export const ENVIRONMENTS: Record<string, ProviderEnvironments> = {
   google: { prod: 'https://www.googleapis.com/calendar/v3/' },
 
   // Graph's alternate hosts are network-isolated national clouds, not latency
-  // regions — tokens are NOT interchangeable between them.
+  // regions: tokens are NOT interchangeable between them.
   outlook: {
     prod: 'https://graph.microsoft.com/v1.0/',
     regions: {
@@ -68,7 +68,7 @@ export const ENVIRONMENTS: Record<string, ProviderEnvironments> = {
   calendly: { prod: 'https://api.calendly.com/' },
 
   // The region (e.g. us04) is a PATH parameter on this fixed host, not a
-  // subdomain — it already lives in the adapter's credentials.
+  // subdomain: it already lives in the adapter's credentials.
   vagaro: { prod: 'https://api.vagaro.com/' },
 
   // Third-party guides cite api.zenoti.eu / api.zenoti.com.au, but neither
@@ -129,7 +129,7 @@ export function resolveBaseUrl(provider: string, env: string): string | undefine
  * SSRF guard for the base URL, mirroring assertSafeCalendarUrl.
  *
  * We compare the PARSED `url.hostname` (never the raw string) so
- * `https://connect.squareup.com@evil.com/` is rejected — the parser assigns
+ * `https://connect.squareup.com@evil.com/` is rejected: the parser assigns
  * `evil.com` to hostname. Matching is EXACT, not suffix-based: a subdomain
  * takeover on a provider's domain must not automatically become our problem.
  * It also rejects an explicit non-default port (e.g. `:8443`) even on an

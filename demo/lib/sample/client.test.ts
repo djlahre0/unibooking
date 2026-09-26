@@ -49,7 +49,7 @@ describe('sampleClient bookings', () => {
 
   it('creates a booking and reads it back', async () => {
     const created = await client.createBooking({
-      title: 'Haircut — Test',
+      title: 'Haircut: Test',
       range: { start: '2026-11-02T10:00:00-05:00', end: '2026-11-02T10:30:00-05:00' },
       staffId: 'stf_1',
       serviceId: 'svc_1',
@@ -57,7 +57,7 @@ describe('sampleClient bookings', () => {
     expect(created.id).toMatch(/^bkg_/);
     expect(created.status).toBe('confirmed');
     expect(created.raw).toBeDefined();
-    expect((await client.getBooking(created.id)).title).toBe('Haircut — Test');
+    expect((await client.getBooking(created.id)).title).toBe('Haircut: Test');
   });
 
   it('persists a created booking across client instances', async () => {

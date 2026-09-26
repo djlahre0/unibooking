@@ -14,7 +14,7 @@ export interface HttpRequest {
   /** How to read the response body. Default `'json'`. */
   parse?: 'json' | 'text' | 'none';
   /** Observe response metadata (status, headers, final URL) before the body is
-   *  parsed — e.g. to capture an `ETag` for CalDAV optimistic concurrency, or to
+   *  parsed, e.g. to capture an `ETag` for CalDAV optimistic concurrency, or to
    *  resolve the relative hrefs of a WebDAV multistatus. `url` is the response
    *  URL after any redirects, or the requested URL when the runtime reports none.
    *  Called for both success and error responses. */
@@ -22,7 +22,7 @@ export interface HttpRequest {
 }
 
 /** Given resolved credentials, produce the auth to apply to a request. May be
- *  async — some providers sign each request (e.g. a per-request HMAC token). */
+ *  async: some providers sign each request (e.g. a per-request HMAC token). */
 export type AuthResult = {
   headers?: Record<string, string>;
   query?: Record<string, string>;
@@ -47,7 +47,7 @@ export interface HttpConfig<TCreds> {
   /** Pull a provider-specific error code/message out of a parsed error body.
    *
    *  May also return a canonical `code` to OVERRIDE the one the HTTP status
-   *  would imply — for the cases where a provider's status is actively
+   *  would imply, for the cases where a provider's status is actively
    *  misleading. Omit it to keep the status-derived default. */
   parseError?: (
     status: number,
@@ -58,7 +58,7 @@ export interface HttpConfig<TCreds> {
 /**
  * A per-provider HTTP context. Adapter methods `resolve()` credentials once at
  * the top of the call (which runs the refresh function, if any) and pass the
- * resolved creds into every `request()` — so auth and routing fields
+ * resolved creds into every `request()`, so auth and routing fields
  * (locationId, calendarId, siteId, …) come from a single, consistent snapshot.
  */
 export interface HttpContext<TCreds> {

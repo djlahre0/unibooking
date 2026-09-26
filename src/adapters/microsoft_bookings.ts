@@ -16,7 +16,7 @@ import { graphDateTime, graphToInstant, nextLinkFrom, parseGraphError, PREFER_UT
  * Scope: `Bookings.ReadWrite.All`.
  *
  * NOTE on availability: `getStaffAvailability` is GA in v1.0, but Graph documents
- * it as **application-permission only** — delegated user tokens are not
+ * it as **application-permission only**: delegated user tokens are not
  * supported for that action, unlike every other call here. If your token is
  * delegated, `searchAvailability` will fail even though the rest works.
  */
@@ -51,7 +51,7 @@ function followLink(pageToken: string): string {
 function toBooking(raw: unknown): Booking {
   const a = asRecord(raw, 'microsoft_bookings', 'appointment');
   // Graph's bookingAppointment exposes the times as `start`/`end` (each a
-  // dateTimeTimeZone) — NOT `startDateTime`/`endDateTime`. Reading the wrong
+  // dateTimeTimeZone), NOT `startDateTime`/`endDateTime`. Reading the wrong
   // names made every read throw "missing start/end times".
   const start = graphToInstant(a.start);
   const end = graphToInstant(a.end);
@@ -193,7 +193,7 @@ function toStaff(raw: unknown): Staff {
     name: reqString(s.displayName, 'microsoft_bookings', 'staffMember.displayName'),
     ...(s.emailAddress ? { email: String(s.emailAddress) } : {}),
     // `isEmailNotificationEnabled` and `role` exist, but neither means
-    // "deactivated" — Graph deletes staff rather than disabling them.
+    // "deactivated": Graph deletes staff rather than disabling them.
     active: true,
     raw: s,
   };
@@ -311,7 +311,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
             start: graphDateTime(input.range.start),
             end: graphDateTime(input.range.end),
             // serviceName is optional (computed from the service when omitted),
-            // but the caller's title is the closest canonical fit — don't drop it.
+            // but the caller's title is the closest canonical fit: don't drop it.
             ...(input.title ? { serviceName: input.title } : {}),
             ...(input.serviceId ? { serviceId: input.serviceId } : {}),
             ...(input.staffId ? { staffMemberIds: [input.staffId] } : {}),
@@ -335,7 +335,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         if (input.range) assertValidRange(input.range, 'microsoft_bookings');
         // bookingAppointment has no writable status; silently PATCHing nothing and
         // returning a live booking would report a status change as "done" when it
-        // wasn't — for a cancel, and just as much for `confirmed` or `no_show`.
+        // wasn't, for a cancel, and just as much for `confirmed` or `no_show`.
         if (input.status !== undefined) {
           throw new UnibookingError({
             provider: 'microsoft_bookings',
@@ -349,7 +349,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
         const c = await http.resolve();
         const path = `${base(c)}/appointments/${encodeURIComponent(id)}`;
         // Graph's appointment PATCH returns 204 No Content, so there is no body to
-        // map — issue the update, then re-GET to return the current appointment.
+        // map: issue the update, then re-GET to return the current appointment.
         await http.request(c, {
           method: 'PATCH',
           path,
@@ -469,7 +469,7 @@ export const microsoftBookings = defineAdapter<MicrosoftBookingsCredentials>({
       async listServices(query) {
         const c = await http.resolve();
         // Graph puts the currency on the business, not the service. One extra
-        // request for the whole list — never one per service. A failure here must
+        // request for the whole list, never one per service. A failure here must
         // not sink the whole call, so an unavailable currency simply omits price.
         const [res, business] = await Promise.all([
           listPage(c, 'services', query),

@@ -20,7 +20,7 @@ import { wix } from '../../src/adapters/wix';
 import { zenoti } from '../../src/adapters/zenoti';
 
 /** Every shipped adapter, with credentials good enough to construct a client.
- *  No request is made here — this is a pure shape check. */
+ *  No request is made here: this is a pure shape check. */
 const CLIENTS: Array<[string, () => BookingClient]> = [
   ['acuity', () => acuity({ userId: 'u', apiKey: 'k' })],
   ['apple', () => apple({ username: 'u', appPassword: 'p' })],
@@ -42,7 +42,7 @@ const CLIENTS: Array<[string, () => BookingClient]> = [
 ];
 
 /** Adapters that genuinely implement group classes. Everything else must both
- *  declare the flags false AND omit the methods — a capability flag that lies
+ *  declare the flags false AND omit the methods: a capability flag that lies
  *  is worse than no support, because callers branch on it. */
 const CLASS_PROVIDERS = ['mindbody', 'acuity', 'booker'];
 /** Adapters exposing catalog categories. */

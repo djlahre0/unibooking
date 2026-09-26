@@ -13,7 +13,7 @@ import { assertValidRange, parseOffsetMinutes } from '../time';
 import { base64ToBytes, hmacSha256BytesBase64 } from '../crypto';
 
 /**
- * Boulevard (joinblvd.com) — Admin GraphQL API (`/api/2020-01/admin`). Gated to
+ * Boulevard (joinblvd.com): Admin GraphQL API (`/api/2020-01/admin`). Gated to
  * Enterprise-tier merchants. Auth is a per-request HMAC token wrapped in Basic:
  *   payload = "blvd-admin-v1" + businessId + unixSeconds
  *   mac     = base64( HMAC-SHA256( base64Decode(apiSecret), payload ) )
@@ -28,13 +28,13 @@ import { base64ToBytes, hmacSha256BytesBase64 } from '../crypto';
  *  - **`locationId` is required** on the `appointments` query, so it lives in
  *    credentials rather than being guessed per call.
  *  - **Filtering goes through a `QueryString` DSL**, not typed arguments. Only
- *    `id`, `startAt`, `createdAt`, `cancelled` and `staffId` are filterable —
+ *    `id`, `startAt`, `createdAt`, `cancelled` and `staffId` are filterable:
  *    notably there is no `endAt`, so a range is expressed on `startAt` alone.
  *  - **Booking is a multi-step mutation chain**, not one call:
  *    `bookingCreate` → `bookingAddService` → `bookingComplete`. Only
  *    `bookingComplete` yields a real `Appointment`.
  *
- * Reads are UTC (`DateTime`); booking-flow writes are `NaiveDateTime` — local
+ * Reads are UTC (`DateTime`); booking-flow writes are `NaiveDateTime`: local
  * wall-clock with no offset, resolved against the location's zone. Sending a
  * `Z`-suffixed instant to a `NaiveDateTime` field would be read as local time and
  * silently shift the booking.
@@ -69,7 +69,7 @@ const LIST_APPOINTMENTS = `query ListAppointments($locationId: ID!, $query: Quer
   }
 }`;
 
-// Selections are kept to what the mapper actually reads — an unread field is a
+// Selections are kept to what the mapper actually reads: an unread field is a
 // claim about the schema nobody verifies.
 const BOOKING_CREATE = `mutation BookingCreate($input: BookingCreateInput!) {
   bookingCreate(input: $input) {
@@ -89,7 +89,7 @@ const BOOKING_COMPLETE = `mutation BookingComplete($input: BookingCompleteInput!
   }
 }`;
 
-// Returns `[AppointmentRescheduleAvailableTimesPayload]` — a list, one payload
+// Returns `[AppointmentRescheduleAvailableTimesPayload]`: a list, one payload
 // per bookable service, each carrying its own availableTimes.
 const RESCHEDULE_AVAILABLE_TIMES = `mutation RescheduleTimes($input: AppointmentRescheduleAvailableTimesInput!) {
   appointmentRescheduleAvailableTimes(input: $input) {
@@ -142,7 +142,7 @@ const CANCELLATION_REASONS = new Set([
   'VOIDED',
 ]);
 
-/** `AppointmentStateInput` excludes CANCELLED and FINAL — cancel goes through
+/** `AppointmentStateInput` excludes CANCELLED and FINAL: cancel goes through
  *  `cancelAppointment`, and FINAL is not settable. */
 const SETTABLE_STATES = new Set(['ACTIVE', 'ARRIVED', 'BOOKED', 'CONFIRMED']);
 
@@ -156,7 +156,7 @@ function mapStatus(state: unknown, cancellationReason: unknown): BookingStatus {
     case 'FINAL':
       return 'completed';
     case 'CANCELLED':
-      // NO_SHOW is a cancellation *reason*, not a state — it is the only way a
+      // NO_SHOW is a cancellation *reason*, not a state: it is the only way a
       // no-show is representable.
       return String(cancellationReason).toUpperCase() === 'NO_SHOW' ? 'no_show' : 'cancelled';
     default:
@@ -165,7 +165,7 @@ function mapStatus(state: unknown, cancellationReason: unknown): BookingStatus {
 }
 
 /** Wall-clock time as written in the caller's own offset, with the offset
- *  dropped — Boulevard's `NaiveDateTime` form. */
+ *  dropped: Boulevard's `NaiveDateTime` form. */
 function toNaiveDateTime(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) {
@@ -184,7 +184,7 @@ function toDate(iso: string): string {
   return toNaiveDateTime(iso).slice(0, 10);
 }
 
-/** QueryString is a text DSL — apostrophes inside values must be backslash-escaped. */
+/** QueryString is a text DSL: apostrophes inside values must be backslash-escaped. */
 function q(value: string): string {
   return `'${value.replace(/'/g, "\\'")}'`;
 }
@@ -229,7 +229,7 @@ function toBooking(raw: unknown): Booking {
 
 /**
  * Classify a GraphQL error. Boulevard reports validation, not-found and
- * permission failures as HTTP 200 + `errors[]`, and UPSTREAM is retryable — so
+ * permission failures as HTTP 200 + `errors[]`, and UPSTREAM is retryable, so
  * blanket-mapping them there makes `withRetry` re-issue non-idempotent
  * mutations. Prefer the machine-readable `extensions.code`, fall back to a
  * conservative message match, and leave anything genuinely unrecognized (i.e.
@@ -369,7 +369,7 @@ async function getAppointment(
   id: string,
 ): Promise<Booking> {
   const data = await gql(http, c, GET_APPOINTMENT, { id });
-  // A missing appointment is `data.appointment: null` under HTTP 200 — without
+  // A missing appointment is `data.appointment: null` under HTTP 200, without
   // this it surfaces as UPSTREAM "expected an object, got object".
   if (data?.appointment == null) {
     throw new UnibookingError({
@@ -495,7 +495,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         // the probe. An unknown field is a GraphQL schema error, which would
         // make checkConnection throw on EVERY call instead of reporting health.
         // Boulevard exposes no cheap identity query here, so no account is
-        // surfaced — the credentials already name the business and location.
+        // surfaced: the credentials already name the business and location.
         const res = await gql(
           http,
           c,
@@ -513,7 +513,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       // is not expressible through this flow.
       const staffId = requireField(
         input.staffId,
-        'a staffId — bookingComplete requires bookWithStaffId',
+        'a staffId: bookingComplete requires bookWithStaffId',
       );
       let clientId = input.customer?.id;
       if (
@@ -523,9 +523,9 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       ) {
         clientId = await findOrCreateClient(http, c, input.customer);
       }
-      requireField(clientId, 'a customer — bookingAddService needs a bookingClientId');
+      requireField(clientId, 'a customer: bookingAddService needs a bookingClientId');
 
-      // Step 1 — open a pending booking. startTime is NaiveDateTime (location-local).
+      // Step 1: open a pending booking. startTime is NaiveDateTime (location-local).
       const created = await gql(http, c, BOOKING_CREATE, {
         input: {
           locationId: c.locationId,
@@ -544,7 +544,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         'booking.bookingClients[0].id',
       );
 
-      // Step 2 — attach the service. No bookingService id back means nothing was
+      // Step 2: attach the service. No bookingService id back means nothing was
       // attached, and completing would commit an empty booking.
       const added = await gql(http, c, BOOKING_ADD_SERVICE, {
         input: { bookingId, bookingClientId, serviceId, staffId },
@@ -555,7 +555,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         'bookingService.id',
       );
 
-      // Step 3 — commit. Only here does a real Appointment exist.
+      // Step 3: commit. Only here does a real Appointment exist.
       const completed = await gql(http, c, BOOKING_COMPLETE, {
         input: {
           bookingId,
@@ -575,12 +575,12 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       const c = await http.resolve();
 
       // Reschedule and field edits are separate mutations, so validate the whole
-      // patch up front — rejecting half-way would leave the appointment moved but
+      // patch up front: rejecting half-way would leave the appointment moved but
       // otherwise unchanged.
       if (input.status === 'cancelled') {
         return unsupported(
           'boulevard',
-          "updateBooking({ status: 'cancelled' }) — cancelAppointment requires an explicit " +
+          "updateBooking({ status: 'cancelled' }): cancelAppointment requires an explicit " +
             'reason enum; use cancelBooking(id, { reason }) instead',
         );
       }
@@ -605,7 +605,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       let rescheduled: Booking | undefined;
       if (input.range) {
         // Reschedule is two-step: a bookableTimeId can only come from
-        // appointmentRescheduleAvailableTimes — it is opaque and not constructible.
+        // appointmentRescheduleAvailableTimes: it is opaque and not constructible.
         const times = await gql(http, c, RESCHEDULE_AVAILABLE_TIMES, {
           input: {
             appointmentId: id,
@@ -662,7 +662,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
 
     async cancelBooking(id, options) {
       const c = await http.resolve();
-      // `reason` is a non-null enum — a free-text reason cannot be forwarded.
+      // `reason` is a non-null enum: a free-text reason cannot be forwarded.
       const reason = options?.reason
         ? String(options.reason).toUpperCase().replace(/\s+/g, '_')
         : 'CLIENT_CANCEL';
@@ -679,7 +679,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
         input: {
           id,
           reason,
-          // The enum is lossy, but `notes` is free text — keep the caller's own
+          // The enum is lossy, but `notes` is free text: keep the caller's own
           // wording rather than discarding it.
           ...(options?.reason ? { notes: options.reason } : {}),
           ...(options?.notify !== undefined ? { notifyClient: options.notify } : {}),
@@ -691,7 +691,7 @@ export const boulevard = defineAdapter<BoulevardCredentials>({
       assertValidRange(query.range, 'boulevard');
       const c = await http.resolve();
       // Only id/startAt/createdAt/cancelled/staffId are filterable, and there is
-      // no endAt — so the range is expressed on startAt alone.
+      // no endAt, so the range is expressed on startAt alone.
       // `cancelled` is the only status-ish filter. It has to be sent BOTH ways:
       // without `cancelled = false` a confirmed-only query still returns
       // cancellations. no_show is a cancellation reason, so it lives on the

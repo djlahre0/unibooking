@@ -45,7 +45,7 @@ describe('square business hours', () => {
     const hours = await client().getBusinessHours!();
     expect(hours.provider).toBe('square');
     expect(hours.timezone).toBe('America/Los_Angeles');
-    // Seconds are dropped — the canonical form is HH:MM.
+    // Seconds are dropped: the canonical form is HH:MM.
     expect(hours.periods).toEqual([
       { dayOfWeek: 'MON', start: '09:00', end: '17:30' },
       { dayOfWeek: 'SAT', start: '10:00', end: '14:00' },

@@ -6,7 +6,7 @@ import type { EventInput } from './types';
  * The event form's model and rules, kept pure so they are unit-tested without
  * a browser. People type wall-clock dates and times in a timezone they choose;
  * this converts them to the canonical instants the library takes, via the
- * library's own `zonedToInstant` — the form never does offset math itself.
+ * library's own `zonedToInstant`: the form never does offset math itself.
  *
  * All-day end dates are INCLUSIVE in the form ("21–22 Sep" is two days) and
  * exclusive on the wire, so conversion adds a day and reading back removes it.
@@ -141,7 +141,7 @@ export function toEventInput(v: EventFormValues): EventInput {
 
 const TIMING_KEYS = ['allDay', 'date', 'startTime', 'endDate', 'endTime', 'timezone'] as const;
 
-/** Only what changed, for an update. Timing travels as one group — the
+/** Only what changed, for an update. Timing travels as one group: the
  *  library rewrites start, end, zone and all-day together. A cleared text field
  *  is sent as '' so the provider clears it too. */
 export function changedInput(before: EventFormValues, after: EventFormValues): EventInput {

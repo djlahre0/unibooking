@@ -161,7 +161,7 @@ describe('clientFor', () => {
 /**
  * `eventOf` casts the request's JSON `event` object straight to `EventInput`,
  * so at runtime any field can be any JSON type. `toCreate` guards `title` with
- * `typeof`, but `toUpdate` does not — it calls `.trim()` on whatever arrived,
+ * `typeof`, but `toUpdate` does not: it calls `.trim()` on whatever arrived,
  * which turns a malformed body into an internal TypeError surfaced to the
  * caller instead of a clean INVALID_INPUT. These pin the boundary.
  */

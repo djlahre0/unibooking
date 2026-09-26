@@ -75,7 +75,7 @@ describe('booker time handling', () => {
     expect(bookings).toHaveLength(1);
     const b = bookings[0]!;
     assertCanonicalBooking(b, 'booker');
-    // 18:00 Eastern wall clock, read as Chicago local, is 23:00Z — NOT 22:00Z.
+    // 18:00 Eastern wall clock, read as Chicago local, is 23:00Z, NOT 22:00Z.
     // Taking the epoch at face value would place the appointment an hour early.
     expect(b.range.start).toBe('2026-06-11T23:00:00Z');
     expect(b.range.end).toBe('2026-06-12T00:00:00Z');

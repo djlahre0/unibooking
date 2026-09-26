@@ -9,7 +9,7 @@ import type { BookingClient } from 'unibooking';
  * URL the adapter actually tried to reach. This catches an adapter changing
  * hosts underneath the table.
  *
- * Credentials must be shape-valid per adapter — Boulevard base64-decodes its
+ * Credentials must be shape-valid per adapter: Boulevard base64-decodes its
  * apiSecret during auth and throws before fetching if it is not valid base64.
  */
 const b64 = (s: string) => Buffer.from(s).toString('base64');
@@ -40,7 +40,7 @@ const CREDS: Record<string, Record<string, string>> = {
 /**
  * Most adapters are probed via getBooking. Setmore's Booking API has no
  * fetch-by-id endpoint, so its getBooking throws UNSUPPORTED without issuing a
- * request — probe it through listBookings instead. Excluding it is not an
+ * request: probe it through listBookings instead. Excluding it is not an
  * option: Setmore's host changed between package versions, which is exactly
  * the drift this test exists to catch.
  */
@@ -54,7 +54,7 @@ const PROBE_OP: Record<string, (client: BookingClient) => Promise<unknown>> = {
  *  - mangomint: every method throws UNSUPPORTED (no public API documentation
  *    exists to implement against), so no method ever issues a request.
  *  - apple: CalDAV requests go to the user's own `calendarUrl`, not a fixed
- *    host derived from ENVIRONMENTS — `baseUrlEditable` is false for exactly
+ *    host derived from ENVIRONMENTS: `baseUrlEditable` is false for exactly
  *    this reason, so there is no single declared prod host to compare a
  *    request against.
  */
@@ -76,7 +76,7 @@ async function observedUrl(provider: string): Promise<string | null> {
       await client.getBooking('probe-id');
     }
   } catch {
-    // Adapters reject the empty {} body — irrelevant, we only need the URL.
+    // Adapters reject the empty {} body: irrelevant, we only need the URL.
   }
   return seen;
 }
@@ -86,7 +86,7 @@ describe('ENVIRONMENTS prod values match the adapters', () => {
 
   it.each(probeable)('%s requests its declared prod host', async (provider) => {
     const url = await observedUrl(provider);
-    expect(url, `${provider} made no request — check its CREDS fixture`).toBeTruthy();
+    expect(url, `${provider} made no request: check its CREDS fixture`).toBeTruthy();
     expect(url!.startsWith(ENVIRONMENTS[provider].prod)).toBe(true);
   });
 

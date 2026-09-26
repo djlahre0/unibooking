@@ -6,7 +6,7 @@ import { assertCanonicalCalendar, runConformance } from '../conformance';
 
 const EVENT = {
   id: 'ev1',
-  summary: 'Haircut — Jane',
+  summary: 'Haircut: Jane',
   start: { dateTime: '2026-07-20T15:00:00-07:00', timeZone: 'America/Los_Angeles' },
   end: { dateTime: '2026-07-20T15:45:00-07:00', timeZone: 'America/Los_Angeles' },
   status: 'confirmed',
@@ -38,7 +38,7 @@ runConformance({
       reply: EVENT,
       run: (c) =>
         c.createBooking({
-          title: 'Haircut — Jane',
+          title: 'Haircut: Jane',
           range: RANGE,
           customer: { email: 'jane@example.com' },
         }),

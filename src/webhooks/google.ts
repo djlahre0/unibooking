@@ -29,7 +29,7 @@ export interface GoogleNotification {
   state: GoogleResourceState;
   /** Increases per message on a channel; `sync` is 1. */
   messageNumber?: number;
-  /** The `X-Goog-Channel-Token` — check it with `verifyGoogleChannelToken`. */
+  /** The `X-Goog-Channel-Token`: check it with `verifyGoogleChannelToken`. */
   channelToken?: string;
   /** When the channel stops, from `X-Goog-Channel-Expiration`. RFC3339. */
   expiresAt?: string;
@@ -53,8 +53,8 @@ function header(headers: HeaderSource, name: string): string | undefined {
 const STATES = new Set<GoogleResourceState>(['sync', 'exists', 'not_exists']);
 
 /**
- * Read a Google Calendar push notification. Google sends headers only — no
- * body says what changed — so the response to one is `syncBookings` with your
+ * Read a Google Calendar push notification. Google sends headers only, no
+ * body says what changed, so the response to one is `syncBookings` with your
  * stored sync token. Returns null when the request is not a channel
  * notification. Authenticity is `verifyGoogleChannelToken`'s job; this only
  * reads.

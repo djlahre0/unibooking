@@ -1,5 +1,5 @@
 /**
- * Idiomatic consumer usage — a complete booking lifecycle (availability →
+ * Idiomatic consumer usage: a complete booking lifecycle (availability →
  * customer → create → read → reschedule → list → cancel) plus resilience,
  * dynamic dispatch, and webhook verification.
  *
@@ -8,7 +8,7 @@
  * version of this exact walkthrough lives in test/quickstart.test.ts.
  *
  * Square is used here because it supports every capability, but every adapter
- * exposes the identical `BookingClient` interface — swap the import and the
+ * exposes the identical `BookingClient` interface: swap the import and the
  * credentials and the rest is unchanged.
  */
 import { collectAll, createRegistry, isUnibookingError, listAll, withRetry } from 'unibooking';
@@ -24,7 +24,7 @@ async function main() {
     { timeoutMs: 10_000 },
   );
 
-  // `capabilities` tells you up front what a provider can do — typed, not stringly.
+  // `capabilities` tells you up front what a provider can do: typed, not stringly.
   console.log('capabilities:', client.capabilities);
 
   const serviceId = process.env.SQUARE_SERVICE_ID!;
@@ -46,7 +46,7 @@ async function main() {
 
   // 3. Create a booking. An `idempotencyKey` makes a network retry safe.
   const booking = await client.createBooking({
-    title: 'Haircut — Jane',
+    title: 'Haircut: Jane',
     range: { start: slot.start, end: slot.end },
     serviceId,
     ...(slot.staffId ? { staffId: slot.staffId } : {}),
@@ -59,7 +59,7 @@ async function main() {
   const fetched = await client.getBooking(booking.id);
   console.log('status:', fetched.status);
 
-  // 5. Reschedule — returns the updated booking.
+  // 5. Reschedule: returns the updated booking.
   const moved = await client.updateBooking(booking.id, {
     range: { start: '2026-07-20T16:00:00-07:00', end: '2026-07-20T16:45:00-07:00' },
   });
@@ -102,7 +102,7 @@ async function main() {
 
   // Webhooks: you host the endpoint; unibooking verifies the signature. Square
   // signs `notificationUrl + rawBody` (HMAC-SHA256, base64). Pass the EXACT raw
-  // body — never a re-serialized object.
+  // body, never a re-serialized object.
   const valid = await verifySquareSignature({
     signatureKey: process.env.SQUARE_WEBHOOK_KEY ?? '',
     notificationUrl: process.env.SQUARE_WEBHOOK_URL ?? '',

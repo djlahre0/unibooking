@@ -49,7 +49,7 @@ export const ADAPTERS: Record<string, AdapterFactory<any>> = {
   apple,
 };
 
-/** Providers whose APIs allow browser (CORS) calls — run entirely client-side. */
+/** Providers whose APIs allow browser (CORS) calls: run entirely client-side. */
 export const DIRECT_PROVIDERS = new Set<string>([
   'google',
   'outlook',
@@ -60,7 +60,7 @@ export const DIRECT_PROVIDERS = new Set<string>([
   'wix',
 ]);
 
-/** Providers that block browser calls — routed through the demo's proxy. */
+/** Providers that block browser calls: routed through the demo's proxy. */
 export const PROXY_PROVIDERS = new Set<string>([
   'square',
   'acuity',
@@ -74,7 +74,7 @@ export const PROXY_PROVIDERS = new Set<string>([
   'apple',
 ]);
 
-/** Runs entirely in the browser against localStorage — no credentials, no host.
+/** Runs entirely in the browser against localStorage, no credentials, no host.
  *  Deliberately absent from ADAPTERS and from the proxy allowlist: it is not a
  *  library adapter and must never be relayable through /api/call. */
 export const LOCAL_PROVIDERS = new Set<string>(['sample']);

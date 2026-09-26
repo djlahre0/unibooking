@@ -120,7 +120,7 @@ describe('AUDIT microsoft_bookings: no silent no-ops', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Setmore — `limit` must not cut a page that has a successor
+// Setmore: `limit` must not cut a page that has a successor
 // ---------------------------------------------------------------------------
 describe('AUDIT setmore: listBookings limit on a non-terminal page', () => {
   it('returns the whole page and its cursor instead of dropping the tail', async () => {
@@ -365,7 +365,7 @@ describe('AUDIT booker', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Vagaro — the per-day fan-out cap says so instead of dropping a date
+// Vagaro: the per-day fan-out cap says so instead of dropping a date
 // ---------------------------------------------------------------------------
 describe('AUDIT vagaro: availability window touching 32 dates', () => {
   it('throws rather than silently answering for 31 of them', async () => {
@@ -381,7 +381,7 @@ describe('AUDIT vagaro: availability window touching 32 dates', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Calendly — a reschedule whose cancel step fails
+// Calendly: a reschedule whose cancel step fails
 // ---------------------------------------------------------------------------
 describe('AUDIT calendly: rebooked but the original could not be cancelled', () => {
   const ORIGIN = 'https://api.calendly.com';

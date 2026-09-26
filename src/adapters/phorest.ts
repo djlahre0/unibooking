@@ -24,7 +24,7 @@ import { assertValidRange, isInstant } from '../time';
 /**
  * Phorest third-party API. HTTP Basic auth; `businessId`/`branchId` scope every
  * path. Appointment responses split time into `appointmentDate` (yyyy-MM-dd) plus
- * `startTime`/`endTime` as UTC LocalTime (HH:mm:ss) — recombined to RFC3339 here.
+ * `startTime`/`endTime` as UTC LocalTime (HH:mm:ss): recombined to RFC3339 here.
  * No webhooks (Phorest recommends polling via updated_from/updated_to).
  */
 export type PhorestCredentials = {
@@ -184,7 +184,7 @@ function requireService(serviceId: string | undefined): string {
   return serviceId;
 }
 
-/** `ServiceSchedule.staffId` is required on a booking — without it Phorest 400s,
+/** `ServiceSchedule.staffId` is required on a booking, without it Phorest 400s,
  *  so reject client-side with a message that names the field. */
 function requireStaff(staffId: string | undefined): string {
   if (!staffId) {
@@ -231,7 +231,7 @@ function toCustomerRecord(raw: unknown): CustomerRecord {
 
 /** BookingResponse (`{bookingStatus, clientId, schedules,
  *  clientAppointmentSchedules, bookingId, links}`) carries no top-level
- *  appointment id, and `bookingId` is NOT the appointment's `groupBookingId` —
+ *  appointment id, and `bookingId` is NOT the appointment's `groupBookingId` -
  *  the created appointment's id lives on the nested service schedule. */
 function createdAppointmentId(res: unknown): string {
   const b = asRecord(res, 'phorest', 'booking');
@@ -441,7 +441,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
           ...input.providerOptions,
         },
       });
-      // BookingResponse is a booking summary, not an appointment — it carries
+      // BookingResponse is a booking summary, not an appointment: it carries
       // none of the fields a canonical Booking needs, so read the new id off the
       // nested service schedule and fetch the appointment itself.
       return getAppointment(http, c, createdAppointmentId(res));
@@ -456,7 +456,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
       const c = await http.resolve();
       const editsFields =
         input.range !== undefined || input.staffId !== undefined || input.serviceId !== undefined;
-      // Status is not a writable field on AppointmentUpdateRequest — Phorest
+      // Status is not a writable field on AppointmentUpdateRequest: Phorest
       // moves an appointment between states through dedicated endpoints. Route
       // them (never silently drop the caller's status).
       if (input.status !== undefined) {
@@ -476,7 +476,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         if (!editsFields) return getAppointment(http, c, id);
       }
       // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
-      // version all required — so a partial patch (e.g. serviceId alone) has to
+      // version all required, so a partial patch (e.g. serviceId alone) has to
       // backfill the others from current state or the request is rejected.
       let version = input.providerOptions?.version;
       let currentStaffId: string | undefined;
@@ -495,7 +495,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         if (typeof current.startTime === 'string') currentStartTime = current.startTime;
       }
       // The update request takes the same date + UTC LocalTime pair the read side
-      // returns — not an instant. Sending appointmentDate is what makes a
+      // returns, not an instant. Sending appointmentDate is what makes a
       // cross-day reschedule possible at all.
       const when = input.range ? splitUtc(input.range.start) : undefined;
       const res = await http.request(c, {
@@ -508,7 +508,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
           appointmentDate: when?.date ?? currentDate,
           startTime: when?.time ?? currentStartTime,
           // Note: when the staff or service changes, Phorest recomputes the
-          // duration from the new staff/service and IGNORES endTime — so the
+          // duration from the new staff/service and IGNORES endTime, so the
           // returned booking may not match the requested range.
           ...(input.range ? { endTime: splitUtc(input.range.end).time } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
@@ -589,7 +589,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         },
       });
       // Availability is the one `data`-wrapped body in the spec: `{ data: [...],
-      // links: [...] }`. Each entry carries only the slot's startTime — the end
+      // links: [...] }`. Each entry carries only the slot's startTime: the end
       // and the staff live one level down, per staff/service schedule, so a
       // single entry fans out to one slot per bookable staff member.
       const body = asRecord(res, 'phorest', 'availability');
@@ -599,7 +599,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         // Both ends must be canonical instants before they leave the adapter.
         // Phorest deals in branch-local times elsewhere in its API, and an
         // offset-less (or otherwise non-RFC3339) value forwarded verbatim is an
-        // ambiguous instant at best — at worst a start that `Date.parse` reads
+        // ambiguous instant at best, at worst a start that `Date.parse` reads
         // as NaN, which breaks every downstream comparison silently. Skip, as
         // acuity and calendly do for the same reason.
         if (typeof start !== 'string' || !isInstant(start)) continue;
@@ -613,7 +613,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
             'phorest',
             'availability.serviceSchedules',
           )) {
-            // No usable endTime means no derivable end — skip rather than
+            // No usable endTime means no derivable end: skip rather than
             // invent one.
             if (typeof ss?.endTime !== 'string' || !isInstant(ss.endTime)) continue;
             out.push({

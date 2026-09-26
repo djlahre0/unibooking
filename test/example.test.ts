@@ -5,7 +5,7 @@ import { google } from '../src/adapters/google';
 import { square } from '../src/adapters/square';
 
 /**
- * End-to-end walkthrough against mocked HTTP — the assertion-backed companion to
+ * End-to-end walkthrough against mocked HTTP: the assertion-backed companion to
  * examples/usage.ts. Guards the headline correctness fixes.
  */
 describe('end-to-end (mocked)', () => {

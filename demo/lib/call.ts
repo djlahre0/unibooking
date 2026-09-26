@@ -9,7 +9,7 @@ import {
 } from 'unibooking';
 import type { Capabilities, ProviderId } from 'unibooking';
 
-/* ── Webhook verifiers (pure crypto — run client-side) ── */
+/* ── Webhook verifiers (pure crypto: run client-side) ── */
 import { verifySquareSignature } from 'unibooking/webhooks/square';
 import { verifyAcuitySignature } from 'unibooking/webhooks/acuity';
 import { verifyCalendlySignature } from 'unibooking/webhooks/calendly';
@@ -19,6 +19,7 @@ import { graphValidationToken, verifyGraphClientState } from 'unibooking/webhook
 import { verifyBoulevardSignature } from 'unibooking/webhooks/boulevard';
 import { verifyVagaroToken } from 'unibooking/webhooks/vagaro';
 import { verifyWixWebhook } from 'unibooking/webhooks/wix';
+import { verifyBookeoSignature } from 'unibooking/webhooks/bookeo';
 
 import { ADAPTERS, isDirect, isLocal } from './providers';
 import { type Op } from './dispatch';
@@ -34,11 +35,11 @@ import { assertSafeBaseUrl } from './environments';
 export type { ActionResult, Connection } from './result';
 
 /* ═══════════════════════════════════════════════════════════
-   Transport picker — the one place that chooses direct vs proxy.
+   Transport picker: the one place that chooses direct vs proxy.
    This is also the ONE place both transports pass through, so it is where the
    base URL is validated for BOTH: the proxy route re-validates server-side
    (that check is the real security boundary and must stay), but the 7 direct
-   providers never reach the server — without a check here, a pasted baseUrl
+   providers never reach the server, without a check here, a pasted baseUrl
    would reach `makeClient` (and the visitor's live token with it) unguarded.
    ═══════════════════════════════════════════════════════════ */
 async function run(
@@ -71,7 +72,7 @@ async function run(
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Pure operations — no network, run client-side for every provider.
+   Pure operations, no network, run client-side for every provider.
    ═══════════════════════════════════════════════════════════ */
 export async function getCapabilities(providerId: string): Promise<ActionResult> {
   // The sample client is deliberately not in ADAPTERS (it is not a library
@@ -88,7 +89,7 @@ export async function getCapabilities(providerId: string): Promise<ActionResult>
   return { ok: true, data: { id: adapter.id, capabilities: adapter.capabilities } };
 }
 
-/** Capabilities for a provider, synchronously — tabs gate their UI on these
+/** Capabilities for a provider, synchronously: tabs gate their UI on these
  *  before any call is made. Returns null for an unknown id. */
 export function providerCapabilities(providerId: string): Capabilities | null {
   if (isLocal(providerId)) return SAMPLE_CAPABILITIES;
@@ -221,6 +222,16 @@ export async function verifyWebhook(
       case 'vagaro':
         result = verifyVagaroToken(fields.received || '', fields.expected || '');
         break;
+      case 'bookeo':
+        result = await verifyBookeoSignature({
+          secretKey: fields.secretKey || '',
+          timestamp: fields.timestamp || '',
+          messageId: fields.messageId || '',
+          webhookUrl: fields.webhookUrl || '',
+          body: fields.body || '',
+          signature: fields.signature || '',
+        });
+        break;
       case 'wix':
         result = await verifyWixWebhook({
           jwt: fields.jwt || '',
@@ -249,7 +260,7 @@ export function callOp(
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Client-requiring operations — same signatures the page already
+   Client-requiring operations: same signatures the page already
    used, so call sites are unchanged. Each picks its transport.
    ═══════════════════════════════════════════════════════════ */
 export function callCreateBooking(
@@ -368,14 +379,6 @@ export function callListClasses(
   return run(providerId, conn, 'listClasses', query);
 }
 
-export function callGetClass(
-  providerId: string,
-  conn: Connection,
-  classId: string,
-): Promise<ActionResult> {
-  return run(providerId, conn, 'getClass', { classId });
-}
-
 export function callEnrollInClass(
   providerId: string,
   conn: Connection,
@@ -433,14 +436,6 @@ export function callUpdateService(
 ): Promise<ActionResult> {
   return run(p, conn, 'updateService', { ...fields, id });
 }
-export function callSetServiceActive(
-  p: string,
-  conn: Connection,
-  id: string,
-  active: boolean,
-): Promise<ActionResult> {
-  return run(p, conn, 'setServiceActive', { id, active });
-}
 export function callDeleteService(p: string, conn: Connection, id: string): Promise<ActionResult> {
   return run(p, conn, 'deleteService', { id });
 }
@@ -458,14 +453,6 @@ export function callUpdateStaff(
   fields: CatalogFields,
 ): Promise<ActionResult> {
   return run(p, conn, 'updateStaff', { ...fields, id });
-}
-export function callSetStaffActive(
-  p: string,
-  conn: Connection,
-  id: string,
-  active: boolean,
-): Promise<ActionResult> {
-  return run(p, conn, 'setStaffActive', { id, active });
 }
 export function callDeleteStaff(p: string, conn: Connection, id: string): Promise<ActionResult> {
   return run(p, conn, 'deleteStaff', { id });

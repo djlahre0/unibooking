@@ -9,7 +9,7 @@ import {
   storageAvailable,
 } from './cred-storage';
 
-/** Minimal in-memory Storage — vitest runs in node, where localStorage is absent. */
+/** Minimal in-memory Storage: vitest runs in node, where localStorage is absent. */
 function fakeStorage(seed: Record<string, string> = {}): Storage {
   const map = new Map(Object.entries(seed));
   return {
@@ -198,7 +198,7 @@ describe('saveProvider', () => {
   });
 
   it('does not throw when the write itself throws', () => {
-    // remember must already be true in the *stored* state — using hostileStorage
+    // remember must already be true in the *stored* state: using hostileStorage
     // here would make getItem throw too, so loadState would report
     // remember: false and saveProvider would short-circuit before ever calling
     // write(), passing even if write()'s try/catch were deleted.

@@ -75,7 +75,7 @@ function followLink(pageToken: string | undefined): string | undefined {
   if (/^https?:\/\//i.test(pageToken)) return pageToken;
   // A non-URL token used to be forwarded as `$skiptoken`. Graph pages
   // calendarView with `$skip`, silently ignores unrecognized query params,
-  // and its docs say never to extract a paging token and reuse it — so
+  // and its docs say never to extract a paging token and reuse it, so
   // that path returned page 1 forever and the caller looped indefinitely.
   throw new UnibookingError({
     provider: 'outlook',
@@ -184,7 +184,7 @@ function requestedSchedules(
 
 /** getSchedule's `availabilityViewInterval` is documented as 5–1440 minutes
  *  and only sizes the `availabilityView` string, which this adapter does not
- *  read — slots are cut from `scheduleItems`. Clamped so a 2-minute or a
+ *  read: slots are cut from `scheduleItems`. Clamped so a 2-minute or a
  *  two-day slot length is not rejected over a field nothing uses. */
 function viewInterval(durationMinutes: number): number {
   return Math.min(1440, Math.max(5, Math.round(durationMinutes)));
@@ -468,7 +468,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
       const c = await http.resolve();
       // NOTE: `notify: false` is not honorable for organizer-owned meetings.
       // Graph documents that deleting an event on the organizer's calendar
-      // "sends a cancellation message to the meeting attendees" — so DELETE is
+      // "sends a cancellation message to the meeting attendees", so DELETE is
       // only silent for events with no attendees. Since createBooking attaches
       // an attendee whenever customer.email is set, most bookings we create will
       // notify on cancel regardless of this flag.
@@ -541,7 +541,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
      * verbatim as Graph requires. Graph v1.0 documents delta for the user's
      * default calendar only, so a client pinned to a `calendarId` cannot sync.
      * The window (`range`) is required on the first round and kept for every
-     * later one. Removed events — and events that left the window — arrive as
+     * later one. Removed events, and events that left the window, arrive as
      * deletes. An expired token (410) is `fullSyncRequired`.
      */
     async syncBookings(query = {}) {
@@ -599,7 +599,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
     },
 
     /** A Graph subscription to the calendar's events. Graph validates
-     *  `input.address` synchronously while creating it — the endpoint must
+     *  `input.address` synchronously while creating it: the endpoint must
      *  already answer the `validationToken` handshake (see
      *  `graphValidationToken` in `unibooking/webhooks/outlook`). */
     async watchBookings(input) {
@@ -756,7 +756,7 @@ export const outlook = defineAdapter<OutlookCredentials>({
       } else {
         // The target calendar's own events, recurrences expanded. This is the
         // path every account type supports, and the only one that can honour
-        // `calendarId` — getSchedule answers for a whole mailbox.
+        // `calendarId`: getSchedule answers for a whole mailbox.
         const events: any[] = [];
         let next: string | undefined;
         for (let page = 0; ; page++) {

@@ -8,8 +8,9 @@ import { allow } from '@/lib/rate-limit';
 export const runtime = 'nodejs';
 
 /**
- * The ONLY server surface in the demo. It exclusively serves the 9 providers
- * that block browser (CORS) calls — a strict allowlist, so it can never be
+ * The explorer's server surface (My Calendar has its own routes under
+ * /api/calendar). It exclusively serves the 10 providers
+ * that block browser (CORS) calls: a strict allowlist, so it can never be
  * abused to relay to Google/Microsoft/etc. Credentials are used to build the
  * client and then discarded; they are never logged, and never persisted on the
  * server. (The browser may persist them locally when the visitor opts in.)
@@ -19,15 +20,15 @@ function reply(body: ActionResult, status = 200): Response {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // 0. Same-origin only. This route carries no ambient authority — credentials
-  // arrive in the body, never from a cookie — so this is not classic CSRF.
+  // 0. Same-origin only. This route carries no ambient authority: credentials
+  // arrive in the body, never from a cookie, so this is not classic CSRF.
   // What it stops is any other site using this deployment as a relay to the 9
   // allowlisted provider hosts, spending its rate budget and putting its IP
   // behind someone else's traffic. `req.url` is this app's own configured
   // origin, not a client-supplied Host (see lib/calendar/http.ts), so it
   // cannot be forged; APP_URL overrides it when a reverse proxy terminates a
   // different public origin. Browsers send `Origin` on every POST, including
-  // same-origin ones, so a missing header is refused too — matching the My
+  // same-origin ones, so a missing header is refused too: matching the My
   // Calendar routes' `sameOrigin`.
   const expected = new URL(process.env.APP_URL || req.url).origin;
   if (req.headers.get('origin') !== expected) {
@@ -45,7 +46,7 @@ export async function POST(req: Request): Promise<Response> {
         ok: false,
         error: {
           code: 'RATE_LIMIT',
-          message: 'Rate limit exceeded — max 20 requests/min. Try again shortly.',
+          message: 'Rate limit exceeded: max 20 requests/min. Try again shortly.',
           httpStatus: 429,
           retryable: true,
         },
@@ -69,7 +70,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   const { provider, op, creds, baseUrl, args } = payload ?? {};
 
-  // 3. Strict allowlist: only the 9 proxied providers.
+  // 3. Strict allowlist: only the 10 proxied providers.
   if (typeof provider !== 'string' || !PROXY_PROVIDERS.has(provider)) {
     return reply(
       {
@@ -93,7 +94,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   const credentials = creds as Record<string, string>;
 
-  // 6. SSRF guard — the only user-supplied URL in the demo.
+  // 6. SSRF guard: the only user-supplied URL in the demo.
   if (provider === 'apple') {
     try {
       credentials.calendarUrl = assertSafeCalendarUrl(credentials.calendarUrl);
@@ -108,7 +109,7 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // 7. SSRF guard — the client may point us at a sandbox or regional host, but
+  // 7. SSRF guard: the client may point us at a sandbox or regional host, but
   //    only at one this provider actually publishes.
   let resolvedBaseUrl: string | undefined;
   if (baseUrl !== undefined && baseUrl !== '') {

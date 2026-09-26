@@ -139,7 +139,7 @@ describe('boulevard GraphQL shapes', () => {
     await makeClient().listBookings({ range: RANGE, staffId: 'st1' });
 
     expect(vars.locationId).toBe('urn:blvd:Location:L1');
-    // No endAt filter exists — the range must ride on startAt alone.
+    // No endAt filter exists: the range must ride on startAt alone.
     expect(vars.query).toContain("startAt >= '2026-07-20T09:00:00-07:00'");
     expect(vars.query).toContain("startAt < '2026-07-21T09:00:00-07:00'");
     expect(vars.query).toContain("staffId = 'st1'");
@@ -208,7 +208,7 @@ describe('boulevard GraphQL shapes', () => {
     expect(b.id).toBe('urn:blvd:Appointment:1');
   });
 
-  it('requires a staffId — bookingComplete.bookWithStaffId is non-null', async () => {
+  it('requires a staffId: bookingComplete.bookWithStaffId is non-null', async () => {
     const err = await makeClient()
       .createBooking({
         title: 'x',
@@ -227,7 +227,7 @@ describe('boulevard GraphQL shapes', () => {
     gqlRouter(
       agent,
       {
-        // The field returns a LIST of payloads, one per bookable service — not a
+        // The field returns a LIST of payloads, one per bookable service, not a
         // single object. Reading `.availableTimes` off the list yields undefined
         // and every reschedule fails with a spurious CONFLICT.
         appointmentRescheduleAvailableTimes: {
@@ -249,7 +249,7 @@ describe('boulevard GraphQL shapes', () => {
       'appointmentRescheduleAvailableTimes',
       'appointmentReschedule',
     ]);
-    // 10:00-07:00 === 17:00Z — must pick the matching opaque slot id.
+    // 10:00-07:00 === 17:00Z: must pick the matching opaque slot id.
     expect(seen[1]!.vars.input.bookableTimeId).toBe('bt-match');
     // sendNotification is non-null in the schema, so it is always present.
     expect(seen[1]!.vars.input.sendNotification).toBe(false);
@@ -350,7 +350,7 @@ describe('boulevard GraphQL shapes', () => {
 
   it('maps GraphQL error envelopes to non-retryable canonical codes', async () => {
     // These arrive as HTTP 200, so without classification they land on UPSTREAM,
-    // which isRetryable() re-issues — against non-idempotent mutations.
+    // which isRetryable() re-issues: against non-idempotent mutations.
     const table: Array<[any, string]> = [
       [{ message: 'Appointment not found', extensions: { code: 'NOT_FOUND' } }, 'NOT_FOUND'],
       [{ message: 'You are not authorized to access this location' }, 'FORBIDDEN'],

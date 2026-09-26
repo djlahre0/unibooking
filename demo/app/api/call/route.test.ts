@@ -5,7 +5,7 @@ import { POST } from './route';
  * The route builds its adapter with the global fetch and has no injection
  * point, so any request that PASSES the guard would otherwise make a real
  * network call to the provider. Stubbing the global both keeps the suite
- * offline and lets us assert the outbound host — which is the assertion that
+ * offline and lets us assert the outbound host, which is the assertion that
  * matters: it proves baseUrl reached the adapter instead of being dropped.
  */
 let outbound: string | null = null;
@@ -33,7 +33,7 @@ function stubFetch(): void {
   });
 }
 
-// Stub unconditionally, before every test — including the reject-path ones.
+// Stub unconditionally, before every test, including the reject-path ones.
 // Those tests stay offline only because the guard throws before fetch is
 // ever called; if the guard regressed, an unstubbed fetch would otherwise
 // send a real request to the attacker-controlled or provider host under test.
@@ -62,10 +62,10 @@ function post(body: unknown, ip: string, origin = 'http://localhost'): Promise<R
   );
 }
 
-describe('POST /api/call — origin guard', () => {
+describe('POST /api/call: origin guard', () => {
   // The proxy carries no ambient authority (credentials arrive in the body,
   // never from a cookie), so this is not classic CSRF. It stops the demo's
-  // server being used as a relay to the 9 allowlisted provider hosts by any
+  // server being used as a relay to the 10 allowlisted provider hosts by any
   // other site, which would spend this deployment's rate budget and put its
   // IP behind someone else's traffic.
   it('refuses a cross-origin POST', async () => {
@@ -80,7 +80,7 @@ describe('POST /api/call — origin guard', () => {
   });
 });
 
-describe('POST /api/call — baseUrl guard', () => {
+describe('POST /api/call: baseUrl guard', () => {
   it('rejects a base URL that is not on the provider allowlist', async () => {
     const res = await post(
       {

@@ -37,7 +37,7 @@ runConformance({
   provider: 'wix',
   origin: ORIGIN,
   makeClient: () => wix({ accessToken: 'token' }),
-  // Reader V2 has no GET-by-id — get/list both POST the extended-bookings query.
+  // Reader V2 has no GET-by-id: get/list both POST the extended-bookings query.
   errorProbe: {
     method: 'POST',
     path: '/bookings/bookings-reader/v2/extended-bookings/query',

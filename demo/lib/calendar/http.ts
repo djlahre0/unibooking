@@ -1,6 +1,6 @@
 import type { ActionResult } from '../result';
 
-/** Response helpers for the My Calendar routes — SERVER ONLY. Every response
+/** Response helpers for the My Calendar routes: SERVER ONLY. Every response
  *  is `no-store`: they carry per-user data and, often, a fresh session cookie. */
 
 function withCookies(headers: Headers, setCookies: string[]): Headers {
@@ -26,7 +26,7 @@ export function redirect(location: string, setCookies: string[] = []): Response 
 /** The My Calendar tab, with a status for its banner (`error=…`/`connected=…`).
  *  `error` is always either one of this app's own fixed codes or an OAuth
  *  `error` CODE already shape-checked by the callback route (see
- *  `oauthErrorCode` there) — never a provider's free-text `error_description`,
+ *  `oauthErrorCode` there), never a provider's free-text `error_description`,
  *  which can contain arbitrary content. */
 export function backToCalendar(origin: string, params: Record<string, string> = {}): string {
   const url = new URL('/', origin);
@@ -53,11 +53,11 @@ export function clientIp(req: Request): string {
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 /**
- * True only when the address THIS REQUEST ITSELF was made to is loopback —
+ * True only when the address THIS REQUEST ITSELF was made to is loopback:
  * i.e. its raw `Host` header, NOT `req.url`: under `next start`, a Route
  * Handler's `req.url` is built from this app's own configured origin (e.g.
  * always `http://localhost:3141`, the address it was started on) regardless
- * of what a client actually connected to or sent — confirmed by logging both
+ * of what a client actually connected to or sent: confirmed by logging both
  * side by side against a real running server, not assumed. `req.headers.get
  * ('host')`, by contrast, is the one thing that reliably carries the exact
  * value THIS request's Host header had.
@@ -66,10 +66,10 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
  * client sets itself: Next.js only ever back-fills `x-forwarded-for` from the
  * real socket when the incoming request didn't already carry one (see
  * `base-server.js`'s `??=`), so a request that supplies its own value keeps
- * it verbatim — any client can claim to be `127.0.0.1` this way, which is
+ * it verbatim: any client can claim to be `127.0.0.1` this way, which is
  * exactly why the save route this guards must not trust it. `Host` is
  * different: a browser's `fetch()`/`XMLHttpRequest` can never override it
- * (it's a forbidden header name) — it always reflects the address the
+ * (it's a forbidden header name): it always reflects the address the
  * browser actually connected to, so no visitor's browser can be made to say
  * `Host: localhost` while talking to a deployment reached over the network.
  * (A raw, non-browser HTTP client could still forge it; this app's actual
@@ -94,7 +94,7 @@ export const forbidden = (): Response =>
 
 /** The operator's OAuth setup form is a development-time affordance. It is
  *  refused outright in production because the loopback check that guards it
- *  reads the `Host` header, which a non-browser client can forge — so on a
+ *  reads the `Host` header, which a non-browser client can forge, so on a
  *  reachable deployment it would not be a boundary at all. */
 export const setupDisabled = (): Response =>
   json(
@@ -116,7 +116,7 @@ export const localhostOnly = (): Response =>
       error: {
         code: 'FORBIDDEN',
         message:
-          'The OAuth app can only be configured from the machine running this deployment — open it at http://localhost and try again there.',
+          'The OAuth app can only be configured from the machine running this deployment: open it at http://localhost and try again there.',
       },
     },
     403,
@@ -128,7 +128,7 @@ export const rateLimited = (): Response =>
       ok: false,
       error: {
         code: 'RATE_LIMIT',
-        message: 'Rate limit exceeded — max 20 requests/min. Try again shortly.',
+        message: 'Rate limit exceeded: max 20 requests/min. Try again shortly.',
         httpStatus: 429,
         retryable: true,
       },

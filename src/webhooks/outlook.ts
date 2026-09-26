@@ -1,7 +1,7 @@
 import { timingSafeEqual } from '../crypto';
 
 /**
- * Microsoft Graph webhooks (Outlook calendar events — Graph v1.0 does not
+ * Microsoft Graph webhooks (Outlook calendar events: Graph v1.0 does not
  * support subscriptions on Bookings resources) use two mechanisms:
  *
  *  1. A validation handshake: when you create a subscription, Graph immediately
@@ -64,7 +64,7 @@ const LIFECYCLE_EVENTS = new Set(['reauthorizationRequired', 'subscriptionRemove
 /**
  * Read a Graph change- or lifecycle-notification body (the raw JSON string or
  * its parsed form). Malformed entries are skipped and unreadable input is an
- * empty list — never a throw, so the endpoint can still answer 202 quickly, as
+ * empty list, never a throw, so the endpoint can still answer 202 quickly, as
  * Graph requires. Check `verifyGraphClientState` first: this only reads.
  */
 export function parseGraphNotifications(payload: unknown): GraphNotification[] {

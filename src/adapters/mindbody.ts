@@ -16,14 +16,14 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
 /**
  * Mindbody (public API v6). Auth is three headers: `Api-Key`, `SiteId`, and a
  * staff/user token as `Authorization` (obtain it via `/usertoken/issue` and pass
- * it in — this package never stores it).
+ * it in: this package never stores it).
  *
  * IMPORTANT: Mindbody returns site-LOCAL datetimes without an offset. Provide
  * either the site's IANA `timezone` (e.g. `America/Los_Angeles`, DST-correct) or
  * a fixed `utcOffset` (e.g. `-08:00`) so this adapter can produce correct
  * canonical instants; without either, times are treated as UTC. `timezone` is
- * preferred — a fixed offset is wrong for half the year in DST-observing zones.
- * Cancellation has no dedicated path — it is an action on the update endpoint
+ * preferred: a fixed offset is wrong for half the year in DST-observing zones.
+ * Cancellation has no dedicated path: it is an action on the update endpoint
  * (`updateappointment` with `Execute: 'cancel'`), which is what `cancelBooking`
  * calls. Validate endpoint shapes against a live sandbox before relying on this
  * in production.
@@ -171,7 +171,7 @@ function required(value: string | undefined, name: string): string {
 }
 
 /** Mindbody types AppointmentId as an int. `Number(id)` on a non-numeric string
- *  yields NaN, which serializes to `null` and reaches the API as "no id" — so
+ *  yields NaN, which serializes to `null` and reaches the API as "no id", so
  *  reject it here instead, and send the same numeric form on every write. */
 function appointmentId(id: string): number {
   const n = Number(id);
@@ -221,7 +221,7 @@ function classStatus(raw: Record<string, unknown>): ClassStatus {
   if (typeof end === 'string') {
     const ms = Date.parse(end);
     // Offset-less site-local strings parse as local time here, which is close
-    // enough to decide "already over" — a few hours either way cannot flip a
+    // enough to decide "already over": a few hours either way cannot flip a
     // class that ended last week.
     if (!Number.isNaN(ms) && ms < now()) return 'completed';
   }
@@ -285,7 +285,7 @@ const now = (): number => Date.now();
 
 /** The next `offset` page token, from Mindbody's `PaginationResponse`. Every
  *  list endpoint pages (100 by default) and says how many results exist in
- *  total; without this token the rest were silently unreachable — a site with
+ *  total; without this token the rest were silently unreachable: a site with
  *  120 staff listed 100 and `getStaff` could never find the other 20. */
 function nextOffsetToken(
   res: any,
@@ -303,7 +303,7 @@ const LOOKUP_WINDOW_DAYS = 730;
 
 /** StaffAppointments defaults StartDate to TODAY (and EndDate to StartDate), so
  *  querying by AppointmentIds alone can only ever find an appointment happening
- *  today — anything else comes back empty and looks like a 404. Send a wide
+ *  today: anything else comes back empty and looks like a 404. Send a wide
  *  window around the current instant so a lookup by id works in both directions. */
 function lookupWindow(tz: SiteTz): { StartDate: string; EndDate: string } {
   const span = LOOKUP_WINDOW_DAYS * 24 * 60 * 60 * 1000;
@@ -361,7 +361,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       const tz = siteTz(c);
       // There is no get-one path; `class/classes` filters by ClassIds. The
       // window is required for the same reason `lookupWindow` exists for
-      // appointments — without it the search only covers today.
+      // appointments, without it the search only covers today.
       const res = await http.request(c, {
         path: 'class/classes',
         query: { ClassIds: id, ...lookupWindow(tz) },
@@ -576,7 +576,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
       async updateBooking(id, input) {
         if (input.range) assertValidRange(input.range, 'mindbody');
         // UpdateAppointment only moves a status through its `Execute` actions, and
-        // cancellation is `cancelBooking`'s job — so reject a status the plain
+        // cancellation is `cancelBooking`'s job, so reject a status the plain
         // update cannot apply rather than silently dropping it.
         if (input.status !== undefined) {
           throw new UnibookingError({
@@ -704,14 +704,14 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
             (typeof total === 'number' && offset + batch.length >= total);
           if (done) break;
         }
-        // An `Availabilities[]` entry is a staff availability WINDOW, not a slot —
+        // An `Availabilities[]` entry is a staff availability WINDOW, not a slot:
         // emitting it verbatim turned a 9-to-5 shift into a single 8h "slot". Slice
         // it into bookable starts using the requested duration, else the session
         // type's default length. With neither we keep the window: it is coarse but
         // still truthful, and throwing would hide real availability.
         //
         // A returned window is any shift that OVERLAPS the query, so it routinely
-        // extends past it on both sides — a 12:00–14:00 question came back as the
+        // extends past it on both sides: a 12:00–14:00 question came back as the
         // whole 09:00–17:00 shift. The slices below stay anchored to the shift's
         // own start (that is where the real bookable grid begins, and re-anchoring
         // on `range.start` would invent starts the provider never offers); the
@@ -726,7 +726,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
           const size = query.durationMinutes ?? a.SessionType?.DefaultTimeLength;
           if (typeof size !== 'number' || size <= 0) {
             // No slot size, so there is no grid to filter against. Report the
-            // shift's overlap with the query instead of the whole shift — still
+            // shift's overlap with the query instead of the whole shift, still
             // coarse, still truthful, but never wider than what was asked for.
             const from = Date.parse(start) < winStart ? query.range.start : start;
             const to = Date.parse(end) > winEnd ? query.range.end : end;
@@ -734,7 +734,7 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
             return [{ start: from, end: to, ...staff, raw: a }];
           }
           // BookableEndDateTime is "the time of day that the last appointment can
-          // start" — a start cap, not an end cap.
+          // start": a start cap, not an end cap.
           const lastStart = toInstant(a.BookableEndDateTime, tz);
           const latestStart = lastStart !== undefined ? Date.parse(lastStart) : Infinity;
           const windowEnd = Date.parse(end);

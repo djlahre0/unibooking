@@ -6,7 +6,7 @@ import { assertCanonicalCalendar, runConformance } from '../conformance';
 
 const EVENT = {
   id: 'ev1',
-  subject: 'Sync — Jane',
+  subject: 'Sync: Jane',
   start: { dateTime: '2026-07-20T22:00:00.0000000', timeZone: 'UTC' },
   end: { dateTime: '2026-07-20T22:30:00.0000000', timeZone: 'UTC' },
   attendees: [{ emailAddress: { address: 'jane@example.com', name: 'Jane' }, type: 'required' }],

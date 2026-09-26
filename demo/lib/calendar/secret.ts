@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
- * Resolves the key that seals My Calendar's cookies — SERVER ONLY.
+ * Resolves the key that seals My Calendar's cookies: SERVER ONLY.
  *
  * The demo needs zero environment variables to run. Precedence:
  *
@@ -13,12 +13,12 @@ import { dirname, join } from 'node:path';
  *      guarantee that on a platform with a read-only filesystem and many
  *      short-lived instances (see demo/README.md's serverless caveat).
  *   2. A key persisted at `filePath` (default `demo/.session-secret`, which
- *      is git-ignored — see .gitignore before this file ever writes to it).
+ *      is git-ignored: see .gitignore before this file ever writes to it).
  *      Read it back if it already exists; otherwise generate 32 random bytes
  *      and write them there with owner-only permissions, so this process and
  *      every later one reuse the SAME key instead of signing everyone out on
  *      every restart.
- *   3. If the filesystem can't be read or written (serverless, read-only —
+ *   3. If the filesystem can't be read or written (serverless, read-only:
  *      or just a transient error), generate an in-memory key for this
  *      process only and mark it `ephemeral`. A transient fault must not
  *      crash the request, so every fs call here is wrapped and falls
@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path';
  * Resolved once per process and cached: regenerating per request would seal
  * each new cookie under a different key than the one before it, silently
  * invalidating every session. The cache is unconditional (matches
- * `__resetRateLimit`'s pattern elsewhere in this app) — tests that need an
+ * `__resetRateLimit`'s pattern elsewhere in this app): tests that need an
  * independent resolution call `__resetSessionSecretCache()` first and pass
  * their own `filePath` override so they never touch this project's real
  * `.session-secret` file.
@@ -48,7 +48,7 @@ export interface SecretOverrides {
 
 let cached: ResolvedSecret | undefined;
 
-/** Read the persisted key, or generate + persist one. Never throws — a
+/** Read the persisted key, or generate + persist one. Never throws: a
  *  write failure (read-only fs) degrades to an in-memory key instead of
  *  failing the request. */
 function fromFile(filePath: string): ResolvedSecret {
@@ -58,10 +58,10 @@ function fromFile(filePath: string): ResolvedSecret {
     // A shorter-than-expected file is treated as absent/corrupt and
     // regenerated below, rather than sealing cookies under a weak key.
   } catch {
-    // Doesn't exist yet (first run) or unreadable — fall through and create it.
+    // Doesn't exist yet (first run) or unreadable: fall through and create it.
   }
 
-  // Never logged, never returned in any response — this is a real secret.
+  // Never logged, never returned in any response: this is a real secret.
   const generated = randomBytes(32).toString('base64url');
   try {
     mkdirSync(dirname(filePath), { recursive: true });
@@ -87,7 +87,7 @@ export function resolveSessionSecret(overrides: SecretOverrides = {}): ResolvedS
   return cached;
 }
 
-/** Test hook — clears the cached resolution so the next call re-resolves
+/** Test hook: clears the cached resolution so the next call re-resolves
  *  from scratch. Mirrors `__resetRateLimit` in lib/rate-limit.ts. */
 export function __resetSessionSecretCache(): void {
   cached = undefined;

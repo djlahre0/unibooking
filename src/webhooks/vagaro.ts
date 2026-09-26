@@ -1,6 +1,6 @@
 /**
  * Vagaro webhook verification. Unlike Square/Outlook, Vagaro does not HMAC-sign its
- * payloads — it sends a **static shared verification token** in the `X-Vagaro-Signature`
+ * payloads: it sends a **static shared verification token** in the `X-Vagaro-Signature`
  * header that you compare against the token you configured. This is a constant-time
  * string comparison, not a signature check.
  */

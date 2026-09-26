@@ -4,7 +4,7 @@ import { UnibookingError, type Booking, type BookingClient } from 'unibooking';
  * "Cancel" vs "Delete" for calendar events.
  *
  * On Google, Outlook and Apple the library's `cancelBooking()` removes the
- * event outright — calendars have no separate cancelled-booking record. The
+ * event outright: calendars have no separate cancelled-booking record. The
  * explorer offers that as **Delete**, and adds **Cancel**: the event stays on
  * the calendar, visibly marked cancelled, and stops blocking the time.
  *
@@ -68,7 +68,7 @@ export async function markCancelled(
   });
 }
 
-/* ── Status: confirmed, tentative, cancelled — and back again ────────────── */
+/* ── Status: confirmed, tentative, cancelled, and back again ────────────── */
 
 /** The three statuses a calendar event can be given here. `pending` is the
  *  library's name for tentative. */

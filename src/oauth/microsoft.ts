@@ -2,15 +2,15 @@ import { defineOAuth, type OAuthClient, type OAuthConfig } from './core';
 
 /**
  * Microsoft identity platform OAuth2, shared by the `outlook` and
- * `microsoft_bookings` adapters. **Server-only** — takes a client secret.
+ * `microsoft_bookings` adapters. **Server-only**: takes a client secret.
  *
  * `offline_access` is required for a refresh token and is added automatically if
- * you do not include it — omitting it yields an access token that simply expires
+ * you do not include it: omitting it yields an access token that simply expires
  * with no way to renew, which is the same trap as Google's `access_type`.
  */
 export interface MicrosoftOAuthConfig extends OAuthConfig {
   /** Directory tenant: a tenant id, `organizations`, `consumers`, or `common`
-   *  (the default — works for both work/school and personal accounts). */
+   *  (the default: works for both work/school and personal accounts). */
   tenant?: string;
 }
 

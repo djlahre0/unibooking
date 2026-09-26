@@ -5,7 +5,7 @@ tmp/
 .superpowers/
 *.tsbuildinfo
 
-# The demo is a separate package with its own tooling — it formats itself.
+# The demo is a separate package with its own tooling: it formats itself.
 demo/
 
 # Lockfiles are machine-managed; never reformat them.

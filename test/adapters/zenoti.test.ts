@@ -286,7 +286,7 @@ describe('zenoti flows', () => {
     }
   });
 
-  it('widens a same-day listBookings window — end_date is exclusive', async () => {
+  it('widens a same-day listBookings window: end_date is exclusive', async () => {
     const seen = capture('GET', '/v1/appointments', { appointments: [APPT] });
     const r = await makeClient().listBookings({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T23:00:00Z' },

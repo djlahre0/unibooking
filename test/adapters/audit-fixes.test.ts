@@ -32,7 +32,7 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// ical.patchICS — the primitive behind the Apple update fix
+// ical.patchICS: the primitive behind the Apple update fix
 // ---------------------------------------------------------------------------
 describe('ical.patchICS', () => {
   const RAW = [
@@ -358,8 +358,8 @@ describe('AUDIT square: listBookings forwards customerId', () => {
 // ---------------------------------------------------------------------------
 
 // A 412 Precondition Failed is how CalDAV signals an If-Match (lost-update) or
-// If-None-Match:* (create collision) failure. It must map to CONFLICT — a
-// NON-retryable code — so withRetry can't silently re-run the write and clobber
+// If-None-Match:* (create collision) failure. It must map to CONFLICT: a
+// NON-retryable code, so withRetry can't silently re-run the write and clobber
 // the concurrent edit the ETag guard was protecting against.
 describe('AUDIT calendar: 412 Precondition Failed is a non-retryable CONFLICT', () => {
   it('codeForStatus(412) is CONFLICT and therefore not retryable', () => {

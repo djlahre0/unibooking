@@ -6,7 +6,7 @@ import { unescapeXml } from './ical';
 
 /**
  * CalDAV discovery (RFC 4791 §6, RFC 5397): from a server root to the account's
- * calendar collections, so a caller needs an account and a password — never a
+ * calendar collections, so a caller needs an account and a password, never a
  * collection URL nobody outside the server knows. Three PROPFINDs:
  *
  *   1. root, Depth 0      → `current-user-principal`

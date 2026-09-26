@@ -217,7 +217,7 @@ describe('boulevard webhook (salted HMAC)', () => {
     ).toBe(false);
   });
 
-  it('rejects a hex signature — Boulevard never emits hex', async () => {
+  it('rejects a hex signature: Boulevard never emits hex', async () => {
     expect(
       await verifyBoulevardSignature({
         signingSecret: secret,
@@ -257,7 +257,7 @@ describe('wix webhook (signed JWT)', () => {
 
 describe('bookeo webhook (HMAC-SHA256 hex)', () => {
   // Bookeo's own published worked example. Every string below is verbatim from
-  // their docs, including the query string on the URL — this is the whole test.
+  // their docs, including the query string on the URL: this is the whole test.
   const secretKey = 'iWQlbsuksGUqStFPk46WVjpGO7vVQoeO';
   const timestamp = '1683025420401';
   const messageId = 'dvpwVQI0W7Pe187dc203154';
@@ -280,7 +280,7 @@ describe('bookeo webhook (HMAC-SHA256 hex)', () => {
   });
 
   it('rejects when the URL query string is stripped', async () => {
-    // The query string is part of the signed message — no normalization.
+    // The query string is part of the signed message, no normalization.
     expect(
       await verifyBookeoSignature({
         ...input,
@@ -314,7 +314,7 @@ describe('a missing or malformed signature header is a clean false, never a thro
   // The canonical handler reads the header straight off the request
   // (`req.headers['x-...']`), which is `string | undefined` in every Node
   // framework. Throwing there turns an unsigned request into a 500 instead of
-  // the 401 the caller intended — and gives an attacker who simply omits the
+  // the 401 the caller intended, and gives an attacker who simply omits the
   // header a different, noisier code path than one who sends a wrong one.
   const missing = [undefined, null, ''] as const;
 

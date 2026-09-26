@@ -150,7 +150,7 @@ export function buildSeed(today: string, timezone: string): SampleData {
     bookings.push({
       id: `bkg_${id}`,
       provider: SAMPLE_ID,
-      title: `${service.name} — ${customer.name}`,
+      title: `${service.name}: ${customer.name}`,
       range: {
         start: zonedToInstant(`${day}T${startTime}`, timezone),
         // endFromDuration is the library's own helper and preserves the offset

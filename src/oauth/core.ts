@@ -7,7 +7,7 @@ import { UnibookingError, codeForStatus } from '../errors';
  * ## Server-only
  *
  * Every client here takes a **client secret**. Nothing under `unibooking/oauth`
- * may be imported into browser code, and no adapter imports it — so bundling an
+ * may be imported into browser code, and no adapter imports it, so bundling an
  * adapter can never drag secrets-handling code into a client build.
  *
  * ## Nothing is persisted
@@ -20,12 +20,12 @@ import { UnibookingError, codeForStatus } from '../errors';
 export interface OAuthTokens {
   accessToken: string;
   /** Absent when the provider issues none, or when a refresh response omits it
-   *  — Google returns a refresh token only on the first consent. */
+   *  Google returns a refresh token only on the first consent. */
   refreshToken?: string;
   /** RFC3339 instant. Derived from `expires_in` where the provider sends a
    *  duration, so a consumer never has to know which encoding it got. */
   expiresAt?: string;
-  /** Space-separated, as GRANTED — which is not always what was requested. */
+  /** Space-separated, as GRANTED, which is not always what was requested. */
   scope?: string;
   raw: unknown;
 }
@@ -33,7 +33,7 @@ export interface OAuthTokens {
 export interface AuthorizationUrl {
   url: string;
   /** CSRF token. Generated unless the caller supplied one. Store it and compare
-   *  on callback — this library cannot verify it for you without keeping state. */
+   *  on callback: this library cannot verify it for you without keeping state. */
   state: string;
   /** Present only when `pkce: true`. Store alongside `state` and pass it back to
    *  `exchangeCode`. */
@@ -99,7 +99,7 @@ async function codeChallengeS256(verifier: string): Promise<string> {
  * Token-endpoint `error` values that mean the grant itself is gone and only the
  * user can bring it back by signing in again. RFC 6749 §5.2 answers every
  * token-endpoint error with HTTP 400, and Google and Microsoft do exactly that
- * for a revoked refresh token — so the status alone reads as INVALID_INPUT and a
+ * for a revoked refresh token, so the status alone reads as INVALID_INPUT and a
  * consumer cannot tell "reconnect" from "malformed request". These become AUTH.
  * `interaction_required`/`login_required`/`consent_required` are Entra's answers
  * when MFA, a conditional-access change or new consent needs the user present.
@@ -116,8 +116,8 @@ const TOKEN_TIMEOUT_MS = 15_000;
 
 /**
  * One call to a token endpoint, bounded by a timeout. Without one, a token
- * endpoint that accepted the connection and never answered held the request —
- * and, under `withAutoRefresh`, every request sharing that refresh — forever,
+ * endpoint that accepted the connection and never answered held the request:
+ * and, under `withAutoRefresh`, every request sharing that refresh: forever,
  * where every adapter call gives up after `timeoutMs`. Nothing about the
  * request is put in the error: its body carries the client secret.
  */
@@ -157,7 +157,7 @@ function expiryFromSeconds(seconds: unknown, now: number): string | undefined {
 
 /**
  * The standard OAuth2 token response. Providers that deviate override this via
- * `parseTokens` — Square sends `expires_at` as an RFC3339 string rather than
+ * `parseTokens`: Square sends `expires_at` as an RFC3339 string rather than
  * `expires_in` seconds.
  */
 export function parseStandardTokens(provider: ProviderId, raw: any, now: number): OAuthTokens {
@@ -187,7 +187,7 @@ export interface DefineOAuthConfig extends OAuthConfig {
   /** How the token request body is encoded. Acuity requires form encoding and
    *  rejects JSON; Square requires JSON. */
   bodyFormat: 'form' | 'json';
-  /** Fixed extra parameters on the authorize URL — Google's
+  /** Fixed extra parameters on the authorize URL: Google's
    *  `access_type=offline` + `prompt=consent`, without which no refresh token
    *  is ever issued. */
   authorizeParams?: Record<string, string>;
@@ -223,7 +223,7 @@ export function defineOAuth(config: DefineOAuthConfig): OAuthClient {
 
     if (!res.ok) {
       // OAuth2 error bodies are `{ error, error_description }`. The request body
-      // is never echoed into the message — it carries the client secret.
+      // is never echoed into the message: it carries the client secret.
       const detail = parsed?.error_description ?? parsed?.message ?? parsed?.error;
       const grantDead = typeof parsed?.error === 'string' && DEAD_GRANT.has(parsed.error);
       throw new UnibookingError({
@@ -303,7 +303,7 @@ export interface AutoRefreshConfig<TCreds extends ProviderCredentials> {
   /** Refresh this far ahead of expiry. Default 60_000. */
   skewMs?: number;
   /** Build the adapter's credential object from the current tokens. This is
-   *  what varies per provider — Square also needs `locationId`, Google a
+   *  what varies per provider: Square also needs `locationId`, Google a
    *  `calendarId`. */
   toCreds: (tokens: OAuthTokens) => TCreds;
   /** Injectable clock for tests. */
@@ -314,17 +314,17 @@ export interface AutoRefreshConfig<TCreds extends ProviderCredentials> {
  * Bridge OAuth refresh into the adapter credential system.
  *
  * Returns a `CredsInput` function, so it is resolved fresh before every request
- * and cannot race a mid-request expiry. The library still stores nothing — the
+ * and cannot race a mid-request expiry. The library still stores nothing: the
  * `onRefresh` callback is how new tokens reach your database.
  *
  * Concurrent calls on the SAME returned function share one in-flight refresh
  * (and one `onRefresh`): two parallel requests on one client would otherwise
  * each spend the refresh token, and a provider with single-use refresh tokens
- * (Calendly enforces rotation) refuses the second — the connection then looks
+ * (Calendly enforces rotation) refuses the second: the connection then looks
  * revoked. That sharing is per function, not per process or per fleet: separate
  * `withAutoRefresh` instances for the same grant (one per request, one per
  * server) still refresh independently. Where that matters, serialize refreshes
- * yourself — e.g. a row lock around loading the tokens and building the client.
+ * yourself, e.g. a row lock around loading the tokens and building the client.
  */
 export function withAutoRefresh<TCreds extends ProviderCredentials>(
   config: AutoRefreshConfig<TCreds>,
@@ -343,7 +343,7 @@ export function withAutoRefresh<TCreds extends ProviderCredentials>(
       ...(next.refreshToken ? {} : { refreshToken }),
     };
     // Persist BEFORE handing the credentials out. If the write fails the error
-    // propagates and the request does not proceed — continuing as though the
+    // propagates and the request does not proceed: continuing as though the
     // token were saved is how a refresh token gets lost permanently.
     await config.onRefresh(merged);
     current = merged;
@@ -353,7 +353,7 @@ export function withAutoRefresh<TCreds extends ProviderCredentials>(
   return async (): Promise<TCreds> => {
     const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : NaN;
     // No expiry means the provider told us nothing. Guessing a lifetime would be
-    // worse than its own silence — checkConnection covers the diagnosis.
+    // worse than its own silence: checkConnection covers the diagnosis.
     const stale = Number.isFinite(expiresAt) && now() >= expiresAt - skewMs;
     if (!stale || !current.refreshToken) return config.toCreds(current);
 

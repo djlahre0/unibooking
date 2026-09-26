@@ -4,7 +4,7 @@
  * This is COST CONTROL, not a security boundary: the proxy is useless without
  * the caller's own valid provider credentials, so an attacker gains nothing by
  * flooding it. The goal is only to stop one bored visitor from burning the
- * function quota. It's per-instance and resets on cold start — Vercel's
+ * function quota. It's per-instance and resets on cold start: Vercel's
  * platform DDoS protection covers the distributed tail.
  *
  * The map is pruned and key-capped so the limiter itself can't become a
@@ -36,7 +36,7 @@ export function allow(ip: string, nowMs: number = Date.now()): boolean {
   return true;
 }
 
-/** Test hook — clears all tracked state. */
+/** Test hook: clears all tracked state. */
 export function __resetRateLimit(): void {
   hits.clear();
 }
