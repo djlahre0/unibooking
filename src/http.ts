@@ -13,14 +13,16 @@ export interface HttpRequest {
   body?: unknown;
   /** How to read the response body. Default `'json'`. */
   parse?: 'json' | 'text' | 'none';
-  /** Observe response metadata (status, headers) before the body is parsed —
-   *  e.g. to capture an `ETag` for CalDAV optimistic concurrency. Called for
-   *  both success and error responses. */
-  onResponse?: (meta: { status: number; headers: Headers }) => void;
+  /** Observe response metadata (status, headers, final URL) before the body is
+   *  parsed, e.g. to capture an `ETag` for CalDAV optimistic concurrency, or to
+   *  resolve the relative hrefs of a WebDAV multistatus. `url` is the response
+   *  URL after any redirects, or the requested URL when the runtime reports none.
+   *  Called for both success and error responses. */
+  onResponse?: (meta: { status: number; headers: Headers; url: string }) => void;
 }
 
 /** Given resolved credentials, produce the auth to apply to a request. May be
- *  async — some providers sign each request (e.g. a per-request HMAC token). */
+ *  async: some providers sign each request (e.g. a per-request HMAC token). */
 export type AuthResult = {
   headers?: Record<string, string>;
   query?: Record<string, string>;
@@ -35,10 +37,17 @@ export interface HttpConfig<TCreds> {
   options?: ClientOptions | undefined;
   /** Response header carrying a request/correlation id, if the provider sets one. */
   requestIdHeader?: string;
+  /** Allow an absolute request `path` on a host other than `baseUrl`'s. Off by
+   *  default: every request carries the credentials, so an absolute URL that
+   *  reached a path from caller input (an Outlook `pageToken` is a full Graph
+   *  URL) would otherwise hand the bearer token to whatever host it names.
+   *  CalDAV needs it, because iCloud serves a calendar home from a partition
+   *  host (`p57-caldav.icloud.com`) that discovery only learns at runtime. */
+  allowCrossOrigin?: boolean;
   /** Pull a provider-specific error code/message out of a parsed error body.
    *
    *  May also return a canonical `code` to OVERRIDE the one the HTTP status
-   *  would imply — for the cases where a provider's status is actively
+   *  would imply, for the cases where a provider's status is actively
    *  misleading. Omit it to keep the status-derived default. */
   parseError?: (
     status: number,
@@ -49,7 +58,7 @@ export interface HttpConfig<TCreds> {
 /**
  * A per-provider HTTP context. Adapter methods `resolve()` credentials once at
  * the top of the call (which runs the refresh function, if any) and pass the
- * resolved creds into every `request()` — so auth and routing fields
+ * resolved creds into every `request()`, so auth and routing fields
  * (locationId, calendarId, siteId, …) come from a single, consistent snapshot.
  */
 export interface HttpContext<TCreds> {
@@ -87,6 +96,21 @@ function buildUrl(
   apply(query);
   apply(authQuery);
   return url.toString();
+}
+
+/** Refuse a `path` that resolves off the base URL's host. Paths are relative
+ *  by construction everywhere except where an adapter follows a URL it was
+ *  handed, and that URL may have come from a caller (see
+ *  `HttpConfig.allowCrossOrigin`). */
+function assertSameOrigin(provider: ProviderId, baseUrl: string, path: string): void {
+  const base = new URL(baseUrl.endsWith('/') ? baseUrl : baseUrl + '/');
+  const target = new URL(path.replace(/^\//, ''), base);
+  if (target.origin === base.origin) return;
+  throw new UnibookingError({
+    provider,
+    code: 'INVALID_INPUT',
+    message: `refusing to send credentials to ${target.origin}; requests stay on ${base.origin}`,
+  });
 }
 
 function parseRetryAfter(header: string | null, now: () => Date): number | undefined {
@@ -129,6 +153,9 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
   }
 
   async function request<T = any>(creds: TCreds, req: HttpRequest): Promise<T> {
+    // Checked before auth is even computed, so no credential is built for a
+    // request that is refused.
+    if (!config.allowCrossOrigin) assertSameOrigin(config.provider, config.baseUrl, req.path);
     const authed = await config.auth(creds);
     const url = buildUrl(config.baseUrl, req.path, req.query, authed.query);
 
@@ -171,7 +198,7 @@ export function createHttp<TCreds>(config: HttpConfig<TCreds>): HttpContext<TCre
     }
 
     const requestId = readRequestId(res.headers, config.requestIdHeader);
-    req.onResponse?.({ status: res.status, headers: res.headers });
+    req.onResponse?.({ status: res.status, headers: res.headers, url: res.url || url });
 
     if (!res.ok) {
       const rawText = await res.text().catch(() => '');

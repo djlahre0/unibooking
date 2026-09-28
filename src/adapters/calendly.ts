@@ -16,9 +16,10 @@ import { assertValidRange, endFromDuration, isInstant } from '../time';
  * arrived with the Scheduling API "Create Event Invitee" (Oct 2025), so
  * `createBooking` requires a paid Calendly plan.
  *
- * Calendly has NO reschedule endpoint, so `updateBooking` with a new range does
- * cancel-then-rebook (read the event's type + invitee, book the new time, cancel
- * the old) — the same re-book strategy `zenoti` uses.
+ * Calendly has NO reschedule endpoint, so `updateBooking` with a new range
+ * re-books: it reads the event's type + invitee, books the new time, then
+ * cancels the old event. Booking first means a slot that is gone leaves the
+ * original untouched; the returned booking has a new id.
  *
  * Auth: bring your own bearer (Personal Access Token or OAuth). `user` (or
  * `organization`) scopes `listBookings`; when omitted it is discovered via
@@ -171,7 +172,7 @@ async function createEventInvitee(
   });
   const resource = asRecord(res?.resource, 'calendly', 'create.resource');
   // The create response may be the scheduled event itself, or an invitee that
-  // references its event by URI — handle both.
+  // references its event by URI: handle both.
   if (typeof resource.start_time === 'string') return toBookingFromEvent(resource);
   const eventUri = resource.event ?? resource.uri;
   return getEvent(http, c, String(eventUri ?? ''));
@@ -186,10 +187,28 @@ export const calendly = defineAdapter<CalendlyCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.token}` } }),
@@ -198,7 +217,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
     async listServices(query) {
       const c = await http.resolve();
       // event_types is scoped to a user or organization, and the token alone
-      // does not say which — so resolve the current user first. One extra
+      // does not say which, so resolve the current user first. One extra
       // request for the whole list, never one per event type.
       const me = await http.request(c, { path: 'users/me' });
       const user = reqString(String(me?.resource?.uri ?? ''), 'calendly', 'users.me.resource.uri');
@@ -277,8 +296,8 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         const eventType =
           input.serviceId ??
           reqString(String(current.event_type ?? ''), 'calendly', 'scheduled_event.event_type');
-        // Carry the original invitee — including their timezone, which the
-        // create endpoint requires — across to the new booking.
+        // Carry the original invitee, including their timezone, which the
+        // create endpoint requires: across to the new booking.
         let customer: Customer | undefined;
         let inviteeTimezone: string | undefined;
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
@@ -299,18 +318,34 @@ export const calendly = defineAdapter<CalendlyCredentials>({
           ...(timezone ? { timezone } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
-        await http.request(c, {
-          method: 'POST',
-          path: `scheduled_events/${enc(uuid)}/cancellation`,
-          body: { reason: 'Rescheduled' },
-          parse: 'none',
-        });
+        try {
+          await http.request(c, {
+            method: 'POST',
+            path: `scheduled_events/${enc(uuid)}/cancellation`,
+            body: { reason: 'Rescheduled' },
+            parse: 'none',
+          });
+        } catch (e) {
+          // The new booking exists and the old one is still live. Rethrowing the
+          // raw failure lost the only record of the new id, and a retryable code
+          // (a network blip, a 5xx) let `withRetry` run the whole reschedule
+          // again and book a THIRD time. Name both ids, as a code nothing retries.
+          throw new UnibookingError({
+            provider: 'calendly',
+            code: 'CONFLICT',
+            message:
+              `rescheduled to new booking ${rebooked.id}, but the original ${uuid} could not be ` +
+              `cancelled (${e instanceof Error ? e.message : String(e)}); ` +
+              `cancel it with cancelBooking('${uuid}')`,
+            cause: e,
+          });
+        }
         return rebooked;
       }
       if (input.status === 'cancelled') {
         const uuid = uuidFromUri(id);
         // The cancellation endpoint returns a Cancellation resource
-        // ({canceled_by, reason, canceler_type, created_at}) — no uri, no
+        // ({canceled_by, reason, canceler_type, created_at}), no uri, no
         // start_time, no end_time. Feeding it to toBookingFromEvent always threw
         // UPSTREAM, so discard it and re-read the event instead.
         await http.request(c, {
@@ -325,7 +360,7 @@ export const calendly = defineAdapter<CalendlyCredentials>({
         const uuid = uuidFromUri(id);
         // A no-show rides on the INVITEE, not the event: read the event's
         // invitees and flag the first one. `invitee_no_shows` returns an
-        // InviteeNoShow resource (uri/invitee/created_at) — no start_time — so
+        // InviteeNoShow resource (uri/invitee/created_at), no start_time, so
         // discard it and re-read the event, like the cancellation branch does.
         const invitees = await http.request(c, { path: `scheduled_events/${enc(uuid)}/invitees` });
         const first = asArray(invitees?.collection, 'calendly', 'invitees')[0];

@@ -369,7 +369,7 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
       serviceId: '9',
       durationMinutes: 60,
     });
-    // 09:00..16:00 inclusive — the whole window used to come back as ONE 8h slot.
+    // 09:00..16:00 inclusive: the whole window used to come back as ONE 8h slot.
     expect(slots).toHaveLength(8);
     expect(slots[0]!.start).toBe('2026-07-20T09:00:00-08:00');
     expect(slots[0]!.end).toBe('2026-07-20T10:00:00-08:00');
@@ -457,7 +457,7 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
       );
 
     // A zero site offset used to render as `+00:00` when the instant came
-    // straight from the provider string, but as `Z` once any arithmetic ran —
+    // straight from the provider string, but as `Z` once any arithmetic ran:
     // so one list mixed both spellings of the same moment.
     const slots = await mindbody({ ...CREDS, utcOffset: '+00:00' }).searchAvailability({
       range: { start: '2026-07-20T09:00:00Z', end: '2026-07-20T12:00:00Z' },
@@ -508,7 +508,7 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     });
 
     // The bookable grid stays anchored to the shift start (09:00), so the slots
-    // are real ones — only those starting inside the window survive.
+    // are real ones, only those starting inside the window survive.
     expect(slots.map((s) => s.start)).toEqual([
       '2026-07-20T12:00:00-08:00',
       '2026-07-20T13:00:00-08:00',
@@ -538,7 +538,7 @@ describe('mindbody: request payloads (spec diff, July 2026)', () => {
     });
 
     // With no slot size the shift can't be sliced. Report the overlap rather
-    // than the whole shift — coarse but truthful, and never wider than asked.
+    // than the whole shift: coarse but truthful, and never wider than asked.
     expect(slots).toHaveLength(1);
     expect(slots[0]!.start).toBe('2026-07-20T12:00:00-08:00');
     expect(slots[0]!.end).toBe('2026-07-20T14:00:00-08:00');

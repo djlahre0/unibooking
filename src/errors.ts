@@ -6,12 +6,12 @@ import type { ProviderId } from './types';
  * vendor's error format.
  */
 export type ErrorCode =
-  | 'AUTH' // 401 — missing/invalid/expired credentials
-  | 'FORBIDDEN' // 403 — authenticated but not allowed / missing scope
-  | 'NOT_FOUND' // 404/410 — booking or resource does not exist
-  | 'CONFLICT' // 409/412 — slot already taken / duplicate / version (ETag) conflict
-  | 'RATE_LIMIT' // 429 — throttled; see retryAfterMs
-  | 'INVALID_INPUT' // 400/422 — the request was malformed or rejected
+  | 'AUTH' // 401: missing/invalid/expired credentials
+  | 'FORBIDDEN' // 403: authenticated but not allowed / missing scope
+  | 'NOT_FOUND' // 404/410: booking or resource does not exist
+  | 'CONFLICT' // 409/412: slot already taken / duplicate / version (ETag) conflict
+  | 'RATE_LIMIT' // 429: throttled; see retryAfterMs
+  | 'INVALID_INPUT' // 400/422: the request was malformed or rejected
   | 'UNSUPPORTED' // capability not offered by this provider
   | 'UPSTREAM' // 5xx or an unexpected/unparseable provider response
   | 'NETWORK' // the request never completed (DNS, connection, fetch threw)

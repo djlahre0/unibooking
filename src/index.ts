@@ -1,5 +1,5 @@
 /**
- * unibooking — stateless, unified CRUD over booking & calendar providers.
+ * unibooking: stateless, unified CRUD over booking & calendar providers.
  *
  * Import the core here; import adapters from their own subpath so you only
  * bundle what you use:
@@ -37,7 +37,18 @@ export {
   parseOffsetMinutes,
   formatWithOffset,
   assertValidRange,
+  zonedToInstant,
+  instantToZoned,
 } from './time';
+
+// Availability: combine hours, busy time, bookings and rules into slots.
+export {
+  computeSlots,
+  excludeBusy,
+  busyFromBookings,
+  type ComputeSlotsInput,
+  type BusyInterval,
+} from './availability';
 
 // Adapter-authoring toolkit (for building your own adapters).
 export {
@@ -50,6 +61,7 @@ export {
   asArray,
   reqString,
   type AdapterDef,
+  type AdapterEnv,
   type AdapterMethods,
 } from './adapter-kit';
 export {
@@ -61,3 +73,18 @@ export {
   type AuthResult,
   type QueryValue,
 } from './http';
+
+// What each provider requires to connect, as data: field names, labels and
+// which values are secret. Metadata only: the package ships no credential.
+// Safe in a browser (a connect form needs it); the per-tenant wiring that
+// consumes it lives behind `unibooking/connections`, which is server-only.
+export {
+  PROVIDER_CREDENTIALS,
+  authKinds,
+  isSecretField,
+  matchCredentialSet,
+  requiredCredentials,
+  type AuthKind,
+  type CredentialField,
+  type CredentialSet,
+} from './credentials';

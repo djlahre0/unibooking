@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { WarnIcon } from './components/icons';
 
 export default function Error({
   error,
@@ -33,7 +34,7 @@ export default function Error({
           marginBottom: '1rem',
         }}
       >
-        ⚠️
+        <WarnIcon size={40} />
       </div>
       <h2
         style={{

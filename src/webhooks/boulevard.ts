@@ -12,17 +12,17 @@ import { hmacSha256BytesBase64, timingSafeEqual, tryBase64ToBytes } from '../cry
  *   signature = base64( HMAC-SHA256(payload, raw_key) )
  *
  * The salt itself has the form
- * `blvd-webhook-v1:&lt;API Application UUID&gt;:&lt;unix-seconds&gt;` — pass it through
+ * `blvd-webhook-v1:&lt;API Application UUID&gt;:&lt;unix-seconds&gt;`: pass it through
  * verbatim, inner colons included. The signature is base64 only; Boulevard never
  * emits hex.
  *
  * The signing secret is the API *application* secret (same base64-at-rest form as
  * the Admin API key), not the Admin API secret itself.
  *
- * Pass the EXACT raw request body — never a re-serialized object.
+ * Pass the EXACT raw request body, never a re-serialized object.
  *
  * Note: Boulevard delivers a `PING` event on webhook creation, so your handler
- * must tolerate that payload shape. Never return HTTP 410 from the endpoint —
+ * must tolerate that payload shape. Never return HTTP 410 from the endpoint:
  * Boulevard treats 410 Gone as a permanent unsubscribe.
  */
 export interface BoulevardWebhookInput {

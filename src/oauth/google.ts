@@ -1,7 +1,7 @@
 import { defineOAuth, type OAuthClient, type OAuthConfig } from './core';
 
 /**
- * Google Calendar OAuth2. **Server-only** — takes a client secret.
+ * Google Calendar OAuth2. **Server-only**: takes a client secret.
  *
  * `access_type=offline` and `prompt=consent` are set unconditionally, and both
  * are load-bearing: without them Google issues **no refresh token**, and the

@@ -6,14 +6,379 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Client records: `customers.list / get / create / update / delete`.** Each
+  behind its own flag (`customerDirectory`, `customerWrite`, `customerDelete`),
+  returning the new `CustomerRecord` whose `id` is the provider's stable id: 
+  what an import/link layer keys on. Square and Microsoft Bookings (all five),
+  Wix (all five; update merges onto the contact's current `info` and
+  `revision`), Phorest and Zenoti (no delete: neither API has one), Boulevard
+  (read only). `customers.get` falls back to a bounded walk of
+  `customers.list` where a provider has no by-id endpoint.
+  **BREAKING** for custom `defineAdapter` consumers: add the three flags.
+- **`getCalendar(id)`** wherever `calendarList` is true, and
+  **`createCalendar` / `updateCalendar` / `deleteCalendar`** (`calendarWrite`)
+  on Google, Outlook and Apple (CalDAV `MKCALENDAR` / `PROPPATCH` / `DELETE`,
+  confined to the account's own calendar home). **BREAKING** for custom
+  `defineAdapter` consumers: add `calendarWrite`.
+
+- **Full staff & service CRUD, and assigning staff to services.** New optional
+  client methods, each behind its own capability because providers genuinely
+  differ:
+  - `getService(id)` / `getStaff(id)`, on every provider that can list them.
+    Square and Microsoft Bookings use their by-id endpoints; the rest page
+    through the list and throw `NOT_FOUND` when it isn't there.
+  - `deleteService(id)` (`serviceDelete`): Square and Microsoft Bookings. On
+    Square only the one variation is deleted, unless it is the item's last.
+  - `deleteStaff(id)` (`staffDelete`): Microsoft Bookings. Square has no
+    team-member delete.
+  - `assignStaffToService` / `unassignStaffFromService`
+    (`staffServiceAssignmentWrite`): Square and Microsoft Bookings. Idempotent;
+    both return the service with its updated `staffIds`.
+  - `updateService(id, { active })` / `updateStaff(id, { active })`: change
+    status in the same call as other fields, on every adapter alike (other
+    fields first, then the status). Where staff have no inactive state
+    (`staffDeactivate` false, e.g. Microsoft Bookings) `active` throws
+    `UNSUPPORTED` instead of being silently dropped.
+  - **Microsoft Bookings** gains service and staff writes (`createService`,
+    `updateService`, `setServiceActive` via `isHiddenFromCustomers`,
+    `createStaff`, `updateStaff`) and reports `Service.staffIds`
+    (`staffServiceAssignment`), with the `staffId` / `serviceId` list filters.
+
+- **Multi-tenant connections**: `unibooking/connections`, a new server-only
+  subpath for consumers running many tenants against many providers.
+
+  - `ConnectionStore` is an interface you implement against your own database.
+    The library defines the port and ships no implementation: it still stores
+    nothing, and still supplies no credential of its own.
+  - `connectionFor({ tenantId, provider, store, app })` returns a ready
+    `BookingClient` for one tenant's stored connection, wiring the per-provider
+    OAuth client and credential mapping that every consumer previously
+    hand-wrote for all 17 providers.
+  - A refreshed token is persisted through `store.put` **before** the request
+    goes out, so a failed write aborts the request instead of continuing with
+    tokens your database never received, which is how a rotated refresh token
+    gets lost permanently. A rejected refresh leaves the stored token untouched.
+  - A fresh client per call, with no cross-tenant cache: a cache keyed wrong
+    hands one tenant another's credentials.
+
+  The module is server-only because it imports `unibooking/oauth/*`. A test
+  asserts the package root has no transitive `oauth` import, so the root stays
+  usable in a browser.
+
+- **Credential schema at the package root**: `PROVIDER_CREDENTIALS`,
+  `requiredCredentials()`, `matchCredentialSet()`, `isSecretField()` and
+  `authKinds()`. Declares, per provider, which fields are required, which are
+  optional and which are secret, so a consumer can render their own connect
+  form without re-deriving it from the README. Metadata only; no values.
+
+  `required` mirrors each adapter's own credential type and is tested against
+  it. Acuity is the one provider with two alternatives (HTTP Basic **or** an
+  OAuth token), which `PROVIDER_CREDENTIALS` expresses as two credential sets.
+
+  The README gains a generated required-credentials table, checked by
+  `test/readme-credentials.test.ts`, and guidance on encrypting credentials at
+  rest, which remains the consumer's responsibility, by design.
+
+- **New provider: Booker** (Mindbody Booker, booker.com): a distinct product
+  from the already-supported **Bookeo** (bookeo.com), despite the near-identical
+  name. Bookings (create, read, cancel, list), treatments as services, employees
+  as staff, categories, business hours, and group classes with enrollment.
+
+  Two time hazards drive its implementation, and both are load-bearing:
+
+  1. Booker serialises datetimes in .NET form, `/Date(1758067200000-0500)/`.
+  2. **Booker's server always speaks Eastern Time.** That epoch, rendered in
+     `America/New_York`, is the *business's local wall clock*, not the real
+     instant. Recovering a true instant means rendering in Eastern, taking those
+     wall-clock digits, and re-anchoring them in the location's own zone; writes
+     invert the same transform. Pass the location's IANA `timezone` or every
+     time is out by the Eastern offset difference.
+
+  `searchAvailability` reports `UNSUPPORTED`: Booker's appointment (non-class)
+  slot endpoint is not publicly documented, and guessing at it would be worse
+  than saying so. **Class** availability works: use `listClasses()`.
+  `updateBooking` likewise reports `UNSUPPORTED`; Booker documents only confirm
+  and cancel, and silently confirming an appointment the caller asked to move
+  would be a worse answer than refusing. Cancel and rebook instead.
+
+- **Staff ↔ service assignments.** Where
+  `capabilities.staffServiceAssignment` is true (Square, Acuity), `Service`
+  carries `staffIds`, the `Staff.id` values that can perform it, and both list
+  queries take the matching filter: `listServices({ staffId })` and
+  `listStaff({ serviceId })`.
+
+  `staffIds` distinguishes "nobody is assigned" (`[]`) from "the provider did
+  not say" (`undefined`); collapsing the two would turn an unanswered question
+  into a definite no.
+
+- **`listCategories()` and the canonical `ServiceCategory` type**
+  (`capabilities.serviceCategories`) on Square and Acuity, plus a
+  `categoryId` filter on `listServices`. Every `ServiceCategory.id` joins onto
+  `Service.categoryId`. Square has real catalog category objects; Acuity names
+  categories without ids, so there the name *is* the id, and `categoryId` is
+  set to the same string so the join holds on both.
+
+- **`getBusinessHours()` and the canonical `BusinessHours` type**
+  (`capabilities.businessHours`) on Square: the recurring weekly opening
+  pattern as `{ dayOfWeek, start, end }` wall-clock periods plus the location's
+  IANA zone.
+
+  These are weekly patterns, not instants: anchor them with `zonedToInstant`.
+  Periods are sorted Monday-first then by start time, a closed day has no
+  period, and two on one day are a split shift. A malformed period is dropped
+  rather than emitted as a window nobody can place, with the original left in
+  `raw`. Opening hours are not availability: they say when the business is
+  open, while `searchAvailability` says whether a slot is bookable.
+
+- **Group classes: `listClasses()`, `getClass()` and `enrollInClass()`** on
+  Mindbody and Acuity, behind the new `classCatalog` / `classEnrollment` /
+  `classWaitlist` capability flags. A `ClassSession` is one scheduled occurrence
+  of a class: capacity, spots taken, waitlist counts and an authoritative
+  `full` flag; the class *definition* stays an ordinary `Service`.
+
+  ```ts
+  const { classes } = await client.listClasses!({ range });
+  const booking = await client.enrollInClass!({ classId: classes[0]!.id, customer });
+  await client.cancelBooking(booking.id);
+  ```
+
+  Enrolling returns an ordinary `Booking` carrying `classId`, so cancelling,
+  listing, retrying and paginating all reuse the booking lifecycle rather than a
+  parallel one. Providers with no group-class concept (Google, Outlook, Apple,
+  Square, Calendly, Microsoft Bookings and the rest) declare the flags false and
+  omit the methods.
+
+  `full` is deliberately not derived from `capacity - booked`: a provider can
+  report a class as closed while spots remain (cancelled, already started,
+  staff-only), and only its own flag knows.
+
+- **Conflict prevention on enrollment.** A full, cancelled or finished class
+  throws `CONFLICT` *before* the write, instead of surfacing whatever the
+  provider says after the fact. `allowWaitlist: true` joins the waitlist where
+  `capabilities.classWaitlist` is true (Mindbody), yielding
+  `status: 'waitlisted'`; where it is false (Acuity), a full class still throws
+  and the message says the provider has no waitlist.
+
+
+- **`listCalendars()` and the canonical `Calendar` type** on Google, Outlook and
+  Apple (`capabilities.calendarList`). Each `Calendar.id` is exactly what that
+  adapter takes to target the calendar: Google/Outlook `calendarId`, Apple
+  `calendarUrl`: along with `name`, `timezone`, `primary`, `readOnly` and
+  `color`. The same terminal-page `limit` backstop as `listServices` applies, and
+  `withRetry` retries it as a read.
+
+  ```ts
+  const { calendars } = await google({ accessToken }).listCalendars!();
+  const work = google({ accessToken, calendarId: calendars[1]!.id });
+  ```
+
+- **Apple CalDAV discovery: `calendarUrl` is now optional.** `listCalendars()`
+  walks `current-user-principal` → `calendar-home-set` → the home collection
+  (RFC 4791/5397) from the server root: iCloud by default, any CalDAV server via
+  `options.baseUrl`, so an Apple ID and an app-specific password are all a
+  caller needs. `checkConnection()` works without a calendar too. Event
+  operations without `calendarUrl` fail fast with `INVALID_INPUT` naming
+  `listCalendars()`, before any request.
+
+- **`description`, `location` and `allDay` on events** (`Booking`,
+  `CreateBookingInput`, `UpdateBookingInput`), mapped by the calendar adapters:
+  Google `description`/`location`/`start.date`, Outlook `body`/`location`/
+  `isAllDay`, iCal `DESCRIPTION`/`LOCATION`/`VALUE=DATE`. All-day dates are the
+  calendar dates of `range.start`/`range.end` **as written in the caller's
+  offset**, end exclusive; they read back as UTC midnights with
+  `allDay: true`. Updates switch timed ↔ all-day cleanly (Google nulls the
+  other form; `patchICS` rewrites the value type). An empty string clears a
+  field. Outlook all-day reads are correct whether Graph reports midnight or
+  converts the event into UTC. Booking platforms ignore the fields, like `notify`.
+
+- **`zonedToInstant()` / `instantToZoned()`**: wall-clock date and time in an
+  IANA (or Windows) zone ↔ canonical instant:
+  `zonedToInstant('2026-09-21T10:00', 'Asia/Kolkata')` →
+  `'2026-09-21T10:00:00+05:30'`. DST gaps resolve forward, overlaps to the
+  earlier instant, and an unknown zone throws `RangeError` rather than falling
+  back to UTC.
+
+- `sha256Hex()` in the crypto helpers, for deriving stable, bounded-length keys
+  from arbitrary input, not for signing.
+
+- **Demo: 📆 My Calendar.** Connect Google or Outlook with one click (OAuth +
+  PKCE through `unibooking/oauth`), or Apple iCloud with an app-specific
+  password, then pick a calendar and create, read, update and delete events with
+  date, start/end time, timezone, all-day, location and description. Tokens are
+  sealed (AES-256-GCM) into an HttpOnly cookie and refreshed automatically with
+  `withAutoRefresh`; the demo server stores nothing. The deployer sets the OAuth
+  app credentials once through environment variables (see
+  `demo/.env.example`); without them the tab explains what is missing and the
+  explorer tabs keep working.
+
+### Changed
+
+- **BREAKING: `Capabilities` gains the required `staffDeactivate`,
+  `staffDelete`, `serviceDelete` and `staffServiceAssignmentWrite` fields**, and
+  `staffDirectoryWrite` now covers `createStaff` / `updateStaff` only;
+  `setStaffActive` moved to `staffDeactivate` (Square keeps it). Custom
+  `defineAdapter` consumers add the four as `false`.
+
+- **BREAKING: `Capabilities` gains the required `staffServiceAssignment`,
+  `serviceCategories` and `businessHours` fields.** Custom `defineAdapter`
+  consumers add all three as `false`; every shipped adapter declares them.
+
+- **BREAKING: `Capabilities` gains the required `classCatalog`,
+  `classEnrollment` and `classWaitlist` fields.** Only custom adapters built
+  with `defineAdapter` are affected: add all three as `false`. Every shipped
+  adapter already declares them.
+
+- **BREAKING: `BookingStatus` gains `'waitlisted'`.** The union widened, so an
+  exhaustive `switch` over booking statuses no longer compiles until the new arm
+  is handled. Only `enrollInClass` produces it.
+
+- `Booking` gains an optional `classId`, set only on class enrollments.
+
+
+
+- **Square now reports Appointments *plan* limits as `UNSUPPORTED` rather than
+  `AUTH`/`FORBIDDEN`.** Two Square failures are about the seller's subscription,
+  not their credentials, and both were observed live:
+
+  - `401 UNAUTHORIZED: "Merchant not onboarded to Appointments"` on every
+    Bookings call, when the seller has no Appointments subscription.
+  - `403 FORBIDDEN: "Merchant subscription does not support write operations."`
+    on booking creates/updates/cancels, when the seller is on the **free**
+    Appointments plan. Availability search and booking reads still work.
+
+  Read literally those became `AUTH` and `FORBIDDEN`: two of the three codes
+  this library treats as "these credentials no longer work", so a merchant on
+  the wrong plan would have a healthy integration torn down and be sent through
+  a re-auth that could not possibly fix it. Both now report `UNSUPPORTED`, with
+  a message naming the cause and the remedy. A genuinely bad or revoked token is
+  untouched and still reports `AUTH`.
+
+- `HttpConfig.parseError` may now return a canonical `code` to override the one
+  the HTTP status implies, for the cases where a provider's status is actively
+  misleading. Additive and optional: omitting it keeps the status-derived
+  default, so no other adapter changes behaviour.
+
+- **BREAKING: `Capabilities` gains the required `calendarList` field.** Only
+  custom adapters built with `defineAdapter` are affected: add
+  `calendarList: false` (or `true` alongside a `listCalendars` method). Every
+  shipped adapter already declares it.
+
+- **Outlook writes honor `range.timezone`.** When the zone resolves, `start`/`end`
+  are sent as wall-clock time plus that zone (Graph accepts IANA and Windows
+  names), so Outlook shows the event in the zone the user picked instead of
+  UTC. An unresolvable zone keeps the previous UTC write. Outlook event requests
+  also ask for plain-text bodies (`Prefer: outlook.body-content-type="text"`),
+  so `description` never carries Outlook's HTML wrapper.
+
+- `HttpRequest.onResponse` now also receives the response `url` (after
+  redirects, falling back to the requested URL). Additive.
+
+- OAuth configs take `timeoutMs` (default 15000, like `ClientOptions.timeoutMs`),
+  and `wixOAuth` / `setmoreOAuth` take the same injectable `now` clock as every
+  other OAuth client. Additive.
+
+### Security
+
+- **A `pageToken` could send the Graph bearer token to any host.** Outlook and
+  Microsoft Bookings page by following the full `@odata.nextLink` URL they hand
+  out as `nextPageToken` (and Outlook's `syncToken` is a full `deltaLink`), and
+  the HTTP layer sent the credentials to whatever absolute URL a path named. A
+  consumer passing a `pageToken` through from its own request (a query string,
+  a form) could therefore be made to deliver the user's access token to an
+  attacker's server. The HTTP layer now refuses, before building any
+  credential: a request whose URL is off the base URL's host. Only the Apple
+  / CalDAV adapter opts out (`defineAdapter({ allowCrossOrigin: true })`),
+  because iCloud serves calendars from partition hosts learned at discovery;
+  its caller-supplied calendar URLs are already confined to the account's own
+  calendar home. **BREAKING** only for a custom `defineAdapter` that relied on
+  requesting absolute URLs on another host: set `allowCrossOrigin`.
+
 ### Fixed
+
+- **Paged lists that never handed out a next page.** Anything past the first
+  page was unreachable: through the list itself and through the
+  `getService` / `getStaff` / `customers.get` fallbacks that walk it:
+  - Mindbody `listServices`, `listStaff`, `listClasses` (100 per page) now
+    return the next offset from `PaginationResponse.TotalResults`.
+  - Phorest `listServices`, `listStaff` read only page 0 at the default size;
+    they now page with `page` / `size` and `page.totalPages`.
+  - Zenoti `listServices`, `listStaff` accepted a page token but never returned
+    one; a full page now hands out the next.
+  - Boulevard `listServices`, `listStaff` queried their connections without
+    `first` / `after`; they now page by cursor like `listBookings`.
+
+- **Setmore `listBookings({ limit })` dropped bookings.** The limit was applied
+  to every page, including one with a cursor, so the bookings between the cut
+  and the next page were never returned. It now trims only the last page.
+
+- **Booker `getBooking` reported real appointments as `NOT_FOUND`.** It read
+  one page of 500 from an 800-day window, which at a busy location covers a few
+  weeks. It now pages through the window. `listBookings` also now validates its
+  range (`INVALID_INPUT`) before any request, like every other adapter.
+
+- **Square `updateBooking({ serviceId })` could never land.** The new service
+  was written onto the current segment together with the OLD service's
+  `service_variation_version` and duration, which Square rejects. The new
+  service's catalog version is now read and pinned, and its own duration
+  applies.
+
+- **Microsoft Bookings `updateBooking({ status })` silently did nothing** for
+  any status other than `cancelled`. Every status is now `INVALID_INPUT`, as
+  documented. A `pageToken` that is not an `@odata.nextLink` is now refused on
+  `listServices` / `listStaff` / `customers.list` too, instead of being sent
+  as `$skiptoken` and returning page 1 forever.
+
+- **Calendly reschedule lost the new booking when the cancel step failed.** The
+  new event is booked before the old one is cancelled; a failed cancel threw
+  the raw error, so the caller never learned the new id, and a retryable one
+  let `withRetry` run the whole reschedule again and book a third time. It now
+  throws `CONFLICT` naming both ids.
+
+- **Vagaro availability silently dropped a day.** A range under 31 days can
+  touch 32 dates; the per-day loop stopped at 31 without saying so. It now
+  throws `INVALID_INPUT`, as Acuity does.
+
+- **OAuth token requests could hang forever.** They had no timeout, unlike
+  every adapter request, and under `withAutoRefresh` every request waiting on
+  that refresh hung with it. They now time out as `TIMEOUT`.
+
+- **Phorest lists read nothing from a live account.** The documented paged
+  shape is `_embedded: { clients: [...] }` (a named list), but it was read as a
+  bare array, so every list came back empty, and `customers.findOrCreate`
+  never found an existing client, creating a duplicate on every call. Both
+  shapes are now accepted.
+
+- **Microsoft Bookings `listServices()` / `listStaff()` paging returned page 1
+  forever.** The `nextPageToken` handed out is the full `@odata.nextLink`, but
+  it was sent back as `$skiptoken=<url>`, which Graph silently ignores; so
+  `listAll` repeated the first page up to its cap. The link is now followed
+  verbatim, as `listBookings` already did.
+
+- **`withRetry` dropped the new client methods.** `getService`, `getStaff`,
+  `deleteService`, `deleteStaff`, `assignStaffToService` and
+  `unassignStaffFromService` vanished from a wrapped client; they are now
+  forwarded (all retry-safe: reads, deletes and idempotent assignment).
+
+- **Square `listCategories()` 404'd on every account.** It posted to
+  `catalog/search-catalog-objects`, which does not exist; Square's
+  SearchCatalogObjects is `POST /v2/catalog/search`.
+
+- **Square `createBooking` no longer demands `service_variation_version`.**
+  When `providerOptions.service_variation_version` is omitted, the adapter now
+  reads the variation's current version from the catalog (one extra
+  `GET catalog/object/{serviceId}`) instead of rejecting the call. Previously a
+  plain canonical `createBooking({ serviceId, staffId, … })` could never succeed
+  without digging the version out of a raw availability slot. Passing it still
+  works and skips the lookup.
 
 - **Square catalog writes were broken outright.** `createService`,
   `updateService` and `setServiceActive` read the upsert reply from `object`,
   but Square's `UpsertCatalogObject` answers with `catalog_object` (only
   `RetrieveCatalogObject` uses `object`). Every catalog write therefore threw
   `UPSTREAM: catalog.object: expected an object, got undefined` *after* the
-  write had already succeeded upstream — so the service really was created or
+  write had already succeeded upstream, so the service really was created or
   edited, and the caller got an error and no id for it.
 
   Caught by running the adapter against a live Square account. The unit tests
@@ -21,7 +386,7 @@ All notable changes to this project are documented here. The format is based on
   shape Square never returns; they now use the real one.
 
 - **Square `createService` produced services that could never be booked.**
-  Square's `team_member_ids` — the staff who perform a service — lives on the
+  Square's `team_member_ids`, the staff who perform a service, lives on the
   catalog VARIATION, but `providerOptions` was spread onto the ITEM, so there was
   no way to set it short of replacing the whole `variations` array. A service
   created without it is accepted by the catalog and then rejected by every
@@ -29,18 +394,18 @@ All notable changes to this project are documented here. The format is based on
   selected service variation".
 
   `team_member_ids` is now pulled out of `providerOptions` and routed to the
-  variation on both `createService` and `updateService` — the same treatment
+  variation on both `createService` and `updateService`: the same treatment
   `service_variation_version` already gets in `createBooking`.
 
 - **Square `Service.active` ignored `available_for_booking`.** It was derived
   from `is_deleted` alone, while `setServiceActive` writes
-  `available_for_booking` — so the method contradicted itself:
+  `available_for_booking`, so the method contradicted itself:
   `setServiceActive(id, false)` returned a Service still reporting
   `active: true`, and `listServices` reported unbookable services as active.
   Both now agree. A variation that omits the flag is unaffected.
 
 - **Square `customers.findOrCreate` could duplicate a customer.** Square's
-  customer search index is eventually consistent — a record created now is not
+  customer search index is eventually consistent: a record created now is not
   findable via `customers/search` for a second or two (measured live: a miss at
   0.9s, a hit at 2.3s). Two calls for the same person inside that window both
   missed the lookup and both created, leaving duplicate customers attached to
@@ -51,52 +416,23 @@ All notable changes to this project are documented here. The format is based on
   where the race actually is. Verified live: three *concurrent* `findOrCreate`
   calls for one email now return a single customer id, which the previous
   lookup-then-create could not do at all. A name-only customer deliberately
-  keeps a random key — "John Smith" is not an identity, and collapsing two
+  keeps a random key: "John Smith" is not an identity, and collapsing two
   walk-ins of that name would attach a booking to the wrong person.
-
-### Changed
-
-- **Square now reports Appointments *plan* limits as `UNSUPPORTED` rather than
-  `AUTH`/`FORBIDDEN`.** Two Square failures are about the seller's subscription,
-  not their credentials, and both were observed live:
-
-  - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
-    Bookings call, when the seller has no Appointments subscription.
-  - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
-    on booking creates/updates/cancels, when the seller is on the **free**
-    Appointments plan. Availability search and booking reads still work.
-
-  Read literally those became `AUTH` and `FORBIDDEN` — two of the three codes
-  this library treats as "these credentials no longer work" — so a merchant on
-  the wrong plan would have a healthy integration torn down and be sent through
-  a re-auth that could not possibly fix it. Both now report `UNSUPPORTED`, with
-  a message naming the cause and the remedy. A genuinely bad or revoked token is
-  untouched and still reports `AUTH`.
-
-- `HttpConfig.parseError` may now return a canonical `code` to override the one
-  the HTTP status implies, for the cases where a provider's status is actively
-  misleading. Additive and optional — omitting it keeps the status-derived
-  default, so no other adapter changes behaviour.
-
-### Added
-
-- `sha256Hex()` in the crypto helpers — for deriving stable, bounded-length keys
-  from arbitrary input, not for signing.
 
 ## [0.4.0] - 2026-08-12
 
 ### Added
 
-- **OAuth connect helpers under `unibooking/oauth`** — **server-only**, and
+- **OAuth connect helpers under `unibooking/oauth`**: **server-only**, and
   stateless like everything else here: `authorizationUrl()` → `exchangeCode()`
   → `refresh()` return token data and store nothing. `withAutoRefresh()` bridges
   stored tokens into `CredsInput`, refreshing just before expiry and handing the
   new tokens to an `onRefresh` callback for you to persist. It persists *before*
-  returning credentials — a failed write propagates rather than proceeding as
+  returning credentials: a failed write propagates rather than proceeding as
   though the token were saved.
 
   Modules: `google`, `microsoft` (`outlookOAuth` + `microsoftBookingsOAuth`),
-  `square`, `acuity`, `calendly`, plus two partials — `setmore` (`refresh` only;
+  `square`, `acuity`, `calendly`, plus two partials: `setmore` (`refresh` only;
   no authorization-code flow exists) and `wix` (no `authorizationUrl`; the grant
   keys on an install-time `instanceId`). Apple/CalDAV, Bookeo, Boulevard,
   Mindbody, Phorest and Zenoti get no module because they do not use OAuth2.
@@ -105,14 +441,14 @@ All notable changes to this project are documented here. The format is based on
   Opt into PKCE with `authorizationUrl({ pkce: true })`.
 
   These take a **client secret**, so they ship as separate entry points that no
-  adapter imports — bundling an adapter cannot pull secrets-handling code into a
+  adapter imports: bundling an adapter cannot pull secrets-handling code into a
   browser build.
 
 - **`listServices()` and `listStaff()`** on Setmore, Square, Microsoft Bookings,
   Acuity, Mindbody, Zenoti, Phorest and Boulevard, plus `listServices()` only on
   Bookeo, Calendly and Wix (Wix gained `listStaff` too). Behind the new
   `serviceCatalog` / `staffDirectory`
-  flags — check those rather than assuming, since they differ per provider.
+  flags: check those rather than assuming, since they differ per provider.
 
   Setmore, Square and Microsoft Bookings are mapped against captured payloads;
   the rest are **spec-derived with no live tenant**, the same caveat the README's
@@ -124,41 +460,41 @@ All notable changes to this project are documented here. The format is based on
   state; `Staff` carries name, email, phone and active state.
 
   `Service.id` and `Staff.id` are guaranteed to be the values `createBooking`
-  accepts — on Square that means catalog items are flattened into one service
+  accepts, on Square that means catalog items are flattened into one service
   **per variation**, since its booking API takes the variation id. Prices are
   integer minor units with an ISO-4217 currency, omitted rather than guessed
   when the provider supplies no currency (pass `currency` in Setmore's
   credentials to populate it).
 
-- **Catalog writes on Square** — `createService`, `updateService`,
+- **Catalog writes on Square**: `createService`, `updateService`,
   `setServiceActive`, `createStaff`, `updateStaff`, `setStaffActive`, behind the
   new `serviceCatalogWrite` / `staffDirectoryWrite` flags. Square is the only
   provider with them; most catalogs are read-only to third parties.
 
   Updates are partial: omitted fields are left alone. On Square that requires a
-  read-modify-write, because its upsert *replaces* the object — anything not
+  read-modify-write, because its upsert *replaces* the object: anything not
   sent back is erased.
 
   **There is deliberately no `deleteService` or `deleteStaff.`** Square has no
   team-member delete at all (only `status: INACTIVE`), and its catalog delete
-  **cascades** — removing an item removes every variation under it, and
+  **cascades**: removing an item removes every variation under it, and
   `Service.id` *is* a variation id. A canonical `delete` would mean something
   different, and irreversible, per provider. `setServiceActive(id, false)`
   expresses the intent without destroying booking history.
 
-  Creates are **not** auto-retried by `withRetry` — neither Square write accepts
+  Creates are **not** auto-retried by `withRetry`, neither Square write accepts
   a caller-supplied idempotency key, so a retry after a create that actually
   succeeded would duplicate the record. Updates and the active toggles are
   idempotent and are retried.
 
   These need `ITEMS_WRITE` / `EMPLOYEES_WRITE`, which
   `unibooking/oauth/square` does not request by default. Opt in with the
-  exported `SQUARE_WRITE_SCOPES` — decide before merchants connect, since
+  exported `SQUARE_WRITE_SCOPES`: decide before merchants connect, since
   widening scopes later forces every one of them to re-consent.
 
 - **`checkConnection()` on every adapter.** Answers "do these credentials still
   work?" using values you loaded from your own database, and **does not throw**
-  when the answer is no — a dead connection is the expected result, returned as
+  when the answer is no: a dead connection is the expected result, returned as
   `{ ok: false, reason }` where `reason` is `AUTH`, `FORBIDDEN` or `NOT_FOUND`.
   Transient faults (network, timeout, rate limit, 5xx) still **throw**, so a
   blip cannot be mistaken for a revoked integration and cause a consumer to
@@ -175,14 +511,14 @@ All notable changes to this project are documented here. The format is based on
   the `serviceCatalog` / `staffDirectory` capability flags (and their `*Write`
   counterparts). These are deliberately **separate** from the existing
   `services` / `staff` flags, which say only that a booking can *reference* a
-  service or staff member — several providers have one without the other, so
+  service or staff member: several providers have one without the other, so
   check the flag that matches the call you intend to make.
 - **`probeConnection` is exported** for custom-adapter authors, so a
   hand-written adapter classifies connection failures identically.
 
 ### Changed
 
-- **BREAKING — `Capabilities` gains two required fields** (`serviceCatalog`,
+- **BREAKING: `Capabilities` gains two required fields** (`serviceCatalog`,
   `staffDirectory`) and **`AdapterMethods` gains a required `checkConnection`**.
   This only affects code that builds a custom adapter with `defineAdapter`;
   consumers of the built-in adapters are unaffected. To migrate, add both flags
@@ -205,8 +541,8 @@ All notable changes to this project are documented here. The format is based on
 
 - **Every HMAC webhook verifier threw a `TypeError` instead of returning `false`
   when the signature header was absent.** The canonical handler reads the header
-  straight off the request — `req.headers['x-square-hmacsha256-signature']` and
-  friends are `string | undefined` in every Node framework — so an unsigned
+  straight off the request: `req.headers['x-square-hmacsha256-signature']` and
+  friends are `string | undefined` in every Node framework, so an unsigned
   request produced an unhandled throw (a 500, or a crashed handler) rather than
   the 401 the caller wrote. It also gave anyone who simply omitted the header a
   different, noisier code path from anyone who sent a wrong one. Square, Acuity,
@@ -218,13 +554,13 @@ All notable changes to this project are documented here. The format is based on
   Calendly's `t=,v1=` parse, Boulevard's base64 secret decode) guard first. A
   Boulevard signing secret that is not valid base64 is likewise `false` rather
   than an opaque `DOMException` out of `atob`. No signature that verified before
-  stops verifying — this only changes the failure mode.
+  stops verifying: this only changes the failure mode.
 
 ### Fixed
 
 - **`ListServicesQuery.limit` / `ListStaffQuery.limit` were silently ignored**
   by Acuity, Bookeo, Boulevard, Phorest and Setmore, whose endpoints expose no
-  page-size parameter — a caller asking for ten entries received the entire
+  page-size parameter: a caller asking for ten entries received the entire
   catalogue. `defineAdapter` now trims the page, the same backstop
   `ListBookingsQuery.status` already has. Trimming applies only to a terminal
   page: slicing one that carries a `nextPageToken` would hide the entries
@@ -234,8 +570,8 @@ All notable changes to this project are documented here. The format is based on
   route no longer costs the caller their services.
 - **`google` sent a percent-encoded calendar id to `freeBusy`**, in both the
   request body and the response lookup key. Every Google calendar id except
-  `primary` contains an `@` — the `c_…@group.calendar.google.com` form and the
-  plain-email form alike — so `searchAvailability` was broken for every real
+  `primary` contains an `@`: the `c_…@group.calendar.google.com` form and the
+  plain-email form alike, so `searchAvailability` was broken for every real
   calendar and failed as an opaque `UPSTREAM` about a missing `calendars` entry.
   The id is now sent raw. The response key is additionally resolved
   case-insensitively (Google lowercases email-form ids), falling back to a lone
@@ -245,22 +581,22 @@ All notable changes to this project are documented here. The format is based on
   `service_variation_version`; all three were optional, so omitting one surfaced
   as an opaque `400 MISSING_REQUIRED_PARAMETER`. They are now checked
   client-side with an error naming the missing field. Supplying
-  `providerOptions.appointment_segments` still bypasses the check — that escape
+  `providerOptions.appointment_segments` still bypasses the check, that escape
   hatch is unchanged. The README's Square examples were teaching the failing
   form and now read `service_variation_version` off the availability slot's
   `raw` segment, which is where Square already returns it.
-- **`setmore`** — corrected a doc comment claiming access tokens last ~7 days.
+- **`setmore`**: corrected a doc comment claiming access tokens last ~7 days.
   They last 7200 seconds (two hours), so a long-lived process must refresh
   rather than cache.
 
 - **`ListBookingsQuery.status` was silently ignored by most providers.** The
   field is documented without caveat, but Google, Square, Mindbody, Setmore,
-  Acuity and Vagaro had no status filter to forward it to and dropped it — a
+  Acuity and Vagaro had no status filter to forward it to and dropped it: a
   `status: 'confirmed'` query returned cancelled bookings. Adapters still send
   whatever their provider supports (it is cheaper upstream and keeps pages
   dense); `defineAdapter` now applies the canonical status as a backstop, so the
   documented filter is true everywhere and future adapters inherit it. Adapters
-  that already filtered themselves are unaffected — re-filtering is a no-op.
+  that already filtered themselves are unaffected: re-filtering is a no-op.
 
   A page that filters down to nothing keeps its `nextPageToken`: the matches may
   be on a later page, and dropping the token would end pagination early.
@@ -299,14 +635,14 @@ All notable changes to this project are documented here. The format is based on
   Bookings return a whole shift per staff member (all of staff A's day, then all
   of staff B's), and the single-date adapters concatenate one day's answer after
   the next. So `slots[0]` meant "first thing the provider happened to mention",
-  not "earliest opening" — and the same logical availability came back in a
+  not "earliest opening", and the same logical availability came back in a
   different order depending on which provider served it, which is precisely the
   cross-provider variance this package exists to erase.
 
   Slots are now sorted by start instant. The sort is applied in `defineAdapter`,
   so it covers every adapter (including third-party ones built on the same kit)
-  and none has to remember. It compares instants rather than strings —
-  `08:00-07:00` is later than `12:00Z` despite sorting earlier lexically — and is
+  and none has to remember. It compares instants rather than strings: 
+  `08:00-07:00` is later than `12:00Z` despite sorting earlier lexically, and is
   stable, so slots sharing a start keep the provider's own order.
 
 - **Acuity silently truncated availability ranges past its 31-day cap.** The
@@ -320,7 +656,7 @@ All notable changes to this project are documented here. The format is based on
 - **Phorest could emit availability slots whose timestamps were not canonical
   instants.** `startTime`/`endTime` were forwarded verbatim after a bare
   `typeof === 'string'` check. Phorest deals in branch-local times elsewhere in
-  its API, and an offset-less value is an ambiguous instant — while a
+  its API, and an offset-less value is an ambiguous instant, while a
   non-RFC3339 one (e.g. a single-digit hour) is worse than ambiguous, since
   `Date.parse` reads it as `NaN` and every downstream comparison then fails
   silently. Both ends are now validated with `isInstant` and the entry skipped
@@ -333,9 +669,9 @@ All notable changes to this project are documented here. The format is based on
   (the obvious reading) were offering customers times they had explicitly
   excluded.
 
-  The endpoints cannot express the window — Setmore takes a `selected_date`,
+  The endpoints cannot express the window: Setmore takes a `selected_date`,
   Zenoti's transient booking is scoped to a `date`, and Mindbody's
-  `Availabilities[]` entry is a staff *shift* that merely overlaps the query — so
+  `Availabilities[]` entry is a staff *shift* that merely overlaps the query, so
   the narrowing has to happen adapter-side. Acuity and Vagaro already did it,
   each with its own copy of the predicate; that is how the other three drifted.
   It is now one shared helper (`slotsWithinRange`) that all five call.
@@ -346,12 +682,12 @@ All notable changes to this project are documented here. The format is based on
   routinely runs past it and is still a real, bookable slot.
 
   - Mindbody keeps its bookable grid anchored to the shift's own start rather
-    than to `range.start` — re-anchoring would invent start times the provider
+    than to `range.start`: re-anchoring would invent start times the provider
     never offers (a 45-minute service on a 09:00 shift is bookable at 12:00, not
     at 12:10 because that is when you asked).
   - Mindbody's no-duration fallback (no `durationMinutes`, no
     `SessionType.DefaultTimeLength`) still returns the shift rather than
-    nothing, but clamped to its overlap with the query — coarse but truthful,
+    nothing, but clamped to its overlap with the query: coarse but truthful,
     and never wider than what was asked for. A shift that does not overlap at
     all is now dropped instead of returned in full.
   - Setmore's per-day fan-out counted a day that the range only touched at its
@@ -359,11 +695,11 @@ All notable changes to this project are documented here. The format is based on
     request on the following day and returned that day's slots as if they were in
     range. It now fans out to one day, as Acuity and Vagaro already did.
 
-  Providers whose endpoint takes real instants — Square, Calendly, Bookeo,
-  Phorest, Wix, Google, Outlook, Microsoft Bookings — filter server-side and were
+  Providers whose endpoint takes real instants: Square, Calendly, Bookeo,
+  Phorest, Wix, Google, Outlook, Microsoft Bookings: filter server-side and were
   never affected.
 
-- **Setmore: cancel/delete and reschedule now work — they were on the other API
+- **Setmore: cancel/delete and reschedule now work: they were on the other API
   generation.** Setmore serves `api/v1/bookingapi` and `api/v2/bookingapi` side
   by side on the same host, and neither is a superset of the other. Previous
   releases pinned every call to v1 and, reading the published v1 spec, concluded
@@ -378,14 +714,14 @@ All notable changes to this project are documented here. The format is based on
   | `POST /slots`                  | 401 | 404 | **v1**   |
   | `PUT /appointments/{id}`       | 405 | 401 | **v2**   |
   | `DELETE /appointments/{id}`    | 401 | 401 | **v2**   |
-  | `GET /appointments/{id}`       | 405 | 405 | — absent |
+  | `GET /appointments/{id}`       | 405 | 405 | - absent |
 
   Each operation is now pinned to the generation that actually routes it.
   Availability is why the adapter can't move wholesale to v2 (`slots` is 404
   there); reschedule is why it can't stay wholly on v1 (405).
 
   - `cancelBooking` issues `DELETE` on the v2 appointment resource. Setmore
-    *deletes* rather than cancels — it has no status field — and carries neither
+    *deletes* rather than cancels, it has no status field, and carries neither
     a reason nor a notify flag, so `CancelOptions.reason`/`notify` are ignored.
     A `response: false` envelope on an HTTP 200 still surfaces as `UPSTREAM`.
   - `updateBooking` splits by intent: a title-only edit stays on the documented
@@ -401,9 +737,9 @@ All notable changes to this project are documented here. The format is based on
     `providerOptions` is still shallow-merged as `CancelOptions` documents, and an
     `apiVersion` outside `'v1'`/`'v2'` is `INVALID_INPUT` rather than a silently
     mis-routed call. `createBooking`, `listBookings` and `searchAvailability` do
-    not read it — their generation is fixed.
+    not read it: their generation is fixed.
   - README's Setmore row gains **Cancel ✅**, and its docs link now points at
-    `developers.setmore.com` — the old `setmore.docs.apiary.io` blueprint is
+    `developers.setmore.com`: the old `setmore.docs.apiary.io` blueprint is
     gone (`setmoreapi.docs.apiary.io` now serves Apiary's default "Polls"
     boilerplate, not Setmore's spec).
 
@@ -413,28 +749,28 @@ All notable changes to this project are documented here. The format is based on
 
   Routing for the v2 routes is verified against the live host; their request and
   response **bodies** are inferred from the create endpoint's shape and remain
-  unverified — Setmore has no sandbox. Confirm against a throwaway account.
+  unverified: Setmore has no sandbox. Confirm against a throwaway account.
 
 ## [0.3.0] - 2026-07-23
 
 ### Added
 
 Provider capabilities the vendors document but the adapters had not yet exposed
-— each verified against the provider's published API, none against a live
+each verified against the provider's published API, none against a live
 tenant.
 
 - **Google and Outlook now support `searchAvailability`.** Both are plain
   calendars with no native slot search, so availability is derived from their
-  free/busy APIs — Google `freeBusy`, Outlook `getSchedule` — via a shared,
+  free/busy APIs, Google `freeBusy`, Outlook `getSchedule`, via a shared,
   unit-tested `freeSlots` helper (range minus busy, sliced by `durationMinutes`).
   A positive `durationMinutes` is required; Outlook additionally needs the
   mailbox address in `providerOptions.schedules` (or a UPN-form `userId`), since
   `getSchedule` cannot resolve the `me` alias.
 - **Microsoft Bookings now exposes `customers.findOrCreate`** via the
-  `bookingCustomer` API — matches an existing customer by email (following
+  `bookingCustomer` API: matches an existing customer by email (following
   pagination) or creates one.
 - **Acuity accepts OAuth2 bearer credentials** (`{ accessToken }`) alongside the
-  existing Basic auth (`{ userId, apiKey }`) — the recommended mode for
+  existing Basic auth (`{ userId, apiKey }`): the recommended mode for
   multi-account apps.
 - **Calendly `updateBooking({ status: 'no_show' })`** marks the event's invitee
   a no-show via `/invitee_no_shows`, instead of throwing `UNSUPPORTED`.
@@ -451,7 +787,7 @@ tenant.
   single booking at the wrong time; it now expands a bounded RFC 5545 subset
   (`FREQ`/`INTERVAL`/`COUNT`/`UNTIL`/`WKST`, plus weekly `BYDAY`), honoring
   `EXDATE`. Any RRULE feature outside that subset falls back to the old
-  pass-through rather than emitting wrong occurrences. iCloud is unaffected — it
+  pass-through rather than emitting wrong occurrences. iCloud is unaffected: it
   expands server-side.
 
 ### Changed
@@ -469,7 +805,7 @@ tenant.
 The last published release is 0.1.5. This version carries **two** audit passes:
 the provider API audit of 2026-07-20 (which was version-bumped but never
 published) and the follow-up pass below. Upgrading from 0.1.5 means taking both
-— read both Breaking sections.
+read both Breaking sections.
 
 ### Second audit pass (2026-07-22)
 
@@ -488,13 +824,13 @@ defects that produced silently wrong results rather than errors.
   Acuity cannot change a service (or reassign staff outside a reschedule). These
   previously returned a healthy-looking `Booking` while the provider ignored the
   field. Use `cancelBooking()` to cancel. Setmore likewise rejects `status`, and
-  Wix rejects `listBookings({ staffId })` — Wix exposes no staff filter, so the
+  Wix rejects `listBookings({ staffId })`: Wix exposes no staff filter, so the
   old behavior sent a filter that was ignored or rejected upstream.
 - **Bookeo `createBooking` requires `providerOptions.participants`** with a
   `peopleCategoryId`. The previous hard-coded participants block omitted that
   required field, so every create failed upstream anyway; there is no safe
   default to infer, so it now fails client-side with a message naming the field.
-- **Phorest `createBooking` requires `staffId`** — `ServiceSchedule.staffId` is
+- **Phorest `createBooking` requires `staffId`**: `ServiceSchedule.staffId` is
   required by the spec, so a create without it was a guaranteed 400.
 - **Bookeo `updateBooking` rejects `title`/`staffId`/`serviceId`/`status`.** Its
   PUT is not a documented partial-update contract, so only a reschedule is safe
@@ -538,7 +874,7 @@ defects that produced silently wrong results rather than errors.
 - **CalDAV: `listBookings` could return nothing at all.** XML numeric character
   references were never decoded, so servers that escape the CR of a folded line
   as `&#13;` (sabre-based: Nextcloud, Baïkal) yielded ICS lines ending in a
-  literal `&#13;` — `BEGIN:VEVENT` never matched.
+  literal `&#13;` - `BEGIN:VEVENT` never matched.
 - **iCalendar: a DQUOTEd `TZID` was dropped on reschedule,** flattening a zoned
   series to a fixed UTC offset that drifts an hour at every DST transition.
 - **iCalendar: a CRLF in `uid` or the attendee email could inject arbitrary
@@ -555,7 +891,7 @@ defects that produced silently wrong results rather than errors.
 - **Acuity `updateBooking` silently discarded `status`, `serviceId`, and a
   `staffId` without a range.** Acuity ignores non-white-listed fields, so these
   now throw rather than report a success that never happened.
-- **Square `createBooking` dropped the title** — it is written as
+- **Square `createBooking` dropped the title**: it is written as
   `customer_note`, which is what reads back as the title.
 - **Square `updateBooking` accepted a `status` it cannot apply** (the field is
   read-only); it now throws and points at `cancelBooking()`.
@@ -563,13 +899,13 @@ defects that produced silently wrong results rather than errors.
   `clientState` was empty** (e.g. an unset env var). Matches the guard the
   Google and Vagaro verifiers already had.
 - **`verifyRs256Jwt` rejected instead of returning `null`** for a token whose
-  signature segment is not valid base64url — the decode ran outside the guarded
+  signature segment is not valid base64url: the decode ran outside the guarded
   `verify()`, so a malformed Wix webhook threw instead of cleanly failing.
 - **`createRegistry` suggested an import that does not exist** for
   `microsoft_bookings` (the export is `microsoftBookings`).
 - **Mindbody `getBooking` only worked for appointments happening today.** It sent
   `AppointmentIds` alone, but `StartDate` defaults to today and `EndDate` to
-  `StartDate` — so any other booking came back empty and surfaced as `NOT_FOUND`.
+  `StartDate`, so any other booking came back empty and surfaced as `NOT_FOUND`.
 - **Mindbody `updateBooking` turned every reschedule into a resize.** It omitted
   `EndDateTime`, which defaults to the staff member's default duration, silently
   discarding `range.end`. It also dropped `serviceId` and `title`, and accepted a
@@ -601,7 +937,7 @@ defects that produced silently wrong results rather than errors.
   `formSubmission` unreachable and silently dropping `notify`.
 - **Phorest `searchAvailability` could never return a slot.** It expected a
   top-level array, but the endpoint returns `{data: [...]}` with `endTime` and
-  `staffId` nested under `clientSchedules[].serviceSchedules[]` — so the guard
+  `staffId` nested under `clientSchedules[].serviceSchedules[]`, so the guard
   filtered out 100% of results and the call threw `UPSTREAM`.
 - **Phorest `createBooking` always threw.** Its post-processing read an
   `appointmentId` that the create response does not carry, then fell back to
@@ -610,7 +946,7 @@ defects that produced silently wrong results rather than errors.
   appointment. The id is read from `clientAppointmentSchedules[]` instead.
 - **Phorest reschedule sent the wrong time type and could not cross days.**
   `startTime`/`endTime` are `LocalTime` paired with a separate `appointmentDate`,
-  but full ISO instants were sent — and inconsistently, since the backfill path
+  but full ISO instants were sent, and inconsistently, since the backfill path
   copied the provider's already-correct `LocalTime`.
 - **Phorest `listBookings` returned an extra day and could shift the window.**
   `to_date` is inclusive, and the dates were sliced off the offset-local string
@@ -619,7 +955,7 @@ defects that produced silently wrong results rather than errors.
   documented maximum of 100.
 - **Phorest `updateBooking` silently dropped `status`;** it now routes to the
   documented cancel/confirm transitions and rejects statuses with no equivalent.
-- **Phorest basic auth threw on non-Latin-1 credentials** — `btoa` now receives
+- **Phorest basic auth threw on non-Latin-1 credentials**: `btoa` now receives
   UTF-8 bytes.
 - **Setmore `updateBooking({ status })` failed with a misleading error** about a
   missing title, because the unsupported-field guard did not check `status`. Its
@@ -633,14 +969,14 @@ defects that produced silently wrong results rather than errors.
   values Zenoti never sends.
 - **Zenoti `listBookings` returned nothing for a same-day range.** Both endpoints
   were sliced to a date, but the API requires `start_date` and `end_date` to
-  differ and treats the end as exclusive — so a 09:00–17:00 window collapsed to
+  differ and treats the end as exclusive, so a 09:00–17:00 window collapsed to
   an empty one. It also silently dropped `status`, `limit` and `pageToken`, and
   could never return cancellations (`include_no_show_cancel` was never sent).
 - **Zenoti availability fabricated a UTC offset.** Slot `Time` values are
   center-local without an offset, but one code path appended `Z` while another
   treated the same value as wall-clock, so the two disagreed and
   `AvailabilitySlot.start` claimed an instant it was not.
-- **Zenoti usually lost the guest phone** — it read `mobile.number`, which the
+- **Zenoti usually lost the guest phone**: it read `mobile.number`, which the
   documented sample shows as null, ignoring the populated `display_number`.
 - **Boulevard reschedule failed every time** with a spurious `CONFLICT`.
   `appointmentRescheduleAvailableTimes` returns a *list* of payloads, but
@@ -648,7 +984,7 @@ defects that produced silently wrong results rather than errors.
   empty candidate set.
 - **Boulevard retried failures that can never succeed.** GraphQL errors arrive as
   HTTP 200 with an `errors[]` body and were all mapped to `UPSTREAM`, which
-  `withRetry` treats as retryable — re-issuing non-idempotent mutations. They are
+  `withRetry` treats as retryable: re-issuing non-idempotent mutations. They are
   now classified from `extensions.code` (falling back to the message) into
   `NOT_FOUND`/`AUTH`/`FORBIDDEN`/`CONFLICT`/`INVALID_INPUT`. A missing booking
   also returned `UPSTREAM` instead of `NOT_FOUND`, because GraphQL answers a bad
@@ -656,8 +992,8 @@ defects that produced silently wrong results rather than errors.
 - **Boulevard ignored the booking errors it asked for.** `bookingCreate` selected
   `booking { errors { code message } }` but never read them, so a booking that
   came back with errors proceeded to add a service and complete regardless.
-- **Vagaro `listBookings` ignored the requested range entirely** — never
-  validated, never filtered — returning the customer's whole history. It could
+- **Vagaro `listBookings` ignored the requested range entirely**, never
+  validated, never filtered: returning the customer's whole history. It could
   also emit a `nextPageToken` forever (`rows.length >= rows.length` is always
   true), so paginating to exhaustion never terminated.
 - **Vagaro `searchAvailability` returned only the first day** of a multi-day
@@ -674,7 +1010,7 @@ defects that produced silently wrong results rather than errors.
 #### Added
 
 - `verifyCalendlySignature` accepts `toleranceMs` (and an injectable `now`) to
-  reject replayed deliveries, as Calendly's docs recommend — the same opt-in
+  reject replayed deliveries, as Calendly's docs recommend: the same opt-in
   shape the Bookeo verifier already had.
 - `CalendlyCredentials.defaultTimezone`.
 - Square `searchAvailability` honors `query.providerOptions`.
@@ -697,13 +1033,13 @@ defects that produced silently wrong results rather than errors.
 - **The README's verification claims were overstated and are now accurate.** It
   said the conformance suite asserts "URL, headers and request body"; it matches
   on request path and method only, and never inspects headers or bodies. It also
-  implied adapters with open sandboxes are exercised live — none are. No adapter
+  implied adapters with open sandboxes are exercised live: none are. No adapter
   is verified against a live tenant; correctness rests on spec diffs like this
   one.
 
 #### Removed
 
-- `BuildVEventInput.status` and the `STATUS` branch in `buildICS` — no caller.
+- `BuildVEventInput.status` and the `STATUS` branch in `buildICS`, no caller.
 - Mindbody's `AppointmentTypeId` fallback (not a field in v6) and Wix's
   `availabilityTimeSlots`/`startDate`/`endDate`/`resource` response branches
   (none exist on the documented Time Slots V2 shape).
@@ -717,14 +1053,14 @@ defects that produced silently wrong results rather than errors.
 
 Every adapter was diffed against its provider's current published API
 documentation. Three were non-functional and eleven had wire-format defects. All
-findings below are grounded in a first-party specification — an OpenAPI/Swagger
+findings below are grounded in a first-party specification: an OpenAPI/Swagger
 document, a GraphQL introspection schema, or an official reference page.
 
 > **Verification status.** These fixes match the published specifications. They
-> are **not** confirmed against live tenants — no adapter in this package is.
+> are **not** confirmed against live tenants, no adapter in this package is.
 > The exception is the Bookeo webhook verifier, which reproduces the vendor's
 > own published test vector. (An earlier wording claimed the tests assert
-> headers and request bodies across the board; they do not — see Changed above.)
+> headers and request bodies across the board; they do not: see Changed above.)
 
 #### Breaking
 
@@ -745,7 +1081,7 @@ document, a GraphQL introspection schema, or an official reference page.
   times arrive as bare wall-clock strings with no date and no offset; inferring a
   zone from the caller's range misplaces every slot across a DST boundary.
 - **Setmore `getBooking` and `cancelBooking` now throw `UNSUPPORTED`.** Neither
-  endpoint exists — the Booking API is 11 routes with no fetch-by-id and no
+  endpoint exists: the Booking API is 11 routes with no fetch-by-id and no
   cancel or delete. Read bookings via `listBookings` over a date range. Setmore
   `updateBooking` accepts only a title (label); time, staff and service changes
   throw.
@@ -755,7 +1091,7 @@ document, a GraphQL introspection schema, or an official reference page.
   `INVALID_INPUT` instead of surfacing an opaque upstream 400. `customer.name` is
   always required; `customer.email` is required except on admin bookings (i.e.
   when a `staffId` is supplied).
-- **Boulevard `createBooking` requires a `staffId`** — `bookingComplete`
+- **Boulevard `createBooking` requires a `staffId`**: `bookingComplete`
   declares `bookWithStaffId` non-null, so a staff-less booking is not
   expressible. `updateBooking` no longer accepts staff or service changes
   (`UpdateAppointmentInput` covers only notes, state and custom fields), and
@@ -768,14 +1104,14 @@ document, a GraphQL introspection schema, or an official reference page.
 Adapters that could not work at all:
 
 - **Vagaro** authenticated with `Authorization: Bearer` where the spec declares
-  an apiKey scheme using a raw `accessToken` header — every request returned 401.
+  an apiKey scheme using a raw `accessToken` header, every request returned 401.
   A spurious `merchants/` path segment 404'd the two implemented methods, and
   `createBooking`/`updateBooking`/`cancelBooking`/`listBookings` were marked
   UNSUPPORTED on the false claim that no such endpoints exist. All are now
   implemented. Writes emit business-local wall clock while reads stay UTC;
   round-tripping a fetched instant into a write previously shifted the booking by
   the location's offset. `parseError` read `errorCode`/`code`, neither of which
-  Vagaro sends — now `responseCode`.
+  Vagaro sends: now `responseCode`.
 - **Setmore** had six of eight paths wrong, and two operations addressed
   endpoints that do not exist. All three date encodings are corrected
   (`dd-mm-yyyy` list, `DD/MM/YYYY` slots, `yyyy-MM-ddTHH:mm` create), slots is a
@@ -793,7 +1129,7 @@ Adapters that could not work at all:
 
 Breaking defects in otherwise-working adapters:
 
-- **Wix** `getBooking`, `listBookings` and `currentRevision` 404'd — the
+- **Wix** `getBooking`, `listBookings` and `currentRevision` 404'd: the
   extended-bookings path was missing a segment (`bookings/reader/v2` →
   `bookings/bookings-reader/v2`). Because cancel and reschedule both resolve a
   revision first, most of the adapter was down.
@@ -813,7 +1149,7 @@ Breaking defects in otherwise-working adapters:
 - **Zenoti** nested the service as a flat `service_id`; the spec requires
   `item: { id, item_type }`. `updateBooking` now uses the first-class reschedule
   (carrying `invoice_id` and `invoice_item_id`) rather than booking fresh and
-  cancelling the old invoice — which changed the booking id, orphaned a cancelled
+  cancelling the old invoice, which changed the booking id, orphaned a cancelled
   invoice and could trigger cancellation fees. Slots flagged `Available: false`
   are no longer offered as bookable.
 - **Phorest** `updateBooking` omitted `staffId` and `startTime`, both marked
@@ -841,7 +1177,7 @@ Breaking defects in otherwise-working adapters:
   claiming otherwise. Verified against Bookeo's published test vector, which
   ships as a test. Supports the documented ±120s timestamp freshness check.
 - **Microsoft Bookings `searchAvailability`** via `getStaffAvailability`, which
-  is GA in Graph v1.0. Note it is **application-permission only** — a delegated
+  is GA in Graph v1.0. Note it is **application-permission only**: a delegated
   user token works for every other call on that adapter but not this one.
 - **Outlook immutable event ids** (`Prefer: IdType="ImmutableId"`). Graph event
   ids otherwise change when an item moves between calendars, breaking the
@@ -849,7 +1185,7 @@ Breaking defects in otherwise-working adapters:
 - **Acuity `cancelBooking` sends `admin=true`**, so cancellations succeed past
   the account's client-cancellation window.
 - A test asserting the README's provider table against the adapters' real
-  `capabilities` objects — it had silently drifted twice.
+  `capabilities` objects: it had silently drifted twice.
 
 #### Changed
 
@@ -857,7 +1193,7 @@ Breaking defects in otherwise-working adapters:
   behind). Square's changelog records no Bookings changes across that span.
 - Provider names in the README table now link to their official API
   documentation. The notes distinguish *platform limitations* (the provider
-  cannot do this) from *adapter gaps* (it can; unibooking has not modelled it) —
+  cannot do this) from *adapter gaps* (it can; unibooking has not modelled it): 
   previously a single dash meant both.
 
 ## [0.1.5] - 2026-07-19
@@ -875,7 +1211,7 @@ Breaking defects in otherwise-working adapters:
     `listBookings` now POST the Query Extended Bookings endpoint (Reader V2 has no
     GET-by-id) and unwrap `.booking`; `searchAvailability` uses Time Slots V2
     (`fromLocalDate`/`toLocalDate`/`timeZone`, mapping offset-less local times back
-    to instants — now requires `range.timezone`); `createBooking` sends the required
+    to instants: now requires `range.timezone`); `createBooking` sends the required
     participant count and `reschedule`/`cancel` send the required `revision`.
   - **Square** `createBooking` routes `providerOptions.service_variation_version`
     onto the appointment segment (where Square needs it).
@@ -883,7 +1219,7 @@ Breaking defects in otherwise-working adapters:
     (override via `options.baseUrl`).
   - **Acuity `searchAvailability` now spans a multi-day range.** Acuity's
     `availability/times` is single-date, so the adapter pages one call per day the
-    range overlaps (capped at 31 days) and keeps only in-window slots — a multi-day
+    range overlaps (capped at 31 days) and keeps only in-window slots: a multi-day
     query previously returned only the first day.
 
 ### Added
@@ -897,20 +1233,20 @@ Breaking defects in otherwise-working adapters:
 
 ### Fixed
 
-- **Full provider audit (2026-07-19)** — all 16 adapters reviewed and verified
+- **Full provider audit (2026-07-19)**, all 16 adapters reviewed and verified
   against each vendor's *current* API docs (Square, Microsoft Graph/Bookings,
   Acuity, Calendly, Wix, Mindbody, Bookeo, Zenoti, and the gated tier). Report:
   `docs/audits/2026-07-19-booking-providers.md`.
   - **Microsoft Bookings was broken on every read/write.** The `bookingAppointment`
     resource carries its times as `start`/`end` (`dateTimeTimeZone`), but the
-    adapter read and sent `startDateTime`/`endDateTime` — so every
+    adapter read and sent `startDateTime`/`endDateTime`, so every
     `getBooking`/`listBookings` threw "appointment is missing start/end times" and
     create/update sent fields Graph ignores. Now uses `start`/`end`. `updateBooking`
     also handles the `204 No Content` Graph returns on PATCH by re-GETting the
     appointment (it was trying to parse an empty body).
   - **Mindbody `updateBooking` used `PUT`; the v6 method is `POST`** on
     `appointment/updateappointment`. Also, `LocationId` is **required** by
-    `AddAppointment` (was only sent when set) — `createBooking` now rejects a
+    `AddAppointment` (was only sent when set): `createBooking` now rejects a
     missing `locationId` client-side, and the `Requested` status maps to `pending`
     (was `unknown`).
   - **Calendly `createBooking` posted to a non-existent path.** The Scheduling API
@@ -918,13 +1254,13 @@ Breaking defects in otherwise-working adapters:
     *inside* the `invitee` object. Fixed the path and placement; `providerOptions`
     now flows into the create body so event types that require a `location` can
     supply one.
-  - **Acuity silently dropped `notes` on non-reschedule updates** — Acuity only
+  - **Acuity silently dropped `notes` on non-reschedule updates**: Acuity only
     lets an admin write `notes`, so that PUT now sends `admin=true`. And
     `createBooking` sends `admin=true` **only** when a `staffId` (calendarID) is
     present, because Acuity rejects admin-mode creates without a calendarID.
   - **Square `cancelBooking` sent an invalid `seller_note`** field (not part of
-    CancelBooking) — removed. Square's cancel endpoint carries no reason field.
-  - **Wix created CRM contacts with the wrong name shape** — Contacts v4
+    CancelBooking): removed. Square's cancel endpoint carries no reason field.
+  - **Wix created CRM contacts with the wrong name shape**: Contacts v4
     `info.name` is `{ first, last }`, not `{ firstName, lastName }`, so a new
     contact's name was silently dropped.
 
@@ -934,7 +1270,7 @@ Breaking defects in otherwise-working adapters:
   **the Wix adapter's `getBooking`/`listBookings`/`searchAvailability` use
   endpoints/shapes that don't match the current Bookings V2 API** (Reader V2 has
   no GET-by-id; availability is Time Slots V2 with local-time fields), and
-  create/reschedule/cancel omit the required `totalParticipants`/`revision` — it
+  create/reschedule/cancel omit the required `totalParticipants`/`revision`: it
   needs a live-tenant rewrite; **Square** appointment creates require a `staffId`
   (team_member_id) plus a service-variation version; **Bookeo** creates require
   `participants` (and `eventId` for fixed products) via `providerOptions`;
@@ -969,7 +1305,7 @@ Breaking defects in otherwise-working adapters:
 - Known limitations surfaced by the audit (behavior unchanged, now called out in
   the provider docs): Apple/CalDAV `listBookings` returns recurring events as the
   **unexpanded master** (its `DTSTART` can fall outside the queried window, and a
-  series yields one booking, not one per instance) — Google and Outlook expand
+  series yields one booking, not one per instance): Google and Outlook expand
   recurrences; Outlook `cancelBooking` with `notify`/`reason` uses Graph's
   organizer-only `/cancel` action, which returns `400` for a non-organizer or an
   attendee-less personal event; Google/Outlook do not notify attendees on
@@ -979,7 +1315,7 @@ Breaking defects in otherwise-working adapters:
 
 ### Added
 
-- Interactive **demo app** (`demo/`) — a Next.js "Try-It" explorer that exercises
+- Interactive **demo app** (`demo/`): a Next.js "Try-It" explorer that exercises
   all 16 adapters against the published package: direct client-side calls for
   CORS-friendly providers, and a strict-allowlist `/api/call` proxy (with an SSRF
   guard on the Apple/CalDAV URL) for the ones that block browser calls. It lives
@@ -992,7 +1328,7 @@ The library's public API, types, and runtime behavior are unchanged from 0.1.1.
 ### Changed
 
 - **Minimum Node is now 20** (was 18). The library is built on the Web Crypto
-  global (`globalThis.crypto`), which is only available by default on Node 19+ —
+  global (`globalThis.crypto`), which is only available by default on Node 19+: 
   so 0.1.0's `engines.node: ">=18"` was wrong and `crypto.subtle`/`randomUUID`
   threw on Node 18 (now end-of-life). Edge runtimes, Deno, Bun, and browsers are
   unaffected. CI now runs on Node 20, 22, and 24.
@@ -1001,10 +1337,10 @@ The library's public API, types, and runtime behavior are unchanged from 0.1.1.
 
 ### Added
 
-- New adapters: `wix` (Wix Bookings V2 — full lifecycle, Time Slots V2, CRM
-  contacts), `calendly` (API v2 — create via the Scheduling API, read/cancel,
+- New adapters: `wix` (Wix Bookings V2: full lifecycle, Time Slots V2, CRM
+  contacts), `calendly` (API v2: create via the Scheduling API, read/cancel,
   available times; `updateBooking` does cancel+rebook since Calendly has no
-  reschedule endpoint), and `setmore` (gated beta — full appointment CRUD, slots,
+  reschedule endpoint), and `setmore` (gated beta: full appointment CRUD, slots,
   customers).
 - `boulevard` is now a **real adapter** (Enterprise GraphQL Admin API) replacing
   the stub: create/read/reschedule/cancel/list + `customers.findOrCreate` +
@@ -1029,14 +1365,14 @@ The library's public API, types, and runtime behavior are unchanged from 0.1.1.
   Acuity Scheduling, Bookeo, Mindbody, Apple/CalDAV.
 - Webhook signature verifiers (Square, Outlook, Acuity, Google, Vagaro) built on Web Crypto.
 - Shared adapter conformance test suite.
-- `AvailabilityQuery.providerOptions` — a typed escape hatch for provider-specific
+- `AvailabilityQuery.providerOptions`: a typed escape hatch for provider-specific
   availability inputs (e.g. Zenoti's booking-scoped `guestId`).
 
 ### Changed
 
 - Adapter-kit `AuthFn` may now return a `Promise` (its result is awaited), so an
   adapter can sign each request asynchronously (Boulevard's per-request HMAC).
-  Backward-compatible — existing synchronous `AuthFn`s are unaffected.
+  Backward-compatible: existing synchronous `AuthFn`s are unaffected.
 - **BREAKING:** `assertValidRange` now rejects offset-less timestamps. Canonical
   `TimeRange.start`/`end` must carry an explicit UTC offset (`Z` or `±HH:MM`); an
   offset-less string is ambiguous and was previously accepted, then reinterpreted

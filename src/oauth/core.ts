@@ -7,7 +7,7 @@ import { UnibookingError, codeForStatus } from '../errors';
  * ## Server-only
  *
  * Every client here takes a **client secret**. Nothing under `unibooking/oauth`
- * may be imported into browser code, and no adapter imports it — so bundling an
+ * may be imported into browser code, and no adapter imports it, so bundling an
  * adapter can never drag secrets-handling code into a client build.
  *
  * ## Nothing is persisted
@@ -20,12 +20,12 @@ import { UnibookingError, codeForStatus } from '../errors';
 export interface OAuthTokens {
   accessToken: string;
   /** Absent when the provider issues none, or when a refresh response omits it
-   *  — Google returns a refresh token only on the first consent. */
+   *  Google returns a refresh token only on the first consent. */
   refreshToken?: string;
   /** RFC3339 instant. Derived from `expires_in` where the provider sends a
    *  duration, so a consumer never has to know which encoding it got. */
   expiresAt?: string;
-  /** Space-separated, as GRANTED — which is not always what was requested. */
+  /** Space-separated, as GRANTED, which is not always what was requested. */
   scope?: string;
   raw: unknown;
 }
@@ -33,7 +33,7 @@ export interface OAuthTokens {
 export interface AuthorizationUrl {
   url: string;
   /** CSRF token. Generated unless the caller supplied one. Store it and compare
-   *  on callback — this library cannot verify it for you without keeping state. */
+   *  on callback: this library cannot verify it for you without keeping state. */
   state: string;
   /** Present only when `pkce: true`. Store alongside `state` and pass it back to
    *  `exchangeCode`. */
@@ -71,6 +71,8 @@ export interface OAuthConfig {
   /** Injectable clock, so `expiresAt` is deterministic in tests. Mirrors
    *  `ClientOptions.now` on the adapter side. */
   now?: () => number;
+  /** Token-request timeout in ms. Default 15000, like `ClientOptions.timeoutMs`. */
+  timeoutMs?: number;
 }
 
 // --- primitives -------------------------------------------------------------
@@ -93,6 +95,57 @@ async function codeChallengeS256(verifier: string): Promise<string> {
   return base64Url(new Uint8Array(digest));
 }
 
+/**
+ * Token-endpoint `error` values that mean the grant itself is gone and only the
+ * user can bring it back by signing in again. RFC 6749 §5.2 answers every
+ * token-endpoint error with HTTP 400, and Google and Microsoft do exactly that
+ * for a revoked refresh token, so the status alone reads as INVALID_INPUT and a
+ * consumer cannot tell "reconnect" from "malformed request". These become AUTH.
+ * `interaction_required`/`login_required`/`consent_required` are Entra's answers
+ * when MFA, a conditional-access change or new consent needs the user present.
+ */
+const DEAD_GRANT = new Set([
+  'invalid_grant',
+  'interaction_required',
+  'login_required',
+  'consent_required',
+]);
+
+/** Default token-request timeout, matching the adapters' HTTP default. */
+const TOKEN_TIMEOUT_MS = 15_000;
+
+/**
+ * One call to a token endpoint, bounded by a timeout. Without one, a token
+ * endpoint that accepted the connection and never answered held the request:
+ * and, under `withAutoRefresh`, every request sharing that refresh: forever,
+ * where every adapter call gives up after `timeoutMs`. Nothing about the
+ * request is put in the error: its body carries the client secret.
+ */
+export async function tokenFetch(
+  provider: ProviderId,
+  config: { fetch?: typeof fetch; timeoutMs?: number },
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const doFetch = config.fetch ?? globalThis.fetch;
+  const timeoutMs = config.timeoutMs ?? TOKEN_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await doFetch(url, { ...init, signal: controller.signal });
+  } catch (cause) {
+    const aborted = cause instanceof Error && cause.name === 'AbortError';
+    throw new UnibookingError({
+      provider,
+      code: aborted ? 'TIMEOUT' : 'NETWORK',
+      message: aborted ? `token request timed out after ${timeoutMs}ms` : 'token request failed',
+      cause,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- token parsing ----------------------------------------------------------
 
 /** Seconds-from-now → RFC3339 instant. */
@@ -104,7 +157,7 @@ function expiryFromSeconds(seconds: unknown, now: number): string | undefined {
 
 /**
  * The standard OAuth2 token response. Providers that deviate override this via
- * `parseTokens` — Square sends `expires_at` as an RFC3339 string rather than
+ * `parseTokens`: Square sends `expires_at` as an RFC3339 string rather than
  * `expires_in` seconds.
  */
 export function parseStandardTokens(provider: ProviderId, raw: any, now: number): OAuthTokens {
@@ -134,7 +187,7 @@ export interface DefineOAuthConfig extends OAuthConfig {
   /** How the token request body is encoded. Acuity requires form encoding and
    *  rejects JSON; Square requires JSON. */
   bodyFormat: 'form' | 'json';
-  /** Fixed extra parameters on the authorize URL — Google's
+  /** Fixed extra parameters on the authorize URL: Google's
    *  `access_type=offline` + `prompt=consent`, without which no refresh token
    *  is ever issued. */
   authorizeParams?: Record<string, string>;
@@ -150,26 +203,15 @@ export function defineOAuth(config: DefineOAuthConfig): OAuthClient {
   const parse = config.parseTokens ?? parseStandardTokens;
 
   async function post(body: Record<string, string>): Promise<OAuthTokens> {
-    const doFetch = config.fetch ?? globalThis.fetch;
     const isForm = config.bodyFormat === 'form';
-    let res: Response;
-    try {
-      res = await doFetch(config.tokenUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': isForm ? 'application/x-www-form-urlencoded' : 'application/json',
-          accept: 'application/json',
-        },
-        body: isForm ? new URLSearchParams(body).toString() : JSON.stringify(body),
-      });
-    } catch (cause) {
-      throw new UnibookingError({
-        provider: config.provider,
-        code: 'NETWORK',
-        message: 'token request failed',
-        cause,
-      });
-    }
+    const res = await tokenFetch(config.provider, config, config.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': isForm ? 'application/x-www-form-urlencoded' : 'application/json',
+        accept: 'application/json',
+      },
+      body: isForm ? new URLSearchParams(body).toString() : JSON.stringify(body),
+    });
 
     const text = await res.text();
     let parsed: any;
@@ -181,11 +223,12 @@ export function defineOAuth(config: DefineOAuthConfig): OAuthClient {
 
     if (!res.ok) {
       // OAuth2 error bodies are `{ error, error_description }`. The request body
-      // is never echoed into the message — it carries the client secret.
+      // is never echoed into the message: it carries the client secret.
       const detail = parsed?.error_description ?? parsed?.message ?? parsed?.error;
+      const grantDead = typeof parsed?.error === 'string' && DEAD_GRANT.has(parsed.error);
       throw new UnibookingError({
         provider: config.provider,
-        code: codeForStatus(res.status),
+        code: grantDead ? 'AUTH' : codeForStatus(res.status),
         message: typeof detail === 'string' ? detail : `token endpoint returned ${res.status}`,
         httpStatus: res.status,
         ...(typeof parsed?.error === 'string' ? { providerCode: parsed.error } : {}),
@@ -260,7 +303,7 @@ export interface AutoRefreshConfig<TCreds extends ProviderCredentials> {
   /** Refresh this far ahead of expiry. Default 60_000. */
   skewMs?: number;
   /** Build the adapter's credential object from the current tokens. This is
-   *  what varies per provider — Square also needs `locationId`, Google a
+   *  what varies per provider: Square also needs `locationId`, Google a
    *  `calendarId`. */
   toCreds: (tokens: OAuthTokens) => TCreds;
   /** Injectable clock for tests. */
@@ -271,12 +314,17 @@ export interface AutoRefreshConfig<TCreds extends ProviderCredentials> {
  * Bridge OAuth refresh into the adapter credential system.
  *
  * Returns a `CredsInput` function, so it is resolved fresh before every request
- * and cannot race a mid-request expiry. The library still stores nothing — the
+ * and cannot race a mid-request expiry. The library still stores nothing: the
  * `onRefresh` callback is how new tokens reach your database.
  *
- * Concurrent de-duplication is deliberately absent: an in-memory lock would be
- * per-process and would not dedupe across instances, which is misleading for
- * exactly the multi-instance deployments that would need it.
+ * Concurrent calls on the SAME returned function share one in-flight refresh
+ * (and one `onRefresh`): two parallel requests on one client would otherwise
+ * each spend the refresh token, and a provider with single-use refresh tokens
+ * (Calendly enforces rotation) refuses the second: the connection then looks
+ * revoked. That sharing is per function, not per process or per fleet: separate
+ * `withAutoRefresh` instances for the same grant (one per request, one per
+ * server) still refresh independently. Where that matters, serialize refreshes
+ * yourself, e.g. a row lock around loading the tokens and building the client.
  */
 export function withAutoRefresh<TCreds extends ProviderCredentials>(
   config: AutoRefreshConfig<TCreds>,
@@ -284,26 +332,36 @@ export function withAutoRefresh<TCreds extends ProviderCredentials>(
   const skewMs = config.skewMs ?? 60_000;
   const now = config.now ?? (() => Date.now());
   let current = config.tokens;
+  let inflight: Promise<OAuthTokens> | undefined;
 
-  return async (): Promise<TCreds> => {
-    const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : NaN;
-    // No expiry means the provider told us nothing. Guessing a lifetime would be
-    // worse than its own silence — checkConnection covers the diagnosis.
-    const stale = Number.isFinite(expiresAt) && now() >= expiresAt - skewMs;
-    if (!stale || !current.refreshToken) return config.toCreds(current);
-
-    const next = await config.oauth.refresh(current.refreshToken);
+  async function refreshOnce(refreshToken: string): Promise<OAuthTokens> {
+    const next = await config.oauth.refresh(refreshToken);
     // Google returns a refresh token only on first consent, so a refresh
     // response that omits one must not erase the token we still need.
     const merged: OAuthTokens = {
       ...next,
-      ...(next.refreshToken ? {} : { refreshToken: current.refreshToken }),
+      ...(next.refreshToken ? {} : { refreshToken }),
     };
     // Persist BEFORE handing the credentials out. If the write fails the error
-    // propagates and the request does not proceed — continuing as though the
+    // propagates and the request does not proceed: continuing as though the
     // token were saved is how a refresh token gets lost permanently.
     await config.onRefresh(merged);
     current = merged;
-    return config.toCreds(merged);
+    return merged;
+  }
+
+  return async (): Promise<TCreds> => {
+    const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : NaN;
+    // No expiry means the provider told us nothing. Guessing a lifetime would be
+    // worse than its own silence: checkConnection covers the diagnosis.
+    const stale = Number.isFinite(expiresAt) && now() >= expiresAt - skewMs;
+    if (!stale || !current.refreshToken) return config.toCreds(current);
+
+    // Cleared on settle either way, so a failed refresh is retried by the next
+    // call instead of being replayed to every later one.
+    inflight ??= refreshOnce(current.refreshToken).finally(() => {
+      inflight = undefined;
+    });
+    return config.toCreds(await inflight);
   };
 }

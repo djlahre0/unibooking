@@ -104,7 +104,7 @@ describe('enumeration', () => {
     it('omits price entirely when no currency is configured', async () => {
       mockCatalog();
       // Setmore sends a bare `cost` with no currency. Guessing one would be
-      // worse than omitting the field — the raw cost is still reachable.
+      // worse than omitting the field: the raw cost is still reachable.
       const { services } = await setmore({ accessToken: 't' }).listServices!();
       expect(services[0]!.price).toBeUndefined();
       expect((services[0]!.raw as any).cost).toBe('65.00');
@@ -255,7 +255,7 @@ describe('enumeration', () => {
 
       const { staff } = await square({ accessToken: 't', locationId: 'LOC1' }).listStaff!();
 
-      // The query must NOT filter by status — doing so would make `active`
+      // The query must NOT filter by status: doing so would make `active`
       // always true and hide members still referenced by past bookings.
       expect(body.query.filter.status).toBeUndefined();
       expect(body.query.filter.location_ids).toEqual(['LOC1']);

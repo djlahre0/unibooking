@@ -4,6 +4,7 @@ import type {
   BookingStatus,
   CreateBookingInput,
   Customer,
+  CustomerRecord,
   Service,
   Staff,
   TimeRange,
@@ -24,13 +25,15 @@ import { slotsWithinRange } from '../availability';
 /**
  * Zenoti (api.zenoti.com, /v1). Auth: `Authorization: apikey <key>`. `center_id`
  * scopes every call. Booking is multi-step (create booking -> get slots -> reserve
- * -> confirm); there is no single create and no clean reschedule, so updateBooking
- * re-books and cancels the old invoice. Times use the *_utc fields (append `Z`).
+ * -> confirm); there is no single create. `updateBooking` reschedules in place by
+ * running the same chain with the appointment's existing `invoice_id` /
+ * `invoice_item_id`, so the id is kept and no cancellation fee fires. Times use
+ * the *_utc fields (append `Z`).
  *
  * **Center-timezone caveat.** Booking *slots* are not *_utc: their `Time` is
  * center-local wall clock with no offset, and neither the API nor the canonical
  * model carries the center's zone. The adapter's single stated assumption is
- * therefore that **the caller expresses times in the center's own UTC offset** —
+ * therefore that **the caller expresses times in the center's own UTC offset**:
  * slot starts are anchored in `range.start`'s offset (`anchorSlotTime`) and
  * booking-time matching compares wall clocks (`matchesRequestedTime`). Pass
  * ranges in the center's offset, or slots will be anchored to the wrong instant.
@@ -73,7 +76,7 @@ function lastDateTouched(range: TimeRange): string {
 }
 
 /** Anchor a slot `Time` as an absolute instant. Slot times are center-local wall
- *  clock with no offset, so — per the center-timezone caveat on this module —
+ *  clock with no offset, so: per the center-timezone caveat on this module:
  *  they are read in the offset of the caller's own range rather than fabricating
  *  a `Z`, which would claim a UTC instant the value is not. */
 function anchorSlotTime(time: unknown, offsetSource: string): string | undefined {
@@ -92,7 +95,7 @@ function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolea
   // Wall-clock match: Zenoti slot Time is center-local without an offset, so also match
   // the local components of requestedStart. Callers should express the booking time in
   // the center's local offset for this to line up.
-  // TODO: verify against live API — full tz-awareness needs the center timezone, which
+  // TODO: verify against live API: full tz-awareness needs the center timezone, which
   // the canonical model doesn't carry.
   const reqLocal = requestedStart.replace(/([+-]\d{2}:?\d{2}|Z)$/, '');
   return slotTime.slice(0, 19) === reqLocal.slice(0, 19);
@@ -101,7 +104,7 @@ function matchesRequestedTime(slotTime: unknown, requestedStart: string): boolea
 function mapStatus(s: unknown): BookingStatus {
   // Zenoti returns integer codes; some list endpoints return strings. Handle both.
   // The documented enum is NoShow=-2, Cancelled=-1, New=0, Closed=1, Checkin=2,
-  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21 — note that -2
+  // Confirm=4, Break=10, NotSpecified=11, Available=20, Voided=21: note that -2
   // and -1 are no-show and cancelled in that order, and that 3/5/6/99 do not exist.
   const n = typeof s === 'number' ? s : Number(s);
   if (!Number.isNaN(n)) {
@@ -275,6 +278,48 @@ async function findOrCreateGuest(
   return reqString(String(created?.id ?? ''), 'zenoti', 'guest.id');
 }
 
+/** A Zenoti guest -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'zenoti', 'guest');
+  const p = r.personal_info ?? {};
+  const name = [p.first_name, p.last_name]
+    .filter((x: unknown) => typeof x === 'string' && x)
+    .join(' ');
+  const phone = p.mobile_phone?.number;
+  return {
+    id: reqString(String(r.id ?? ''), 'zenoti', 'guest.id'),
+    ...(name ? { name } : {}),
+    ...(typeof p.email === 'string' && p.email ? { email: p.email } : {}),
+    ...(typeof phone === 'string' && phone ? { phone } : {}),
+    ...(typeof r.created_date === 'string' ? { createdAt: r.created_date } : {}),
+    raw: r,
+  };
+}
+
+/** A 1-based Zenoti page and its size, from a canonical list query. The size
+ *  is always sent, so a full page is recognisable as "maybe more". */
+function pagingOf(query: { limit?: number; pageToken?: string } | undefined): {
+  page: number;
+  size: number;
+} {
+  const page = query?.pageToken ? Number(query.pageToken) : 1;
+  if (!Number.isInteger(page) || page < 1) {
+    throw new UnibookingError({
+      provider: 'zenoti',
+      code: 'INVALID_INPUT',
+      message: 'pageToken must be a page number from a previous list',
+    });
+  }
+  return { page, size: Math.min(query?.limit ?? 100, 100) };
+}
+
+/** Zenoti reports no reliable total, so a full page means there may be
+ *  another. Without a token at all, everything past the first page was
+ *  unreachable, including through `getService`/`getStaff`. */
+function nextPageIf(count: number, paging: { page: number; size: number }): string | undefined {
+  return count > 0 && count >= paging.size ? String(paging.page + 1) : undefined;
+}
+
 async function resolveGuestId(
   http: HttpContext<ZenotiCredentials>,
   c: ZenotiCredentials,
@@ -292,7 +337,7 @@ async function resolveGuestId(
 
 /** Identifies an existing appointment to reschedule in place. When present,
  *  Zenoti moves that appointment to the new slot instead of creating a fresh
- *  booking — so no cancellation, no new id, and no cancellation fee. */
+ *  booking, so no cancellation, no new id, and no cancellation fee. */
 interface RescheduleTarget {
   invoiceId: string;
   invoiceItemId: string;
@@ -309,7 +354,7 @@ async function bookAndConfirm(
   extra: Record<string, unknown> | undefined,
   reschedule?: RescheduleTarget,
 ): Promise<string> {
-  // Use the wall-clock date the caller expressed, NOT the UTC date — a late
+  // Use the wall-clock date the caller expressed, NOT the UTC date: a late
   // center-local start (e.g. 10pm -05:00 = 03:00Z next day) must book on the
   // caller's day, or Zenoti returns slots for the wrong date and we spuriously
   // report CONFLICT. (listBookings already slices the literal date this way.)
@@ -336,7 +381,7 @@ async function bookAndConfirm(
       ...extra,
     },
   });
-  // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+  // Create-booking responds `{"id": "15b0cc65-…", "error": null}`: a top-level `id`.
   const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
   const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
   const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
@@ -382,10 +427,28 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `apikey ${c.apiKey}` } }),
@@ -393,18 +456,16 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
   build: (http) => ({
     async listServices(query) {
       const c = await http.resolve();
+      const paging = pagingOf(query);
       const res = await http.request(c, {
         path: `centers/${enc(c.centerId)}/services`,
-        query: {
-          ...(query?.limit !== undefined ? { size: query.limit } : {}),
-          ...(query?.pageToken ? { page: query.pageToken } : {}),
-        },
+        query: { page: paging.page, size: paging.size },
       });
       const services = asArray(res?.services, 'zenoti', 'services').map((raw): Service => {
         const s = asRecord(raw, 'zenoti', 'service');
         const duration = Number(s.duration);
         // Zenoti nests the sale price under `price`, with the currency as a
-        // separate numeric code we cannot map to ISO-4217 — so price is left off
+        // separate numeric code we cannot map to ISO-4217, so price is left off
         // rather than paired with a guess.
         return {
           id: reqString(String(s.id ?? ''), 'zenoti', 'service.id'),
@@ -417,17 +478,16 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           raw: s,
         };
       });
-      return { services };
+      const next = nextPageIf(services.length, paging);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async listStaff(query) {
       const c = await http.resolve();
+      const paging = pagingOf(query);
       const res = await http.request(c, {
         path: `centers/${enc(c.centerId)}/therapists`,
-        query: {
-          ...(query?.limit !== undefined ? { size: query.limit } : {}),
-          ...(query?.pageToken ? { page: query.pageToken } : {}),
-        },
+        query: { page: paging.page, size: paging.size },
       });
       const staff = asArray(res?.therapists, 'zenoti', 'therapists').map((raw): Staff => {
         const t = asRecord(raw, 'zenoti', 'therapist');
@@ -443,7 +503,8 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           raw: t,
         };
       });
-      return { staff };
+      const next = nextPageIf(staff.length, paging);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async checkConnection() {
@@ -491,7 +552,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         throw new UnibookingError({
           provider: 'zenoti',
           code: 'UNSUPPORTED',
-          message: 'Zenoti only supports rescheduling (pass input.range) via re-book',
+          message: 'Zenoti only supports rescheduling (pass input.range)',
         });
       }
       assertValidRange(input.range, 'zenoti');
@@ -563,7 +624,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       }
       const c = await http.resolve();
       // `start_date` and `end_date` are whole dates, must differ, and `end_date`
-      // is EXCLUSIVE — so a same-day window (09:00 → 17:00) collapses to nothing.
+      // is EXCLUSIVE, so a same-day window (09:00 → 17:00) collapses to nothing.
       // Ask for every date the window touches, plus one, then trim below.
       const startDate = query.range.start.slice(0, 10);
       const lastDate = lastDateTouched(query.range);
@@ -613,7 +674,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
         });
       }
       const durationMinutes = query.durationMinutes;
-      // A booking — and therefore its slot list — is scoped to one date. Fanning
+      // A booking, and therefore its slot list, is scoped to one date. Fanning
       // out over a range would create one throwaway booking per day upstream, so
       // reject a multi-day window rather than silently answering for day one.
       const date = query.range.start.slice(0, 10);
@@ -624,7 +685,7 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
           message: `Zenoti availability covers a single center-local date; ${date} and ${lastDateTouched(query.range)} span more than one`,
         });
       }
-      // Zenoti has no stateless availability endpoint — create a transient booking
+      // Zenoti has no stateless availability endpoint: create a transient booking
       // and read its slots. The booking is unconfirmed and Zenoti expires it.
       const booking = await http.request(c, {
         method: 'POST',
@@ -643,12 +704,12 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
               ],
             },
           ],
-          // Same escape hatch createBooking honors — availability must be
+          // Same escape hatch createBooking honors: availability must be
           // requested under the same provider-specific fields it will be booked with.
           ...bookingExtras(query.providerOptions),
         },
       });
-      // Create-booking responds `{"id": "15b0cc65-…", "error": null}` — a top-level `id`.
+      // Create-booking responds `{"id": "15b0cc65-…", "error": null}`: a top-level `id`.
       const bookingId = reqString(String(booking?.id ?? ''), 'zenoti', 'booking.id');
       const slotsRes = await http.request(c, { path: `bookings/${enc(bookingId)}/slots` });
       const slots = asArray(slotsRes?.slots, 'zenoti', 'booking.slots');
@@ -676,6 +737,105 @@ export const zenoti = defineAdapter<ZenotiCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateGuest(http, c, customer);
+      },
+
+      // Guests of the configured center, 1-based pages of <= 100. An email
+      // filter uses guests/search (server-side); phone filters each page.
+      list: async (query) => {
+        const c = await http.resolve();
+        const page = query?.pageToken ? Number(query.pageToken) : 1;
+        if (!Number.isInteger(page) || page < 1) {
+          throw new UnibookingError({
+            provider: 'zenoti',
+            code: 'INVALID_INPUT',
+            message: 'pageToken must be a page number from a previous list',
+          });
+        }
+        const size = Math.min(query?.limit ?? 100, 100);
+        const res = query?.email
+          ? await http.request(c, {
+              path: 'guests/search',
+              query: { center_id: c.centerId, email: query.email, page, size },
+            })
+          : await http.request(c, {
+              path: 'guests',
+              query: { center_id: c.centerId, page, size },
+            });
+        const raw = asArray(res?.guests ?? [], 'zenoti', 'guests');
+        let customers = raw.map(toCustomerRecord);
+        if (query?.phone) customers = customers.filter((x) => x.phone === query.phone);
+        // page_info is not documented field-by-field; a full page means there
+        // may be another.
+        return {
+          customers,
+          ...(raw.length === size ? { nextPageToken: String(page + 1) } : {}),
+        };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        return toCustomerRecord(await http.request(c, { path: `guests/${enc(id)}` }));
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'zenoti',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        // Always a new guest (no search first), in findOrCreate's body shape.
+        const [firstName, ...rest] = (input.name?.trim() || 'Guest').split(/\s+/);
+        const countryCode = input.providerOptions?.countryCode;
+        const created = await http.request(c, {
+          method: 'POST',
+          path: 'guests',
+          body: {
+            center_id: c.centerId,
+            personal_info: {
+              first_name: firstName ?? 'Guest',
+              last_name: rest.join(' ') || 'Guest',
+              ...(input.email ? { email: input.email } : {}),
+              ...(input.phone
+                ? {
+                    mobile_phone: {
+                      number: input.phone,
+                      ...(countryCode !== undefined ? { country_code: countryCode } : {}),
+                    },
+                  }
+                : {}),
+            },
+          },
+        });
+        // The create response is flat with the new id; read the full guest.
+        const id = reqString(String(created?.id ?? ''), 'zenoti', 'guest.id');
+        return toCustomerRecord(await http.request(c, { path: `guests/${enc(id)}` }));
+      },
+
+      // PUT replaces the whole guest ("send all the fields obtained from
+      // Retrieve guest details"), so read it and change only personal_info.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = `guests/${enc(id)}`;
+        const current = asRecord(await http.request(c, { path }), 'zenoti', 'guest');
+        const info = { ...(current.personal_info ?? {}) };
+        if (input.name?.trim()) {
+          const [first, ...rest] = input.name.trim().split(/\s+/);
+          info.first_name = first;
+          info.last_name = rest.join(' ') || info.last_name || 'Guest';
+        }
+        if (input.email !== undefined) info.email = input.email;
+        if (input.phone !== undefined) {
+          info.mobile_phone = { ...(info.mobile_phone ?? {}), number: input.phone };
+        }
+        const res = await http.request(c, {
+          method: 'PUT',
+          path,
+          body: { ...current, personal_info: info, ...input.providerOptions },
+        });
+        return toCustomerRecord(res?.id ? res : { ...current, personal_info: info });
       },
     },
   }),

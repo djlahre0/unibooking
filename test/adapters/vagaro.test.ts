@@ -80,7 +80,7 @@ runConformance({
 
 // ---------------------------------------------------------------------------
 // Wire format. The conformance harness matches on path + method only, so the
-// auth header and request body — the two things that were actually wrong — need
+// auth header and request body, the two things that were actually wrong, need
 // explicit assertions.
 // ---------------------------------------------------------------------------
 describe('vagaro wire format', () => {
@@ -136,7 +136,7 @@ describe('vagaro wire format', () => {
 
     await makeClient().getBooking('ap==');
 
-    // No `merchants/` segment — that prefix only applies to token/employee routes.
+    // No `merchants/` segment, that prefix only applies to token/employee routes.
     expect(seen.path).not.toContain('/merchants/');
     expect(JSON.parse(seen.body)).toEqual({ businessId: 'biz1', appointmentId: 'ap==' });
   });
@@ -169,7 +169,7 @@ describe('vagaro wire format', () => {
 
     const body = JSON.parse(seen.body);
     expect(Array.isArray(body)).toBe(true);
-    // Writes are business-local with no offset — the caller's -07:00 wall clock,
+    // Writes are business-local with no offset: the caller's -07:00 wall clock,
     // not the UTC instant, which would shift the booking by 7 hours.
     expect(body[0].startTime).toBe('2026-07-20T09:00:00');
     expect(body[0].businessId).toBe('biz1');
@@ -199,7 +199,7 @@ describe('vagaro wire format', () => {
     expect(JSON.parse(seen.body).businessId).toBe('biz1');
   });
 
-  it('rejects listBookings without a customerId — Vagaro has no date-range list', async () => {
+  it('rejects listBookings without a customerId: Vagaro has no date-range list', async () => {
     const err = await makeClient()
       .listBookings({ range: RANGE })
       .then(() => null)
@@ -274,7 +274,7 @@ describe('vagaro wire format', () => {
         { headers: JSON_HEADERS },
       );
 
-    // POST /appointments takes no date window — it returns the whole history.
+    // POST /appointments takes no date window: it returns the whole history.
     const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
 
     expect(page.bookings.map((b) => b.id)).toEqual(['ap==']);
@@ -288,7 +288,7 @@ describe('vagaro wire format', () => {
 
     const page = await makeClient().listBookings({ range: RANGE, customerId: 'cust1' });
 
-    // `rows.length >= rows.length` is always true — a caller looping to
+    // `rows.length >= rows.length` is always true: a caller looping to
     // exhaustion never terminated.
     expect(page.nextPageToken).toBeUndefined();
   });

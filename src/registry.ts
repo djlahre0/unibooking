@@ -2,8 +2,8 @@ import type { AdapterFactory, ProviderId } from './types';
 
 /**
  * A lookup of adapters by provider id, for dynamic dispatch (e.g. a SaaS that
- * picks an adapter per connected account). Registration is explicit — you pass
- * in the adapters you imported — so there are no import side effects and the
+ * picks an adapter per connected account). Registration is explicit: you pass
+ * in the adapters you imported, so there are no import side effects and the
  * package stays fully tree-shakeable.
  */
 export interface AdapterRegistry {

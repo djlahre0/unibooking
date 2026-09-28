@@ -69,7 +69,7 @@ const PROBES: Probe[] = [
     origin: 'https://connect.squareup.com',
     path: '/v2/locations',
     method: 'GET',
-    // Two locations, and the credentials name the second — the probe must
+    // Two locations, and the credentials name the second: the probe must
     // report the bound one, not simply the first.
     ok: {
       locations: [

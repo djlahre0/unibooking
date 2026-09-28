@@ -105,7 +105,7 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       .intercept({ path: (p) => pathname(p) === '/v2/bookings/bk_1', method: 'PUT' })
       .reply(200, reply({ booking: BOOKING_MOVED }), { headers: JSON_HEADERS });
 
-    // listBookings / listAll / collectAll — two pages driven by the cursor.
+    // listBookings / listAll / collectAll: two pages driven by the cursor.
     pool
       .intercept({ path: (p) => pathname(p) === '/v2/bookings', method: 'GET' })
       .reply(
@@ -143,10 +143,12 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       timeoutMs: 10_000,
     });
 
-    // capabilities — every one true for Square, including enumeration.
-    // `services`/`staff` and `serviceCatalog`/`staffDirectory` are separate
-    // questions: the first pair says a booking can reference them, the second
-    // that they can be listed. Square happens to support both.
+    // capabilities, every appointment-side one is true for Square, including
+    // enumeration. `services`/`staff` and `serviceCatalog`/`staffDirectory` are
+    // separate questions: the first pair says a booking can reference them, the
+    // second that they can be listed. Square happens to support both. The
+    // class flags are false because Square Bookings has no group-class concept
+    // at all, only one-to-one appointments.
     expect(client.capabilities).toEqual({
       availability: true,
       staff: true,
@@ -154,10 +156,28 @@ describe('README quick-start walkthrough (mocked Square)', () => {
       webhooks: true,
       idempotency: true,
       customers: true,
+      customerDirectory: true,
+      customerWrite: true,
+      customerDelete: true,
       serviceCatalog: true,
       staffDirectory: true,
       serviceCatalogWrite: true,
       staffDirectoryWrite: true,
+      staffDeactivate: true,
+      staffDelete: false,
+      serviceDelete: true,
+      calendarList: false,
+      calendarWrite: false,
+      staffServiceAssignment: true,
+      staffServiceAssignmentWrite: true,
+      serviceCategories: true,
+      businessHours: true,
+      classCatalog: false,
+      classEnrollment: false,
+      classWaitlist: false,
+      changeFeed: false,
+      changeNotifications: false,
+      versionedWrites: false,
     });
 
     const serviceId = 'SERVICE_VARIATION_ID';
@@ -182,11 +202,11 @@ describe('README quick-start walkthrough (mocked Square)', () => {
 
     // 3. createBooking
     // Square pins the catalog version on every booking, and the slot you are
-    // booking already carries it — so read it straight back off `slot.raw`
+    // booking already carries it, so read it straight back off `slot.raw`
     // rather than making a separate catalog call.
     const segment = (slot.raw as any).appointment_segments[0];
     const booking = await client.createBooking({
-      title: 'Haircut — Jane',
+      title: 'Haircut: Jane',
       range: { start: slot.start, end: slot.end },
       serviceId,
       ...(slot.staffId ? { staffId: slot.staffId } : {}),

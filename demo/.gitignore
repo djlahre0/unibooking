@@ -30,8 +30,17 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files -- the demo needs none of these to run; SESSION_SECRET remains a
+# supported optional override for multi-instance hosting (see README.md).
 .env*
+
+# the generated cookie-sealing key (lib/calendar/secret.ts) -- a real secret,
+# must be git-ignored before anything ever writes to it.
+/.session-secret
+
+# the operator's saved OAuth app client id/secret (lib/calendar/oauth-apps.ts)
+# -- a real secret, must be git-ignored before anything ever writes to it.
+/.oauth-apps.json
 
 # vercel
 .vercel

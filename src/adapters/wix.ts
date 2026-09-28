@@ -1,4 +1,13 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  CreateCustomerInput,
+  Customer,
+  CustomerRecord,
+  Service,
+  Staff,
+} from '../types';
 import {
   asArray,
   asRecord,
@@ -19,13 +28,13 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
  * for customer resolution.
  *
  * Auth: bring your own OAuth access token (Wix app instance / member / user
- * token). It is sent verbatim in the `Authorization` header — no `Bearer`
+ * token). It is sent verbatim in the `Authorization` header, no `Bearer`
  * prefix, which is how Wix expects app tokens.
  *
  * NOTE: the paths and payload shapes here match the published reference. The
- * fields `listBookings` filters on — the `startDate` date window, `status`,
+ * fields `listBookings` filters on: the `startDate` date window, `status`,
  * `contactDetails.contactId`, and the staff/resource path
- * `bookedEntity.item.slot.resource.id` — are exactly the ones Wix documents as
+ * `bookedEntity.item.slot.resource.id`: are exactly the ones Wix documents as
  * filterable in "Extended Bookings: Supported Filters and Sorting".
  */
 export type WixCredentials = {
@@ -90,7 +99,7 @@ function requireService(serviceId: string | undefined): string {
       provider: 'wix',
       code: 'INVALID_INPUT',
       message:
-        'Wix availability (Time Slots V2) requires a serviceId — it is mandatory except when paging by cursor',
+        'Wix availability (Time Slots V2) requires a serviceId: it is mandatory except when paging by cursor',
     });
   }
   return serviceId;
@@ -109,7 +118,7 @@ function requireRevision(revision: unknown, id: string): string | number {
   return revision as string | number;
 }
 
-/** The bookable slot lives under `bookedEntity.slot` (single session) — Wix also
+/** The bookable slot lives under `bookedEntity.slot` (single session): Wix also
  *  supports `bookedEntity.schedule` for classes, which we surface via `raw`. */
 function slotOf(b: Record<string, any>): Record<string, any> | undefined {
   const entity = b.bookedEntity;
@@ -181,11 +190,49 @@ function splitName(name: string): { firstName: string; lastName?: string } {
   return { firstName: first ?? name, ...(rest.length ? { lastName: rest.join(' ') } : {}) };
 }
 
-/** CRM Contacts v4 `info.name` shape ({ first, last }) — distinct from the
+/** CRM Contacts v4 `info.name` shape ({ first, last }): distinct from the
  *  booking `contactDetails` shape ({ firstName, lastName }). */
 function contactName(name: string): { first: string; last?: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
   return { first: first ?? name, ...(rest.length ? { last: rest.join(' ') } : {}) };
+}
+
+/** A Wix CRM contact -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'wix', 'contact');
+  const info = r.info ?? {};
+  const name = [info.name?.first, info.name?.last]
+    .filter((x: unknown) => typeof x === 'string' && x)
+    .join(' ');
+  const email = r.primaryInfo?.email ?? info.emails?.items?.[0]?.email;
+  const phone = r.primaryInfo?.phone ?? info.phones?.items?.[0]?.phone;
+  return {
+    id: reqString(String(r.id ?? ''), 'wix', 'contact.id'),
+    ...(name ? { name } : {}),
+    ...(typeof email === 'string' && email ? { email } : {}),
+    ...(typeof phone === 'string' && phone ? { phone } : {}),
+    ...(typeof r.createdDate === 'string' ? { createdAt: r.createdDate } : {}),
+    ...(typeof r.updatedDate === 'string' ? { updatedAt: r.updatedDate } : {}),
+    raw: r,
+  };
+}
+
+/** Canonical client fields -> Contacts v4 `info`. Update replaces `info`
+ *  wholesale, so callers merge onto the contact's current `info` first. */
+function contactInfo(
+  input: Pick<CreateCustomerInput, 'name' | 'email' | 'phone'>,
+  current: Record<string, any> = {},
+): Record<string, unknown> {
+  return {
+    ...current,
+    ...(input.name !== undefined ? { name: contactName(input.name) } : {}),
+    ...(input.email !== undefined
+      ? { emails: { items: input.email ? [{ email: input.email, primary: true }] : [] } }
+      : {}),
+    ...(input.phone !== undefined
+      ? { phones: { items: input.phone ? [{ phone: input.phone, primary: true }] : [] } }
+      : {}),
+  };
 }
 
 /** Resolve a canonical customer to a Wix CRM contact id, creating one if needed. */
@@ -206,7 +253,7 @@ async function findOrCreateContact(
     if (found?.id) return String(found.id);
   }
   const info = {
-    // CRM Contacts v4 `info.name` is { first, last } — NOT { firstName, lastName }
+    // CRM Contacts v4 `info.name` is { first, last }, NOT { firstName, lastName }
     // (that shape is right for booking.contactDetails, but wrong here, so the
     // contact's name was being silently dropped).
     ...(customer.name ? { name: contactName(customer.name) } : {}),
@@ -221,7 +268,7 @@ async function findOrCreateContact(
   return reqString(String(created?.contact?.id ?? ''), 'wix', 'contact.id');
 }
 
-/** Reader V2 has NO GET-by-id — you query `extended-bookings` with a filter. Each
+/** Reader V2 has NO GET-by-id: you query `extended-bookings` with a filter. Each
  *  result is an ExtendedBooking wrapper whose `.booking` holds the real booking.
  *  Returns the raw booking objects plus the next cursor. */
 async function queryExtendedBookings(
@@ -277,10 +324,28 @@ export const wix = defineAdapter<WixCredentials>({
     webhooks: true,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: true,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: c.accessToken } }),
@@ -290,7 +355,7 @@ export const wix = defineAdapter<WixCredentials>({
       const c = await http.resolve();
       const res = await http.request(c, {
         method: 'POST',
-        // Note v1, not v2 — the Staff Members API is the documented way in.
+        // Note v1, not v2: the Staff Members API is the documented way in.
         // Wix auto-manages a resource per staff member and states that
         // staff-linked resources must NOT be driven through Resources V2.
         path: 'bookings/v1/staff-members/query',
@@ -302,7 +367,7 @@ export const wix = defineAdapter<WixCredentials>({
             },
             // The endpoint returns ONLY service providers unless a
             // serviceProvider filter is present. Asking for both keeps
-            // non-providers visible as `active: false` instead of vanishing —
+            // non-providers visible as `active: false` instead of vanishing:
             // past bookings still reference them.
             filter: { serviceProvider: { $in: [true, false] } },
           },
@@ -389,7 +454,7 @@ export const wix = defineAdapter<WixCredentials>({
         contactId = await findOrCreateContact(http, c, input.customer);
       }
       const cust = input.customer;
-      // Wix create requires a participant count — either `totalParticipants` or
+      // Wix create requires a participant count, either `totalParticipants` or
       // `participantsChoices`. Default to 1 unless the caller supplies either.
       const hasParticipants =
         input.providerOptions?.totalParticipants !== undefined ||
@@ -458,7 +523,7 @@ export const wix = defineAdapter<WixCredentials>({
         assertValidRange(input.range, 'wix');
         // `revision` is REQUIRED on reschedule (optimistic concurrency). The slot
         // identifiers have no canonical field, so they come through
-        // providerOptions — echo back the full slot you got from
+        // providerOptions: echo back the full slot you got from
         // `searchAvailability` (its `raw`) rather than assembling one by hand.
         const {
           revision: optRevision,
@@ -512,7 +577,7 @@ export const wix = defineAdapter<WixCredentials>({
     async cancelBooking(id, options) {
       const c = await http.resolve();
       // `revision` is REQUIRED on cancel. `CancelOptions` has no field to carry
-      // one, so it is always read back first — and if it can't be resolved we
+      // one, so it is always read back first, and if it can't be resolved we
       // fail here rather than sending a request Wix is certain to reject.
       // (`updateBooking({ status: 'cancelled' })` accepts one via providerOptions.)
       const revision = requireRevision(await currentRevision(http, c, id), id);
@@ -576,11 +641,11 @@ export const wix = defineAdapter<WixCredentials>({
           provider: 'wix',
           code: 'INVALID_INPUT',
           message:
-            'Wix availability (Time Slots V2) is local-time — pass range.timezone (an IANA zone)',
+            'Wix availability (Time Slots V2) is local-time: pass range.timezone (an IANA zone)',
         });
       }
       const c = await http.resolve();
-      // List Availability Time Slots covers appointment-based services only —
+      // List Availability Time Slots covers appointment-based services only:
       // class and course sessions come from List Event Time Slots instead.
       const res = await http.request(c, {
         method: 'POST',
@@ -594,7 +659,7 @@ export const wix = defineAdapter<WixCredentials>({
           // means the bookable ones.
           bookable: true,
           // `availableResources` comes back empty unless the request asks for
-          // resources — either this staff filter or a caller-supplied
+          // resources, either this staff filter or a caller-supplied
           // `includeResourceTypeIds` (passed through providerOptions below).
           ...(query.staffId ? { resourceTypes: [{ resourceIds: [query.staffId] }] } : {}),
           ...query.providerOptions,
@@ -606,7 +671,7 @@ export const wix = defineAdapter<WixCredentials>({
           ? localToInstant(local, tz, (ms) => formatWithOffset(ms, 0))
           : undefined;
       return slots.flatMap((s: any): AvailabilitySlot[] => {
-        // A TimeSlot carries only localStartDate/localEndDate — there is no
+        // A TimeSlot carries only localStartDate/localEndDate, there is no
         // offset-bearing pair and no duration to derive an end from.
         const start = toInstant(s.localStartDate);
         const end = toInstant(s.localEndDate);
@@ -620,6 +685,88 @@ export const wix = defineAdapter<WixCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateContact(http, c, customer);
+      },
+
+      // Query Contacts pages by offset (<= 1000 per page); the token is the
+      // next offset. Email/phone are Wix filters, so they span every page.
+      list: async (query) => {
+        const c = await http.resolve();
+        const offset = query?.pageToken ? Number(query.pageToken) : 0;
+        if (!Number.isInteger(offset) || offset < 0) {
+          throw new UnibookingError({
+            provider: 'wix',
+            code: 'INVALID_INPUT',
+            message: 'pageToken must be an offset from a previous list',
+          });
+        }
+        const limit = Math.min(query?.limit ?? 100, 1000);
+        const filter = {
+          ...(query?.email ? { 'info.emails.email': query.email } : {}),
+          ...(query?.phone ? { 'info.phones.phone': query.phone } : {}),
+        };
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'contacts/v4/contacts/query',
+          body: {
+            query: {
+              ...(Object.keys(filter).length ? { filter } : {}),
+              paging: { limit, offset },
+            },
+          },
+        });
+        const customers = asArray(res?.contacts ?? [], 'wix', 'contacts').map(toCustomerRecord);
+        const total = Number(res?.pagingMetadata?.total);
+        const next = offset + customers.length;
+        const more = Number.isFinite(total) ? next < total : customers.length === limit;
+        return { customers, ...(more && customers.length ? { nextPageToken: String(next) } : {}) };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        const res = await http.request(c, { path: `contacts/v4/contacts/${enc(id)}` });
+        return toCustomerRecord(res?.contact);
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'wix',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'contacts/v4/contacts',
+          body: { info: contactInfo(input), ...input.providerOptions },
+        });
+        return toCustomerRecord(res?.contact);
+      },
+
+      // Update needs the current `revision` (a stale one is refused with 409)
+      // and replaces `info`, so read the contact and merge onto its info.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = `contacts/v4/contacts/${enc(id)}`;
+        const current = asRecord((await http.request(c, { path }))?.contact, 'wix', 'contact');
+        const res = await http.request(c, {
+          method: 'PATCH',
+          path,
+          body: {
+            revision: current.revision,
+            info: contactInfo(input, current.info ?? {}),
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res?.contact);
+      },
+
+      // Wix refuses (428) a contact that is a site member or has a billing
+      // subscription; that surfaces as the provider's error, not a silent no-op.
+      delete: async (id) => {
+        const c = await http.resolve();
+        await http.request(c, { method: 'DELETE', path: `contacts/v4/contacts/${enc(id)}` });
       },
     },
   }),

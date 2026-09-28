@@ -145,11 +145,11 @@ const WINDOWS_TO_IANA: Record<string, string> = {
   'UTC+13': 'Etc/GMT-13',
 };
 
-/** Windows *display* names — `"(UTC-08:00) Pacific Time (US & Canada)"` — carry
+/** Windows *display* names, `"(UTC-08:00) Pacific Time (US & Canada)"`, carry
  *  their standard offset in the prefix. Microsoft Bookings emits this format
  *  (e.g. getStaffAvailability), and it resolves via neither the id map nor
  *  `Intl`. The prefix is the zone's standard offset, so during DST it can be an
- *  hour off — still far better than the treat-as-UTC fallback (hours off). */
+ *  hour off, still far better than the treat-as-UTC fallback (hours off). */
 function displayNameOffsetMinutes(tz: string): number | null {
   const m = /^\((?:UTC|GMT)(?:([+-])(\d{2}):(\d{2}))?\)/.exec(tz);
   if (!m) return null;

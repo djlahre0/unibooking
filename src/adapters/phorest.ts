@@ -1,4 +1,12 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  Customer,
+  CustomerRecord,
+  Service,
+  Staff,
+} from '../types';
 import {
   asArray,
   asRecord,
@@ -16,7 +24,7 @@ import { assertValidRange, isInstant } from '../time';
 /**
  * Phorest third-party API. HTTP Basic auth; `businessId`/`branchId` scope every
  * path. Appointment responses split time into `appointmentDate` (yyyy-MM-dd) plus
- * `startTime`/`endTime` as UTC LocalTime (HH:mm:ss) — recombined to RFC3339 here.
+ * `startTime`/`endTime` as UTC LocalTime (HH:mm:ss): recombined to RFC3339 here.
  * No webhooks (Phorest recommends polling via updated_from/updated_to).
  */
 export type PhorestCredentials = {
@@ -141,6 +149,25 @@ function parsePhorestError(
   };
 }
 
+/** A 0-based Phorest page number from a canonical pageToken. */
+function pageFrom(pageToken: string | undefined): number {
+  const page = pageToken ? Number(pageToken) : 0;
+  if (!Number.isInteger(page) || page < 0) {
+    throw new UnibookingError({
+      provider: 'phorest',
+      code: 'INVALID_INPUT',
+      message: 'pageToken must be a page number from a previous list',
+    });
+  }
+  return page;
+}
+
+/** The next page's token, from the `page` block every paged model carries. */
+function nextPageOf(res: any, page: number): string | undefined {
+  const totalPages = Number(res?.page?.totalPages);
+  return Number.isFinite(totalPages) && page + 1 < totalPages ? String(page + 1) : undefined;
+}
+
 function splitName(name: string): { firstName: string; lastName: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
   return { firstName: first ?? name, lastName: rest.join(' ') };
@@ -157,7 +184,7 @@ function requireService(serviceId: string | undefined): string {
   return serviceId;
 }
 
-/** `ServiceSchedule.staffId` is required on a booking — without it Phorest 400s,
+/** `ServiceSchedule.staffId` is required on a booking, without it Phorest 400s,
  *  so reject client-side with a message that names the field. */
 function requireStaff(staffId: string | undefined): string {
   if (!staffId) {
@@ -170,16 +197,41 @@ function requireStaff(staffId: string | undefined): string {
   return staffId;
 }
 
-/** Every paged Phorest model is `{ links, _embedded, page }` with `_embedded` a
- *  bare array at the top level. (The one `data`-wrapped body in the spec is
- *  availability, which is mapped separately.) */
+/** Every paged Phorest model is `{ links, _embedded, page }`. The documented
+ *  shape wraps the list by name -- `_embedded: { clients: [...] }` -- so reading
+ *  only a bare array returned nothing (and made findOrCreate create a duplicate
+ *  client every time). Both shapes are accepted: the named list, or a bare
+ *  array. (The one `data`-wrapped body in the spec is availability, which is
+ *  mapped separately.) */
 function embedded(res: any): any[] {
-  return Array.isArray(res?._embedded) ? res._embedded : [];
+  const e = res?._embedded;
+  if (Array.isArray(e)) return e;
+  if (e && typeof e === 'object') {
+    const list = Object.values(e).find(Array.isArray);
+    if (list) return list as any[];
+  }
+  return [];
+}
+
+/** A Phorest ClientResponse -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'phorest', 'client');
+  const name = [r.firstName, r.lastName].filter((x) => typeof x === 'string' && x).join(' ');
+  return {
+    id: reqString(String(r.clientId ?? ''), 'phorest', 'client.clientId'),
+    ...(name ? { name } : {}),
+    ...(typeof r.email === 'string' && r.email ? { email: r.email } : {}),
+    ...(typeof r.mobile === 'string' && r.mobile ? { phone: r.mobile } : {}),
+    ...(typeof r.notes === 'string' && r.notes ? { note: r.notes } : {}),
+    ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+    ...(typeof r.updatedAt === 'string' ? { updatedAt: r.updatedAt } : {}),
+    raw: r,
+  };
 }
 
 /** BookingResponse (`{bookingStatus, clientId, schedules,
  *  clientAppointmentSchedules, bookingId, links}`) carries no top-level
- *  appointment id, and `bookingId` is NOT the appointment's `groupBookingId` —
+ *  appointment id, and `bookingId` is NOT the appointment's `groupBookingId` -
  *  the created appointment's id lives on the nested service schedule. */
 function createdAppointmentId(res: unknown): string {
   const b = asRecord(res, 'phorest', 'booking');
@@ -261,18 +313,42 @@ export const phorest = defineAdapter<PhorestCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Basic ${basicAuth(c.username, c.password)}` } }),
   parseError: parsePhorestError,
   build: (http) => ({
-    async listServices() {
+    // Both catalogs are paged models (`{ _embedded, page }`). Reading page 0
+    // alone at the default size silently cut a real salon's catalog short.
+    async listServices(query) {
       const c = await http.resolve();
-      const res = await http.request(c, { path: branchPath(c, 'service') });
+      const page = pageFrom(query?.pageToken);
+      const res = await http.request(c, {
+        path: branchPath(c, 'service'),
+        query: { page, size: Math.min(query?.limit ?? 100, 100) },
+      });
       const services = embedded(res).map((raw): Service => {
         const s = asRecord(raw, 'phorest', 'service');
         const amount = decimalToMinorUnits(s.price);
@@ -289,12 +365,17 @@ export const phorest = defineAdapter<PhorestCredentials>({
           raw: s,
         };
       });
-      return { services };
+      const next = nextPageOf(res, page);
+      return { services, ...(next ? { nextPageToken: next } : {}) };
     },
 
-    async listStaff() {
+    async listStaff(query) {
       const c = await http.resolve();
-      const res = await http.request(c, { path: branchPath(c, 'staff') });
+      const page = pageFrom(query?.pageToken);
+      const res = await http.request(c, {
+        path: branchPath(c, 'staff'),
+        query: { page, size: Math.min(query?.limit ?? 100, 100) },
+      });
       const staff = embedded(res).map((raw): Staff => {
         const s = asRecord(raw, 'phorest', 'staff');
         const name = [s.firstName, s.lastName].filter(Boolean).join(' ');
@@ -307,7 +388,8 @@ export const phorest = defineAdapter<PhorestCredentials>({
           raw: s,
         };
       });
-      return { staff };
+      const next = nextPageOf(res, page);
+      return { staff, ...(next ? { nextPageToken: next } : {}) };
     },
 
     async checkConnection() {
@@ -359,7 +441,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
           ...input.providerOptions,
         },
       });
-      // BookingResponse is a booking summary, not an appointment — it carries
+      // BookingResponse is a booking summary, not an appointment: it carries
       // none of the fields a canonical Booking needs, so read the new id off the
       // nested service schedule and fetch the appointment itself.
       return getAppointment(http, c, createdAppointmentId(res));
@@ -374,7 +456,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
       const c = await http.resolve();
       const editsFields =
         input.range !== undefined || input.staffId !== undefined || input.serviceId !== undefined;
-      // Status is not a writable field on AppointmentUpdateRequest — Phorest
+      // Status is not a writable field on AppointmentUpdateRequest: Phorest
       // moves an appointment between states through dedicated endpoints. Route
       // them (never silently drop the caller's status).
       if (input.status !== undefined) {
@@ -394,7 +476,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         if (!editsFields) return getAppointment(http, c, id);
       }
       // AppointmentUpdateRequest marks appointmentId, staffId, startTime and
-      // version all required — so a partial patch (e.g. serviceId alone) has to
+      // version all required, so a partial patch (e.g. serviceId alone) has to
       // backfill the others from current state or the request is rejected.
       let version = input.providerOptions?.version;
       let currentStaffId: string | undefined;
@@ -413,7 +495,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         if (typeof current.startTime === 'string') currentStartTime = current.startTime;
       }
       // The update request takes the same date + UTC LocalTime pair the read side
-      // returns — not an instant. Sending appointmentDate is what makes a
+      // returns, not an instant. Sending appointmentDate is what makes a
       // cross-day reschedule possible at all.
       const when = input.range ? splitUtc(input.range.start) : undefined;
       const res = await http.request(c, {
@@ -426,7 +508,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
           appointmentDate: when?.date ?? currentDate,
           startTime: when?.time ?? currentStartTime,
           // Note: when the staff or service changes, Phorest recomputes the
-          // duration from the new staff/service and IGNORES endTime — so the
+          // duration from the new staff/service and IGNORES endTime, so the
           // returned booking may not match the requested range.
           ...(input.range ? { endTime: splitUtc(input.range.end).time } : {}),
           ...(input.serviceId ? { serviceId: input.serviceId } : {}),
@@ -507,7 +589,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         },
       });
       // Availability is the one `data`-wrapped body in the spec: `{ data: [...],
-      // links: [...] }`. Each entry carries only the slot's startTime — the end
+      // links: [...] }`. Each entry carries only the slot's startTime: the end
       // and the staff live one level down, per staff/service schedule, so a
       // single entry fans out to one slot per bookable staff member.
       const body = asRecord(res, 'phorest', 'availability');
@@ -517,7 +599,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
         // Both ends must be canonical instants before they leave the adapter.
         // Phorest deals in branch-local times elsewhere in its API, and an
         // offset-less (or otherwise non-RFC3339) value forwarded verbatim is an
-        // ambiguous instant at best — at worst a start that `Date.parse` reads
+        // ambiguous instant at best, at worst a start that `Date.parse` reads
         // as NaN, which breaks every downstream comparison silently. Skip, as
         // acuity and calendly do for the same reason.
         if (typeof start !== 'string' || !isInstant(start)) continue;
@@ -531,7 +613,7 @@ export const phorest = defineAdapter<PhorestCredentials>({
             'phorest',
             'availability.serviceSchedules',
           )) {
-            // No usable endTime means no derivable end — skip rather than
+            // No usable endTime means no derivable end: skip rather than
             // invent one.
             if (typeof ss?.endTime !== 'string' || !isInstant(ss.endTime)) continue;
             out.push({
@@ -552,6 +634,84 @@ export const phorest = defineAdapter<PhorestCredentials>({
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateClient(http, c, customer);
+      },
+
+      // Page numbers are the token (Phorest pages from 0, size <= 200); the
+      // email/phone filters are Phorest's own, so they apply across pages.
+      list: async (query) => {
+        const c = await http.resolve();
+        const page = pageFrom(query?.pageToken);
+        const res = await http.request(c, {
+          path: businessPath(c, 'client'),
+          query: {
+            page,
+            size: Math.min(query?.limit ?? 100, 200),
+            ...(query?.email ? { email: query.email } : {}),
+            ...(query?.phone ? { phone: query.phone } : {}),
+          },
+        });
+        const customers = embedded(res).map(toCustomerRecord);
+        const next = nextPageOf(res, page);
+        return { customers, ...(next ? { nextPageToken: next } : {}) };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        return toCustomerRecord(
+          await http.request(c, { path: businessPath(c, `client/${enc(id)}`) }),
+        );
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'phorest',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: businessPath(c, 'client'),
+          body: {
+            // Phorest requires both names; a nameless client is "Guest".
+            ...(input.name?.trim()
+              ? splitName(input.name)
+              : { firstName: 'Guest', lastName: 'Guest' }),
+            ...(input.email ? { email: input.email } : {}),
+            ...(input.phone ? { mobile: input.phone } : {}),
+            ...(input.note ? { notes: input.note } : {}),
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res);
+      },
+
+      // firstName/lastName are required on every update and `version` guards
+      // against overwriting a concurrent change, so read the client first and
+      // send the current values for anything the caller left out.
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const path = businessPath(c, `client/${enc(id)}`);
+        const current = asRecord(await http.request(c, { path }), 'phorest', 'client');
+        const names = input.name?.trim()
+          ? splitName(input.name)
+          : { firstName: current.firstName, lastName: current.lastName };
+        const res = await http.request(c, {
+          method: 'PUT',
+          path,
+          body: {
+            clientId: current.clientId,
+            ...(current.version !== undefined ? { version: current.version } : {}),
+            ...names,
+            email: input.email !== undefined ? input.email : current.email,
+            mobile: input.phone !== undefined ? input.phone : current.mobile,
+            notes: input.note !== undefined ? input.note : current.notes,
+            ...input.providerOptions,
+          },
+        });
+        return toCustomerRecord(res);
       },
     },
   }),

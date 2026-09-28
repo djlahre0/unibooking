@@ -23,7 +23,7 @@ export async function runDirect(
     // so it isn't baffling.
     if (result.error?.code === 'NETWORK') {
       result.error.message +=
-        ' — the browser may have blocked this cross-origin request (CORS). If so, this provider must be called from a server.';
+        ': the browser may have blocked this cross-origin request (CORS). If so, this provider must be called from a server.';
     }
     return result;
   }

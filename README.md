@@ -10,7 +10,7 @@ No more provider-specific business logic.
 
 Google Calendar • Outlook • Microsoft Bookings • Square • Calendly • Wix • Acuity • Bookeo • Mindbody • Setmore • Vagaro • Phorest • Zenoti • Boulevard • Apple CalDAV
 
-<sub>MangoMint is scaffolded and planned — see [Supported Providers](#supported-providers).</sub>
+<sub>MangoMint is scaffolded and planned: see [Supported Providers](#supported-providers).</sub>
 
 <br/>
 
@@ -56,6 +56,9 @@ Google Calendar • Outlook • Microsoft Bookings • Square • Calendly • W
   - [Dynamic Provider Selection](#dynamic-provider-selection)
 - [Booking Model](#booking-model)
 - [Time Handling](#time-handling)
+- [Group Classes](#group-classes)
+- [Staff, Services and Categories](#staff-services-and-categories)
+- [Business Hours](#business-hours)
 - [Supported Providers](#supported-providers)
 - [Unified Error Handling](#unified-error-handling)
 - [Webhooks](#webhooks)
@@ -209,6 +212,101 @@ Perfect for OAuth refresh.
 
 ---
 
+## Many Tenants
+
+`unibooking/connections` turns "one tenant, one provider" into "many tenants,
+any provider", without the library storing anything.
+
+You implement one interface against your own database. The library never
+persists a credential, and ships none, every client id, secret and key below
+is yours, supplied from your own environment.
+
+```ts
+import { connectionFor, type ConnectionStore } from "unibooking/connections";
+
+const store: ConnectionStore = {
+  async get(tenantId, provider) { /* your DB: decrypt here */ },
+  async put(tenantId, provider, record) { /* your DB: encrypt here */ },
+  async delete(tenantId, provider) { /* your DB */ },
+};
+
+const client = await connectionFor({
+  tenantId: "acme",
+  provider: "google",
+  store,
+  app: {
+    clientId: process.env.GOOGLE_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI!,
+  },
+});
+
+await client.listBookings({ range });
+```
+
+An expiring token is refreshed and written back through `store.put` **before**
+the request goes out. A failed write aborts the request rather than continuing
+with tokens your database never received, which is how a rotated refresh
+token gets lost permanently.
+
+A fresh client is returned per call. There is deliberately no cross-tenant
+cache: a cache keyed wrong hands one tenant another's credentials.
+
+> **Note**
+> This module is **server-only**: it imports `unibooking/oauth/*`. The
+> credential schema below is at the package root instead, because your connect
+> form needs it in the browser.
+
+### Storing credentials securely
+
+Encryption at rest is yours to implement, deliberately: your platform already
+has a key management story and the library guessing at one would be worse than
+none.
+
+- Encrypt `tokens` and `fields` before they reach disk. Use your platform's
+  KMS, or `node:crypto` AES-256-GCM with a key from your environment.
+- Keep the key out of your repository, and rotate it independently of the data.
+- Never log a record. `isSecretField(provider, key)` says which values must be
+  masked if you log anything at all.
+- The library puts no credential in an error message: errors name the missing
+  *field*, never the value.
+
+### What each provider requires
+
+Read it from the schema rather than this table, so it cannot go stale:
+
+```ts
+import { PROVIDER_CREDENTIALS, requiredCredentials } from "unibooking";
+
+requiredCredentials("square"); // [{ key: "accessToken", … }, { key: "locationId", … }]
+```
+
+| Provider | Required | Optional |
+| --- | --- | --- |
+| `google` | `accessToken` | `calendarId` |
+| `outlook` | `accessToken` | `userId`, `calendarId` |
+| `microsoft_bookings` | `accessToken`, `businessId` | - |
+| `square` | `accessToken`, `locationId` | - |
+| `acuity` | `userId`, `apiKey` | `currency` |
+| `bookeo` | `apiKey`, `secretKey` | - |
+| `booker` | `accessToken`, `subscriptionKey`, `locationId` | `timezone` |
+| `mindbody` | `apiKey`, `siteId`, `accessToken` | `locationId`, `timezone`, `utcOffset` |
+| `wix` | `accessToken` | - |
+| `calendly` | `token` | `user`, `organization`, `defaultTimezone` |
+| `vagaro` | `region`, `businessId`, `accessToken` | - |
+| `zenoti` | `apiKey`, `centerId` | - |
+| `boulevard` | `businessId`, `locationId`, `apiKey`, `apiSecret` | - |
+| `phorest` | `username`, `password`, `businessId`, `branchId` | `currency` |
+| `setmore` | `accessToken` | `currency` |
+| `mangomint` | `apiKey` | - |
+| `apple` | `username`, `appPassword` | `calendarUrl` |
+
+Acuity is the one provider with two alternatives: HTTP Basic (`userId` +
+`apiKey`) **or** an OAuth `accessToken`. `PROVIDER_CREDENTIALS.acuity` holds
+both sets; the table shows the first.
+
+---
+
 ## Unified Booking Model
 
 Every provider maps into one canonical booking object.
@@ -331,7 +429,7 @@ const booking = await client.createBooking({
     staffId: "TM_...",
     serviceId: "SVC_VARIATION_...",
     // Square pins the catalog version on every booking. `searchAvailability`
-    // hands it to you on each slot — see "Create a Booking" below.
+    // hands it to you on each slot: see "Create a Booking" below.
     providerOptions: { service_variation_version: 1621345678900 },
 });
 
@@ -437,7 +535,7 @@ Includes
 # Complete Booking Lifecycle
 
 Every adapter implements the same `BookingClient` interface, so switching
-providers requires changing only the adapter—not your application logic.
+providers requires changing only the adapter, not your application logic.
 
 The typical booking flow looks like this:
 
@@ -522,6 +620,9 @@ Example
     idempotency: true,
     serviceCatalog: false,
     staffDirectory: false,
+    serviceCatalogWrite: false,
+    staffDirectoryWrite: false,
+    calendarList: false,
 }
 ```
 
@@ -541,7 +642,7 @@ Your application knows exactly what the provider supports.
 # Check a Connection
 
 Salons revoke access, tokens get rotated, and OAuth apps get uninstalled. Every
-adapter exposes `checkConnection()` — pass it the credentials you loaded from
+adapter exposes `checkConnection()`: pass it the credentials you loaded from
 your own database and it tells you whether they still work.
 
 ```ts
@@ -556,7 +657,7 @@ if (!status.ok) {
 console.log(status.account); // { id: "LOC1", name: "Manhattan Glow" }
 ```
 
-**It does not throw when the connection is dead** — that is the expected answer
+**It does not throw when the connection is dead**, that is the expected answer
 to the question, so it comes back as `ok: false`.
 
 **It does throw on a transient fault.** A network blip, timeout, rate limit or
@@ -570,13 +671,13 @@ try {
     const status = await client.checkConnection();
     if (!status.ok) await promptReconnect(salonId);
 } catch (err) {
-    // Transient — leave the integration connected and retry later.
+    // Transient: leave the integration connected and retry later.
     logger.warn({ err }, "connection check failed, will retry");
 }
 ```
 
 `checkConnection()` is present on **every** adapter, with no capability flag to
-consult first — a health check you must ask permission to run is not a health
+consult first: a health check you must ask permission to run is not a health
 check. (The one exception is the MangoMint stub, which has no API to probe and
 throws `UNSUPPORTED` like its other methods.)
 
@@ -588,8 +689,8 @@ throws `UNSUPPORTED` like its other methods.)
 > `unibooking/oauth` into browser code. No adapter imports it, so bundling an
 > adapter can't pull it in by accident.
 
-unibooking **never stores a token**. The OAuth helpers are pure functions —
-data in, tokens out — and you persist the result.
+unibooking **never stores a token**. The OAuth helpers are pure functions:
+data in, tokens out, and you persist the result.
 
 ```ts
 import { googleOAuth } from "unibooking/oauth/google";
@@ -600,7 +701,7 @@ const oauth = googleOAuth({
     redirectUri: "https://app.example.com/google/callback",
 });
 
-// 1. Send the salon owner here. Store `state` and compare it on callback —
+// 1. Send the salon owner here. Store `state` and compare it on callback:
 //    we can't verify it for you without keeping state.
 const { url, state } = await oauth.authorizationUrl();
 await db.saveOAuthState(salonId, state);
@@ -636,7 +737,7 @@ await client.listBookings({ range });
 ```
 
 `onRefresh` runs **before** the credentials are handed out. If your database
-write throws, the request does not proceed — continuing as though the token were
+write throws, the request does not proceed: continuing as though the token were
 saved is how a rotated refresh token gets lost permanently.
 
 ## Provider support
@@ -646,17 +747,17 @@ don't use OAuth2 at all.
 
 | Provider | Module | Notes |
 |----------|--------|-------|
-| Google | `unibooking/oauth/google` | Forces `access_type=offline` + `prompt=consent` — without both, Google issues **no refresh token** |
+| Google | `unibooking/oauth/google` | Forces `access_type=offline` + `prompt=consent`, without both, Google issues **no refresh token** |
 | Outlook | `unibooking/oauth/microsoft` | `outlookOAuth`; forces `offline_access` |
 | Microsoft Bookings | `unibooking/oauth/microsoft` | `microsoftBookingsOAuth` |
 | Square | `unibooking/oauth/square` | Returns `expires_at` as a string, not `expires_in`; `merchant_id` is in `raw` |
 | Acuity | `unibooking/oauth/acuity` | Token endpoint is form-encoded and rejects JSON |
 | Calendly | `unibooking/oauth/calendly` | Codes expire in 10 minutes; PKCE recommended |
-| Setmore | `unibooking/oauth/setmore` | **`refresh` only** — no authorization-code flow exists. The owner pastes a long-lived refresh token |
-| Wix | `unibooking/oauth/wix` | **No `authorizationUrl`** — the grant keys on an `instanceId` from app installation |
+| Setmore | `unibooking/oauth/setmore` | **`refresh` only**, no authorization-code flow exists. The owner pastes a long-lived refresh token |
+| Wix | `unibooking/oauth/wix` | **No `authorizationUrl`**: the grant keys on an `instanceId` from app installation |
 
 **Apple/CalDAV, Bookeo, Boulevard, Mindbody, Phorest and Zenoti have no module**
-— they authenticate with app passwords, API keys, HTTP Basic or signed tokens.
+they authenticate with app passwords, API keys, HTTP Basic or signed tokens.
 For those, "connect" is just collecting credentials, and `checkConnection()`
 validates them. **Vagaro is excluded** pending confirmation of its grant type.
 
@@ -677,7 +778,7 @@ const tokens = await oauth.exchangeCode(code, { codeVerifier });
 # List Services and Staff
 
 Import a salon's catalog and team. Gated by `serviceCatalog` and
-`staffDirectory` — which are **not** the same as `services` and `staff` (those
+`staffDirectory`, which are **not** the same as `services` and `staff` (those
 only say a booking can reference them).
 
 ```ts
@@ -693,7 +794,7 @@ if (client.capabilities.staffDirectory) {
 ```
 
 `price` is `{ amount, currency }` in **integer minor units** (`4500` = $45.00),
-and is omitted rather than guessed when the provider gives no currency — Setmore
+and is omitted rather than guessed when the provider gives no currency: Setmore
 returns a bare `cost`, so pass `currency` in its credentials to populate it.
 
 `Service.id` and `Staff.id` are always the values `createBooking` accepts as
@@ -704,8 +805,23 @@ Both results paginate like `listBookings`, so `listAll` works on them.
 
 ## Writing to the catalog
 
-Gated by `serviceCatalogWrite` / `staffDirectoryWrite`. **Square only** — most
-providers' catalogs are read-only to third parties.
+**Square** and **Microsoft Bookings** only. Most providers' catalogs are
+read-only to third parties. Each operation has its own flag, because the two
+providers genuinely differ:
+
+| Operation | Flag | Square | Microsoft Bookings |
+|---|---|---|---|
+| `createService` / `updateService` / `setServiceActive` | `serviceCatalogWrite` | ✅ | ✅ (inactive = hidden from customers) |
+| `deleteService` | `serviceDelete` | ✅ | ✅ |
+| `createStaff` / `updateStaff` | `staffDirectoryWrite` | ✅ | ✅ (email required) |
+| `setStaffActive` | `staffDeactivate` | ✅ | - (Graph has no inactive state) |
+| `deleteStaff` | `staffDelete` | - (Square cannot delete team members) | ✅ |
+| `assignStaffToService` / `unassignStaffFromService` | `staffServiceAssignmentWrite` | ✅ | ✅ |
+| `getService` / `getStaff` | `serviceCatalog` / `staffDirectory` | ✅ | ✅ |
+
+`getService` / `getStaff` exist wherever the list does: providers without a
+by-id endpoint page through the list for you and throw `NOT_FOUND` if it isn't
+there.
 
 ```ts
 const service = await client.createService!({
@@ -716,31 +832,33 @@ const service = await client.createService!({
 });
 
 await client.updateService!(service.id, { price: { amount: 5000, currency: "USD" } });
+await client.getService!(service.id);
 
-// Retire it without destroying it or its booking history.
+// Retire it without destroying it or its booking history...
 await client.setServiceActive!(service.id, false);
+// ...or change details and status in one call (same for updateStaff):
+await client.updateService!(service.id, { name: "Colour & gloss", active: true });
+// ...or remove it outright, where `serviceDelete` is true.
+await client.deleteService!(service.id);
 ```
 
-Updates are **partial** — omitted fields are left alone. On Square that means a
+Updates are **partial**: omitted fields are left alone. On Square that means a
 read-modify-write internally, because its upsert *replaces* the object: anything
 not sent back is genuinely erased.
 
-### There is no `deleteService` or `deleteStaff`
+### Retire or delete
 
-Deliberate, not an oversight. Deletion isn't portable here:
+`setServiceActive(id, false)` / `setStaffActive(id, false)` make something
+unbookable and keep its history, so past bookings stay resolvable. Prefer it
+where it exists. `deleteService` / `deleteStaff` remove the one service or staff
+member named, never its siblings: on Square, where `Service.id` is a variation
+and deleting the parent item cascades, only the variation is deleted, unless it
+is the item's last one.
 
-- Square has **no team-member delete at all** — only `status: INACTIVE`.
-- Square's catalog delete **cascades**: removing an item removes every variation
-  under it, and `Service.id` *is* a variation id.
-
-A canonical `delete` would therefore mean something different, and something
-irreversible, on each provider. `setServiceActive(id, false)` expresses what
-callers actually want — make it unbookable, keep the history, keep past bookings
-resolvable.
 
 > **Scopes.** Square catalog writes need `ITEMS_WRITE` and staff writes need
 > `EMPLOYEES_WRITE`. `unibooking/oauth/square` does **not** request either by
-> default — unused write scopes are a needless escalation. Opt in explicitly:
+> default: unused write scopes are a needless escalation. Opt in explicitly:
 >
 > ```ts
 > import {
@@ -756,6 +874,45 @@ resolvable.
 >
 > Decide this before merchants connect: widening scopes later forces **every
 > already-connected merchant to re-consent**.
+
+---
+
+# List Calendars
+
+A connected Google, Outlook or Apple account usually has more than one
+calendar. Gated by `calendarList`:
+
+```ts
+if (client.capabilities.calendarList) {
+    const { calendars } = await client.listCalendars!();
+    // { id, name, timezone?, primary, readOnly, color?, raw }
+}
+```
+
+`Calendar.id` is exactly what that adapter takes to target the calendar, so it
+round-trips like `Service.id`:
+
+| Provider | Pass `Calendar.id` as |
+|----------|-----------------------|
+| Google   | `calendarId`          |
+| Outlook  | `calendarId`          |
+| Apple    | `calendarUrl`         |
+
+**Apple needs no calendar URL up front.** `listCalendars()` runs CalDAV
+discovery from the server root (iCloud by default, any CalDAV server through
+`options.baseUrl`), so an Apple ID and an
+[app-specific password](https://support.apple.com/en-us/102654) are enough:
+
+```ts
+import { apple } from "unibooking/adapters/apple";
+
+const account = { username: "jane@icloud.com", appPassword: "abcd-efgh-ijkl-mnop" };
+const { calendars } = await apple(account).listCalendars!();
+const home = apple({ ...account, calendarUrl: calendars[0]!.id });
+```
+
+Event operations without a `calendarUrl` fail fast with `INVALID_INPUT` pointing
+at `listCalendars()`.
 
 ---
 
@@ -789,9 +946,9 @@ Two guarantees hold across every provider, regardless of what the upstream API
 returns:
 
 - **Slots are ordered by start**, earliest first, so `slots[0]` is the earliest
-  opening. Providers order their answers however they iterate — Mindbody and
+  opening. Providers order their answers however they iterate: Mindbody and
   Microsoft Bookings return a whole shift per staff member, and the single-date
-  providers return one day after another — so this is normalized for you. Slots
+  providers return one day after another, so this is normalized for you. Slots
   sharing a start keep the provider's own order (usually staff order).
 - **Slots fall inside `range`.** A slot is included when it *starts* at or after
   `range.start` and strictly before `range.end`. Its `end` may run past
@@ -880,6 +1037,39 @@ console.log(booking.status);
 console.log(booking.range.start);
 ```
 
+## Event details and all-day events
+
+Calendar providers (Google, Outlook, Apple) also take a `description`, a
+`location`, and whole-day events. Booking platforms ignore these fields, the
+same way they ignore `notify`.
+
+```ts
+import { zonedToInstant } from "unibooking";
+
+await calendar.createBooking({
+    title: "Quarterly planning",
+    range: {
+        start: zonedToInstant("2026-09-21T10:00", "Asia/Kolkata"),
+        end: zonedToInstant("2026-09-21T11:30", "Asia/Kolkata"),
+        timezone: "Asia/Kolkata", // Google and Outlook show the event in this zone
+    },
+    description: "Agenda: roadmap, hiring",
+    location: "Room 4",
+});
+
+// All day on 21 and 22 Sep: the dates as written, end exclusive.
+await calendar.createBooking({
+    title: "Offsite",
+    range: { start: "2026-09-21T00:00:00+05:30", end: "2026-09-23T00:00:00+05:30" },
+    allDay: true,
+});
+```
+
+An all-day booking reads back with `allDay: true` and a range of UTC midnights
+(`2026-09-21T00:00:00Z` … `2026-09-23T00:00:00Z`). On update, an empty string
+clears `description` or `location`, and switching between timed and all-day
+requires a `range`.
+
 ---
 
 # Read a Booking
@@ -951,7 +1141,7 @@ page.nextPageToken
 ```
 
 `status` filters on the **canonical** status, so it means the same thing on every
-provider even though almost none of them expose a matching filter — adapters
+provider even though almost none of them expose a matching filter: adapters
 forward whatever their API supports and the rest is applied to the mapped result.
 Because the filter runs per page, a page can come back with fewer bookings than
 `limit` (or empty) while still carrying a `nextPageToken`; that is normal, and
@@ -1119,46 +1309,287 @@ Europe/London
 Asia/Kolkata
 ```
 
+## From a date, time and timezone
+
+Forms and calendars think in "10:00 on 21 Sep in Asia/Kolkata". Two helpers
+convert between that and canonical instants, using the platform's own time-zone
+database, no date library:
+
+```ts
+import { zonedToInstant, instantToZoned } from "unibooking";
+
+zonedToInstant("2026-09-21T10:00", "Asia/Kolkata");
+// → "2026-09-21T10:00:00+05:30"
+
+instantToZoned("2026-09-21T04:30:00Z", "America/Los_Angeles");
+// → { date: "2026-09-20", time: "21:30" }
+```
+
+A time that falls in a daylight-saving gap resolves forward (02:30 on a
+spring-forward day becomes 03:30), a time that happens twice resolves to the
+earlier one, and an unknown zone throws a `RangeError` instead of silently
+falling back to UTC.
+
+---
+
+# Group Classes
+
+A class is a scheduled occurrence with finite capacity that many customers
+enroll into: a 6pm yoga session, not a one-to-one appointment. Providers model
+it in two parts, and so does unibooking: the **definition** is an ordinary
+`Service`, and the **occurrence** is a `ClassSession`.
+
+Available where `capabilities.classCatalog` is true (**Mindbody**, **Acuity**).
+Plain calendars have events, which carry no capacity or enrollment, so they
+report `false` and omit the methods entirely.
+
+```ts
+const client = mindbody({ apiKey, siteId, accessToken, timezone: 'America/Los_Angeles' });
+
+const { classes } = await client.listClasses!({
+  range: { start: '2026-06-11T00:00:00Z', end: '2026-06-18T00:00:00Z' },
+});
+
+for (const k of classes) {
+  console.log(k.title, k.range.start, `${k.booked}/${k.capacity}`, k.full ? 'FULL' : '');
+}
+```
+
+## Enrolling
+
+`enrollInClass` returns an ordinary `Booking` carrying `classId`. That is the
+whole integration: cancelling an enrollment is `cancelBooking`, and enrollments
+appear in `listBookings` beside appointments. There is no separate enrollment
+lifecycle to keep in sync.
+
+```ts
+const booking = await client.enrollInClass!({
+  classId: classes[0]!.id,
+  customer: { id: 'client-1', name: 'Dana Lee' },
+});
+
+await client.cancelBooking(booking.id); // same call as any other booking
+```
+
+## Full classes and waitlists
+
+A full class throws `CONFLICT` **before** the write, rather than letting the
+provider reject it with a message only that provider understands:
+
+```ts
+try {
+  await client.enrollInClass!({ classId, customer });
+} catch (err) {
+  if (err instanceof UnibookingError && err.code === 'CONFLICT') {
+    // full, cancelled, or already over
+  }
+}
+```
+
+Pass `allowWaitlist: true` to join the waitlist instead. This requires
+`capabilities.classWaitlist`, Mindbody has one, Acuity does not, and yields a
+booking with `status: 'waitlisted'`:
+
+```ts
+const booking = await client.enrollInClass!({ classId, customer, allowWaitlist: true });
+if (booking.status === 'waitlisted') { /* not enrolled yet */ }
+```
+
+Where the provider has no waitlist, `allowWaitlist` cannot rescue a full class:
+it still throws `CONFLICT`, with a message saying why.
+
+## Reading capacity
+
+`full` is authoritative and is **not** derived from `available`. Several
+providers can report that a class is closed to booking while spots remain
+(cancelled, already started, staff-only), so trust `full` for the yes/no and
+treat `capacity`/`booked`/`available` as display numbers that may be absent.
+
+| Field | Meaning |
+|---|---|
+| `capacity` | Total spots, when the provider caps and reports it |
+| `booked` | Spots taken |
+| `available` | `capacity - booked`, floored at 0 |
+| `full` | Whether enrollment is possible: the one to branch on |
+| `waitlistCapacity` / `waitlistCount` | Waitlist size and usage, where supported |
+
+## Class ids
+
+`ClassSession.id` is whatever that provider's enroll path accepts, exactly as
+`Service.id` is. It is opaque: pass it back verbatim and do not parse it.
+Acuity has no per-occurrence id, so its ids encode appointment type and start
+time; Mindbody enrollment ids encode the class and client, because its removal
+endpoint needs both.
+
+---
+
+# Staff, Services and Categories
+
+## Client records
+
+Where `customerDirectory` is true, a provider's existing clients can be read,
+which is what importing and linking them on your side needs.
+
+| | list / get | create / update | delete |
+|---|---|---|---|
+| Square | ✅ | ✅ | ✅ |
+| Microsoft Bookings | ✅ | ✅ | ✅ |
+| Wix | ✅ | ✅ | ✅ (not site members or subscribers) |
+| Phorest | ✅ | ✅ | - (Phorest only archives) |
+| Zenoti | ✅ | ✅ | - (no API) |
+| Boulevard | ✅ | - | - |
+| Setmore | - (lookup needs a first name; no list) | | | `CustomerRecord.id` is the provider's stable id: store
+it to link a record in your system to the provider's.
+
+```ts
+const page = await client.customers!.list!({ limit: 100 }); // pages like listBookings
+const byEmail = await client.customers!.list!({ email: "ana@example.com" });
+const ana = await client.customers!.get!(page.customers[0].id);
+
+// customerWrite / customerDelete
+const created = await client.customers!.create!({ name: "Ana Silva", email: "ana@example.com" });
+await client.customers!.update!(created.id, { phone: "+15550100" });
+await client.customers!.delete!(created.id);
+```
+
+`create` always creates; use `customers.findOrCreate` to reuse a match instead.
+The email/phone filters are exact: Square searches server-side, Microsoft
+Bookings filters each page after reading it.
+
+Calendars have a matching by-id read: `client.getCalendar!(id)` wherever
+`calendarList` is true. Where `calendarWrite` is true (**Google**, **Outlook**,
+**Apple**), the calendars themselves can be made, renamed and removed:
+
+```ts
+const cal = await client.createCalendar!({ name: "Salon", timezone: "Europe/Dublin", color: "#0F5C4A" });
+await client.updateCalendar!(cal.id, { name: "Salon: Front desk" });
+await client.deleteCalendar!(cal.id); // removes every event in it too
+```
+
+The primary (Google) / default (Outlook) calendar can't be deleted. On Apple a
+calendar id must be a calendar inside the account's own calendar home; any
+other URL is refused before a request (and the credentials) are sent.
+
+## Who performs what
+
+Where `capabilities.staffServiceAssignment` is true (**Square**, **Acuity**,
+**Booker**, **Microsoft Bookings**),
+services and staff carry each other's ids, so you never have to guess which
+member can perform which service:
+
+```ts
+const { services } = await client.listServices!();
+services[0]!.staffIds; // ['tm_1', 'tm_2'] -- these are Staff.id values
+```
+
+Both list queries take the matching filter:
+
+```ts
+await client.listServices!({ staffId: 'tm_1' });   // what can Ana do?
+await client.listStaff!({ serviceId: 'var_2' });   // who can do a colour?
+```
+
+`staffIds` distinguishes **"nobody"** from **"the provider did not say"**: an
+empty array means no one is assigned, `undefined` means the field was absent.
+
+Where `staffServiceAssignmentWrite` is also true (**Square**, **Microsoft
+Bookings**), the link can be changed. Both calls are idempotent: assigning
+someone already assigned, or unassigning someone who isn't, is not an error:
+and return the service with its updated `staffIds`:
+
+```ts
+await client.assignStaffToService!('var_2', 'tm_1');   // Ana can now do colour
+await client.unassignStaffFromService!('var_2', 'tm_1');
+```
+
+On Square a team member must have a bookable profile (Appointments → Staff) to
+be offered in availability, even once assigned.
+Do not collapse the two: booking against a service with `staffIds: []` will
+fail, while `undefined` says nothing either way.
+
+## Categories
+
+`listCategories()` returns the catalog's own groupings, and every
+`ServiceCategory.id` joins straight onto `Service.categoryId`:
+
+```ts
+const { categories } = await client.listCategories!();
+const hair = categories.find((c) => c.name === 'Hair')!;
+const { services } = await client.listServices!({ categoryId: hair.id });
+```
+
+Providers differ in what a category *is*. Square has real catalog objects with
+their own ids. Acuity has only a name string on each appointment type, so the
+name **is** the id, which is exactly why `Service.categoryId` is set to that
+same string on Acuity. The join works either way, and that is the point.
+
+---
+
+# Business Hours
+
+`getBusinessHours()` returns the recurring **weekly** opening pattern, where
+`capabilities.businessHours` is true (**Square**):
+
+```ts
+const hours = await client.getBusinessHours!();
+hours.timezone; // 'America/Los_Angeles'
+hours.periods;  // [{ dayOfWeek: 'MON', start: '09:00', end: '17:30' }, ...]
+```
+
+These are **not instants**. `"09:00 on MON"` repeats every week and only becomes
+a moment once anchored to a date in `timezone`: use `zonedToInstant` for that.
+Without a `timezone` the periods cannot be anchored at all, so treat them as
+display-only.
+
+Periods are sorted Monday-first then by start time. A closed day simply has no
+period; two periods on one day are a split shift. A period the provider returns
+malformed is dropped rather than emitted as a window nobody can place: the
+original is still in `raw`.
+
+Opening hours are not availability. They say when the business is open;
+`searchAvailability` says whether a specific slot can actually be booked.
+
 ---
 
 # Supported Providers
 
 unibooking currently supports the following providers.
 
-| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW |
-|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|
-| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
-| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | — | — | — | ✅ | — | — | — | — |
-| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
-| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — |
-| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| [Setmore](https://developers.setmore.com/) | — | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — | — | — | — |
-| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — |
-| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
+| Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars | Classes | Assign | Categories | Hours | Sync | Push | Versions |
+|-----------|:---:|:------:|:------:|:------:|:------------:|:---------:|:-----:|:--------:|:---------:|:-------:|:---------:|:----------:|:------------:|:---------:|:-------:|:------:|:----------:|:-----:|:----:|:----:|:--------:|
+| [Google Calendar](https://developers.google.com/workspace/calendar/api/guides/overview) | ✅ | ✅ | ✅ | ✅ | ⚠️ | - | - | - | ✅ | - | - | - | - | ✅ | - | - | - | - | ✅ | ✅ | ✅ |
+| [Outlook / Microsoft 365](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | - | - | - | ✅ | - | - | - | - | ✅ | - | - | - | - | ⚠️ | ✅ | ✅ |
+| [Microsoft Bookings](https://learn.microsoft.com/en-us/graph/api/resources/booking-api-overview?view=graph-rest-1.0) | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ | ✅ | - | - | ✅ | - | - | - | - | - |
+| [Square](https://developer.squareup.com/reference/square/bookings-api) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | - | - | ✅ | ✅ | ✅ | - | - | - |
+| [Calendly](https://developer.calendly.com/api-docs) | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | - | - | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - | - |
+| [Wix Bookings](https://dev.wix.com/docs/rest/business-solutions/bookings/bookings/about-the-bookings-apis) | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - |
+| [Acuity](https://developers.acuityscheduling.com/reference/quick-start) | ✅ | ✅ | ⚠️ | ✅ | ✅ | - | ✅ | ✅ | ✅ | ✅ | ✅ | - | - | - | ✅ | ✅ | ✅ | - | - | - | - |
+| [Bookeo](https://www.bookeo.com/api/) | ✅ | ✅ | ⚠️ | ✅ | ✅ | - | - | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - | - |
+| [Booker](https://developers.mindbodyonline.com/ui/documentation/booker-api) | ✅ | ✅ | - | ✅ | - | - | ✅ | ✅ | - | ✅ | ✅ | - | - | - | ✅ | ✅ | ✅ | ✅ | - | - | - |
+| [Mindbody](https://api.mindbodyonline.com/public/v6/swagger/index) | ✅ | ✅ | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ | ✅ | ✅ | - | - | - | ✅ | - | - | - | - | - | - |
+| [Setmore](https://developers.setmore.com/) | - | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | - | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - |
+| [Vagaro](https://docs.vagaro.com/public/reference/api-introduction) | ✅ | ✅ | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - | - | - |
+| [Phorest](https://developer.phorest.com/docs/getting-started) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | - | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - |
+| [Zenoti](https://docs.zenoti.com/reference) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | - | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - |
+| [Apple CalDAV](https://www.rfc-editor.org/rfc/rfc4791.html) | ✅ | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | ✅ | - | - | - | - | ⚠️ | - | ✅ |
+| [Boulevard](https://developers.joinblvd.com/2020-01/admin-api/overview) | ✅ | ✅ | ⚠️ | ✅ | - | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | - | - | - | - | - | - | - | - | - | - |
+| MangoMint | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned | 🚧 Planned |
 
 > **Note**
 >
-> **Platform limitations** — the provider itself does not offer this, so no
+> **Platform limitations**: the provider itself does not offer this, so no
 > adapter can:
 >
 > - Calendly has no reschedule endpoint; rescheduling is cancel + recreate.
 > - Wix updates support reschedule or cancel, not arbitrary field edits.
 > - Boulevard availability requires the separate Client cart API, and its
->   `UpdateAppointmentInput` accepts only notes, state and custom fields — staff
+>   `UpdateAppointmentInput` accepts only notes, state and custom fields: staff
 >   and service changes are not expressible. Rescheduling is supported natively.
 > - Setmore runs **two API generations at once** (`api/v1/bookingapi` and
 >   `api/v2/bookingapi`) and neither is a superset of the other, so the adapter
 >   pins each operation to the generation that routes it: availability (`slots`)
 >   is v1-only, while reschedule (`PUT` on the appointment) and cancel/delete are
->   v2. You do not have to think about this — but `providerOptions.apiVersion`
+>   v2. You do not have to think about this, but `providerOptions.apiVersion`
 >   (`'v1'`/`'v2'`) overrides the choice on `updateBooking`/`cancelBooking` if
 >   your account is provisioned differently.
 > - Setmore has **no** fetch-by-id on either generation, so `getBooking` throws;
@@ -1166,7 +1597,7 @@ unibooking currently supports the following providers.
 >   the appointment rather than moving it to a cancelled state (Setmore has no
 >   status field), which is also why `updateBooking({ status })` throws.
 > - Vagaro has no date-range list; `listBookings` requires a `customerId`.
-> - Mindbody has no cancel *path* — cancellation is an action on the update
+> - Mindbody has no cancel *path*: cancellation is an action on the update
 >   endpoint, which `cancelBooking` handles for you.
 > - Square and Acuity booking `status` is read-only, and Microsoft Bookings has
 >   no status field at all; `updateBooking({ status })` throws on all three, so
@@ -1177,16 +1608,16 @@ unibooking currently supports the following providers.
 > - Square's **Bookings API requires the merchant to have a Square Appointments
 >   subscription**, and **booking writes additionally require a paid plan**. With
 >   no subscription every booking and availability call answers `401 UNAUTHORIZED
->   — "Merchant not onboarded to Appointments"`; on the free plan, reads work but
->   `createBooking`/`updateBooking`/`cancelBooking` answer `403 — "Merchant
+>   - "Merchant not onboarded to Appointments"`; on the free plan, reads work but
+>   `createBooking`/`updateBooking`/`cancelBooking` answer `403: "Merchant
 >   subscription does not support write operations."` In both cases the token is
 >   perfectly valid and catalog/staff/customer calls keep working, so both are
->   surfaced as `UNSUPPORTED` (not `AUTH`/`FORBIDDEN`) — they cannot be mistaken
+>   surfaced as `UNSUPPORTED` (not `AUTH`/`FORBIDDEN`): they cannot be mistaken
 >   for a revoked grant and trigger a pointless re-auth. Sandbox test accounts
 >   need Appointments switched on too, via the Sandbox Seller Dashboard.
 > - Square services are only bookable if staff are assigned to them. `Service.id`
 >   is a catalog *variation*, and the staff who perform it live on that variation
->   as `team_member_ids` — so pass it through `providerOptions` when creating one,
+>   as `team_member_ids`, so pass it through `providerOptions` when creating one,
 >   or availability search will reject it with "did not find a team member who
 >   performs the selected service variation":
 >
@@ -1197,26 +1628,26 @@ unibooking currently supports the following providers.
 >     providerOptions: { team_member_ids: ["TM_123"] },
 >   });
 >   ```
-> - Acuity has no list cursor — `max` only caps the count (default 100), so
+> - Acuity has no list cursor: `max` only caps the count (default 100), so
 >   narrow the range or raise `limit` on a busy calendar.
 > - Apple/CalDAV deletes a whole resource, so cancelling a recurring booking
->   removes the entire series. Expanded occurrences share one id — tell them
+>   removes the entire series. Expanded occurrences share one id: tell them
 >   apart via `RECURRENCE-ID` in `raw`.
 > - Google and Outlook are plain calendars with no native slot search, so
 >   `searchAvailability` derives free slots from their free/busy APIs
 >   (`freeBusy` / `getSchedule`). It requires a positive `durationMinutes` to
 >   size each slot, and Outlook additionally needs the mailbox address in
->   `providerOptions.schedules` (or a UPN-form `userId`) — `getSchedule` cannot
+>   `providerOptions.schedules` (or a UPN-form `userId`): `getSchedule` cannot
 >   resolve the `me` alias.
 > - Zenoti availability is single-day and needs `providerOptions.guestId` plus a
 >   `durationMinutes`; a multi-day range throws. Each query creates a transient
 >   upstream booking, so fanning out per day would litter throwaway bookings.
->   `listBookings` has no cursor — a `pageToken` throws rather than being ignored.
+>   `listBookings` has no cursor: a `pageToken` throws rather than being ignored.
 > - Availability ranges are capped where the provider is single-date and the
 >   adapter fans out one request per day: Vagaro 31 days, Setmore 62, Acuity 31.
 >   Beyond the cap you get an error rather than a silently truncated slot list.
 > - Bookeo needs `providerOptions.participants` (with a `peopleCategoryId`) on
->   create, and Phorest needs a `staffId` — both are required by their specs and
+>   create, and Phorest needs a `staffId`, both are required by their specs and
 >   cannot be defaulted. Bookeo updates reschedule only; its PUT is not a
 >   documented partial-update contract, so title/staff/product edits throw
 >   rather than risk a partial body clearing fields.
@@ -1224,18 +1655,18 @@ unibooking currently supports the following providers.
 > **Permission caveats:**
 >
 > - Microsoft Bookings availability uses `getStaffAvailability`, which Graph
->   documents as **application-permission only** — a delegated user token works
+>   documents as **application-permission only**: a delegated user token works
 >   for every other call on that adapter but not this one.
 >
-> **Adapter gaps** — the provider supports this, but unibooking does not model it
+> **Adapter gaps**: the provider supports this, but unibooking does not model it
 > yet:
 >
 > - **Service enumeration** is missing only on Vagaro, whose API reference sits
->   behind a login wall — the auth scheme and endpoint shapes could not be
+>   behind a login wall: the auth scheme and endpoint shapes could not be
 >   confirmed, and an enumeration returning ids `createBooking` rejects is worse
 >   than none. Google, Outlook
 >   and Apple/CalDAV are plain calendars with no service or staff concept at all.
-> - **Staff enumeration** is additionally absent on Bookeo and Calendly — neither
+> - **Staff enumeration** is additionally absent on Bookeo and Calendly, neither
 >   models staff in this adapter.
 > - Customer *enumeration* is not modelled anywhere; use
 >   `customers.findOrCreate`.
@@ -1247,11 +1678,11 @@ unibooking currently supports the following providers.
 > IANA `range.timezone`.
 >
 > Provider names in the table link to the official API documentation. MangoMint
-> is unlinked because it publishes no public API reference — integration is
+> is unlinked because it publishes no public API reference: integration is
 > arranged directly with their support team.
 >
 > **Verification status.** Every adapter is checked against its provider's
-> current published specification — an OpenAPI/Swagger document, a GraphQL
+> current published specification: an OpenAPI/Swagger document, a GraphQL
 > schema, or an official reference page. **No adapter is verified against a live
 > tenant.** Several providers gate API access behind sales or manual approval,
 > and the rest were not exercised end-to-end either.
@@ -1262,10 +1693,10 @@ unibooking currently supports the following providers.
 > Individual adapter tests additionally assert request bodies and headers where
 > a specific wire detail matters, but that is per-case, not blanket coverage.
 > Because the mocks are authored alongside the adapter, they cannot catch a
-> wrong endpoint or a misread response field — only a spec diff can, which is
+> wrong endpoint or a misread response field, only a spec diff can, which is
 > what the audits in [CHANGELOG.md](CHANGELOG.md) do.
 >
-> If you hit a discrepancy against a live tenant, please open an issue — that is
+> If you hit a discrepancy against a live tenant, please open an issue, that is
 > exactly the gap this project cannot close on its own.
 
 ---
@@ -1373,9 +1804,9 @@ import {
 | Boulevard | `verifyBoulevardSignature` | ✅ | `boolean` |
 | Mindbody | `verifyMindbodySignature` | ✅ | `boolean` |
 | Wix | `verifyWixWebhook` | ✅ | decoded payload, or `null` |
-| Google Calendar | `verifyGoogleChannelToken` | — | `boolean` |
-| Outlook | `verifyGraphClientState` | — | `boolean` |
-| Vagaro | `verifyVagaroToken` | — | `boolean` |
+| Google Calendar | `verifyGoogleChannelToken` | - | `boolean` |
+| Outlook | `verifyGraphClientState` | - | `boolean` |
+| Vagaro | `verifyVagaroToken` | - | `boolean` |
 
 Calendly and Bookeo also accept an optional `toleranceMs` (plus an injectable
 `now`) to reject replayed deliveries, as both vendors recommend.
@@ -1392,7 +1823,7 @@ Example
 ```ts
 import { verifySquareSignature } from "unibooking/webhooks/square";
 
-// The exact raw body — never a parsed-and-re-serialized object.
+// The exact raw body, never a parsed-and-re-serialized object.
 const body = await request.text();
 
 const ok = await verifySquareSignature({
@@ -1413,7 +1844,7 @@ if (!ok) {
 
 > **Note**
 >
-> Most verifiers are `async` — always `await` them. Writing
+> Most verifiers are `async`: always `await` them. Writing
 > `if (!verifySquareSignature(...))` negates a Promise, which is always truthy,
 > so every request would be accepted as authentic.
 >
@@ -1423,7 +1854,7 @@ if (!ok) {
 > Microsoft Graph subscriptions also require a one-time handshake: echo
 > `graphValidationToken(url.searchParams)` back as `text/plain` with status 200.
 >
-> Vagaro does not HMAC-sign payloads — `verifyVagaroToken` is a constant-time
+> Vagaro does not HMAC-sign payloads: `verifyVagaroToken` is a constant-time
 > comparison against a static shared token, not a signature check.
 
 ---
@@ -1571,13 +2002,13 @@ The library is completely stateless.
 Only when the provider supports recurring events.
 
 Recurrence is not part of the canonical `Booking` model and has no capability
-flag — pass provider-native recurrence fields through `providerOptions`, and read
+flag: pass provider-native recurrence fields through `providerOptions`, and read
 them back from `booking.raw`.
 
 Apple/CalDAV is the exception: it serializes iCalendar rather than JSON, so
 `providerOptions` has nowhere to merge into and is ignored. `updateBooking`
 still preserves an existing `RRULE`, and `listBookings` asks the server to
-expand each in-window occurrence — but creating a recurring series through this
+expand each in-window occurrence, but creating a recurring series through this
 adapter is not supported.
 
 ---
@@ -1606,7 +2037,7 @@ You can build internal adapters for proprietary booking systems.
 
 ## Is it production ready?
 
-The core — types, errors, retry, pagination, the adapter kit — is stable and
+The core, types, errors, retry, pagination, the adapter kit, is stable and
 heavily tested.
 
 Per-adapter maturity varies, and it is worth being precise about what the tests
@@ -1617,7 +2048,7 @@ wire-format tests for the specific URLs, headers and request bodies where a
 detail matters.
 
 What that does **not** prove is that a provider accepts those requests. The
-suite mocks the transport, and the mocks are written alongside the adapter — so
+suite mocks the transport, and the mocks are written alongside the adapter, so
 a wrong endpoint, a misread response field, or a bad auth header is invisible to
 it. An adapter can be fully green and still fail against the real API. **No
 adapter is verified against a live tenant**; correctness rests on diffing each
@@ -1626,7 +2057,7 @@ one against the provider's published spec, which is what the audits recorded in
 
 So: treat the widely-used adapters (Google, Outlook, Square, Acuity, Calendly)
 as the best-exercised, and validate any adapter against your own tenant before
-depending on it — especially the gated ones (Vagaro, Setmore, Boulevard, Zenoti,
+depending on it, especially the gated ones (Vagaro, Setmore, Boulevard, Zenoti,
 Phorest, Mindbody, Wix), whose specs are the only available ground truth.
 Discrepancy reports are the most useful contribution you can make.
 
@@ -1680,7 +2111,12 @@ We'll handle the API differences.
 Contributions of all sizes are welcome.
 
 Whether you're fixing a typo, improving documentation, implementing a provider,
-or reporting a bug—you are helping make booking integrations easier for everyone.
+or reporting a bug: you are helping make booking integrations easier for everyone.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) (change standards, commit messages,
+releases) and the contributor docs in [`docs/`](docs/):
+[Architecture](docs/ARCHITECTURE.md) · [Development guide](docs/DEVELOPMENT.md) ·
+[Provider reference](docs/PROVIDERS.md).
 
 ## Ways to Contribute
 
@@ -1742,11 +2178,13 @@ npm run build
 ```text
 src/
 
-    adapters/          google.ts, square.ts, outlook.ts, ... (16)
+    adapters/          google.ts, square.ts, outlook.ts, ... (17)
 
     webhooks/          square.ts, calendly.ts, wix.ts, ... (10)
 
-    adapter-kit.ts     defineAdapter() — the adapter authoring toolkit
+    oauth/             server-only OAuth helpers: core.ts, google.ts, microsoft.ts, ...
+
+    adapter-kit.ts     defineAdapter(): the adapter authoring toolkit
 
     http.ts            shared fetch layer, auth, timeouts
 
@@ -1760,7 +2198,7 @@ src/
 
     types.ts           canonical Booking, Capabilities, BookingClient
 
-    time.ts  tz.ts  ical.ts  crypto.ts  graph.ts
+    time.ts  tz.ts  availability.ts  ical.ts  caldav.ts  crypto.ts  graph.ts
 
     index.ts           public barrel
 
@@ -1812,6 +2250,8 @@ export const myAdapter = defineAdapter({
 
     id: "mangomint",
 
+    // Every flag is required. An optional method (listServices, listCalendars,
+    // customers, …) must exist exactly when its flag is true.
     capabilities: {
         availability: true,
         staff: true,
@@ -1819,6 +2259,15 @@ export const myAdapter = defineAdapter({
         webhooks: false,
         idempotency: false,
         customers: false,
+        serviceCatalog: false,
+        staffDirectory: false,
+        serviceCatalogWrite: false,
+        staffDirectoryWrite: false,
+        staffDeactivate: false,
+        staffDelete: false,
+        serviceDelete: false,
+        calendarList: false,
+        // …plus the remaining flags; the Capabilities type lists every one.
     },
 
     baseUrl: "https://api.example.com/",
@@ -1828,6 +2277,10 @@ export const myAdapter = defineAdapter({
     }),
 
     build: (http) => ({
+
+        // Required on every adapter: the cheapest authenticated read, wrapped
+        // in probeConnection so a dead grant is returned, not thrown.
+        async checkConnection(){ /* ... */ },
 
         async createBooking(input){ /* ... */ },
 
@@ -1846,8 +2299,12 @@ export const myAdapter = defineAdapter({
 });
 ```
 
-`build` receives a ready HTTP context (auth, retries, error normalization already
-wired) and returns the method implementations.
+`build` receives a ready HTTP context (auth, timeouts and error normalization
+already wired) and returns the method implementations. Retries are not built in:
+wrap the client with `withRetry()`, which knows which methods are safe to retry.
+
+`id` must be one of the `ProviderId` values, so a private integration reuses an
+existing id (as above) or casts its own.
 
 Your adapter immediately works with
 
@@ -1980,7 +2437,7 @@ If unibooking has saved you time, there are several ways you can help.
 
 ❤️ Share it with other developers
 
-Every contribution—large or small—helps improve the project.
+Every contribution, large or small, helps improve the project.
 
 ---
 

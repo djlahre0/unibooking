@@ -7,9 +7,9 @@ import {
   isUnibookingError,
   UnibookingError,
 } from 'unibooking';
-import type { ProviderId } from 'unibooking';
+import type { Capabilities, ProviderId } from 'unibooking';
 
-/* ── Webhook verifiers (pure crypto — run client-side) ── */
+/* ── Webhook verifiers (pure crypto: run client-side) ── */
 import { verifySquareSignature } from 'unibooking/webhooks/square';
 import { verifyAcuitySignature } from 'unibooking/webhooks/acuity';
 import { verifyCalendlySignature } from 'unibooking/webhooks/calendly';
@@ -19,22 +19,27 @@ import { graphValidationToken, verifyGraphClientState } from 'unibooking/webhook
 import { verifyBoulevardSignature } from 'unibooking/webhooks/boulevard';
 import { verifyVagaroToken } from 'unibooking/webhooks/vagaro';
 import { verifyWixWebhook } from 'unibooking/webhooks/wix';
+import { verifyBookeoSignature } from 'unibooking/webhooks/bookeo';
 
-import { ADAPTERS, isDirect } from './providers';
+import { ADAPTERS, isDirect, isLocal } from './providers';
 import { type Op } from './dispatch';
 import { serializeError, type ActionResult, type Connection } from './result';
 import { runDirect } from './transport-direct';
 import { runProxy } from './transport-proxy';
+import { runLocal } from './transport-local';
+import { runSession } from './transport-session';
+import { CAPABILITIES as SAMPLE_CAPABILITIES } from './sample/client';
+import { SAMPLE_ID } from './sample/types';
 import { assertSafeBaseUrl } from './environments';
 
 export type { ActionResult, Connection } from './result';
 
 /* ═══════════════════════════════════════════════════════════
-   Transport picker — the one place that chooses direct vs proxy.
+   Transport picker: the one place that chooses direct vs proxy.
    This is also the ONE place both transports pass through, so it is where the
    base URL is validated for BOTH: the proxy route re-validates server-side
    (that check is the real security boundary and must stay), but the 7 direct
-   providers never reach the server — without a check here, a pasted baseUrl
+   providers never reach the server, without a check here, a pasted baseUrl
    would reach `makeClient` (and the visitor's live token with it) unguarded.
    ═══════════════════════════════════════════════════════════ */
 async function run(
@@ -43,6 +48,14 @@ async function run(
   op: Op,
   args: unknown,
 ): Promise<ActionResult> {
+  // A local provider has no host, so there is nothing for assertSafeBaseUrl to
+  // check -- and it must never reach the proxy allowlist either.
+  if (isLocal(provider)) return runLocal(op, args);
+  // Signed in via My Calendar (Google/Outlook only): the session transport
+  // ignores creds/baseUrl entirely -- the sealed cookie supplies the token
+  // server-side -- so this must be checked before the baseUrl guard below,
+  // which exists only for the pasted-credential transports.
+  if (conn.signedIn) return runSession(op, args);
   if (conn.baseUrl) {
     try {
       assertSafeBaseUrl(provider, conn.baseUrl);
@@ -59,14 +72,29 @@ async function run(
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Pure operations — no network, run client-side for every provider.
+   Pure operations, no network, run client-side for every provider.
    ═══════════════════════════════════════════════════════════ */
 export async function getCapabilities(providerId: string): Promise<ActionResult> {
+  // The sample client is deliberately not in ADAPTERS (it is not a library
+  // adapter), so it needs its own branch here instead of the map lookup below.
+  // Reads CAPABILITIES/SAMPLE_ID directly rather than constructing a whole
+  // client just to read two static fields off it.
+  if (isLocal(providerId)) {
+    return { ok: true, data: { id: SAMPLE_ID, capabilities: SAMPLE_CAPABILITIES } };
+  }
   if (!Object.hasOwn(ADAPTERS, providerId)) {
     return { ok: false, error: { message: `Unknown provider: ${providerId}` } };
   }
   const adapter = ADAPTERS[providerId];
   return { ok: true, data: { id: adapter.id, capabilities: adapter.capabilities } };
+}
+
+/** Capabilities for a provider, synchronously: tabs gate their UI on these
+ *  before any call is made. Returns null for an unknown id. */
+export function providerCapabilities(providerId: string): Capabilities | null {
+  if (isLocal(providerId)) return SAMPLE_CAPABILITIES;
+  if (!Object.hasOwn(ADAPTERS, providerId)) return null;
+  return ADAPTERS[providerId].capabilities;
 }
 
 export async function demoRegistry(): Promise<ActionResult> {
@@ -194,6 +222,16 @@ export async function verifyWebhook(
       case 'vagaro':
         result = verifyVagaroToken(fields.received || '', fields.expected || '');
         break;
+      case 'bookeo':
+        result = await verifyBookeoSignature({
+          secretKey: fields.secretKey || '',
+          timestamp: fields.timestamp || '',
+          messageId: fields.messageId || '',
+          webhookUrl: fields.webhookUrl || '',
+          body: fields.body || '',
+          signature: fields.signature || '',
+        });
+        break;
       case 'wix':
         result = await verifyWixWebhook({
           jwt: fields.jwt || '',
@@ -209,8 +247,20 @@ export async function verifyWebhook(
   }
 }
 
+/** Any dispatch op with raw args, over the same transport choice as every
+ *  typed call below. For flows that talk to two providers at once (Calendar
+ *  Sync reads a booking platform and writes a calendar). */
+export function callOp(
+  providerId: string,
+  conn: Connection,
+  op: Op,
+  args: Record<string, unknown>,
+): Promise<ActionResult> {
+  return run(providerId, conn, op, args);
+}
+
 /* ═══════════════════════════════════════════════════════════
-   Client-requiring operations — same signatures the page already
+   Client-requiring operations: same signatures the page already
    used, so call sites are unchanged. Each picks its transport.
    ═══════════════════════════════════════════════════════════ */
 export function callCreateBooking(
@@ -242,7 +292,15 @@ export function callUpdateBooking(
   providerId: string,
   conn: Connection,
   bookingId: string,
-  input: { title?: string; start?: string; end?: string; staffId?: string; serviceId?: string },
+  input: {
+    title?: string;
+    start?: string;
+    end?: string;
+    staffId?: string;
+    serviceId?: string;
+    /** On calendars: confirmed | pending | cancelled, via setEventStatus. */
+    status?: string;
+  },
 ): Promise<ActionResult> {
   return run(providerId, conn, 'updateBooking', { bookingId, input });
 }
@@ -256,6 +314,16 @@ export function callCancelBooking(
   return run(providerId, conn, 'cancelBooking', { bookingId, reason });
 }
 
+/** Calendar providers only: keep the event, marked cancelled. See cancel-event.ts. */
+export function callMarkCancelled(
+  providerId: string,
+  conn: Connection,
+  bookingId: string,
+  reason?: string,
+): Promise<ActionResult> {
+  return run(providerId, conn, 'markCancelled', { bookingId, reason });
+}
+
 export function callListBookings(
   providerId: string,
   conn: Connection,
@@ -267,7 +335,16 @@ export function callListBookings(
 export function callSearchAvailability(
   providerId: string,
   conn: Connection,
-  query: { start: string; end: string; timezone?: string; serviceId?: string; staffId?: string },
+  query: {
+    start: string;
+    end: string;
+    timezone?: string;
+    serviceId?: string;
+    staffId?: string;
+    /** Required by Google, whose freeBusy returns busy intervals that have to
+     *  be sized into slots. Harmless elsewhere. */
+    durationMinutes?: number;
+  },
 ): Promise<ActionResult> {
   return run(providerId, conn, 'searchAvailability', query);
 }
@@ -276,10 +353,52 @@ export function callCheckConnection(providerId: string, conn: Connection): Promi
   return run(providerId, conn, 'checkConnection', {});
 }
 
+export function callListCategories(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'listCategories', {});
+}
+
+export function callGetBusinessHours(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'getBusinessHours', {});
+}
+
+export function callListCalendars(providerId: string, conn: Connection): Promise<ActionResult> {
+  return run(providerId, conn, 'listCalendars', {});
+}
+
+export function callListClasses(
+  providerId: string,
+  conn: Connection,
+  query: {
+    start?: string;
+    end?: string;
+    staffId?: string;
+    serviceId?: string;
+    limit?: number;
+  } = {},
+): Promise<ActionResult> {
+  return run(providerId, conn, 'listClasses', query);
+}
+
+export function callEnrollInClass(
+  providerId: string,
+  conn: Connection,
+  args: {
+    classId: string;
+    customerId?: string;
+    customerName?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    allowWaitlist?: boolean;
+    notes?: string;
+  },
+): Promise<ActionResult> {
+  return run(providerId, conn, 'enrollInClass', args);
+}
+
 export function callListServices(
   providerId: string,
   conn: Connection,
-  query: { limit?: number; pageToken?: string } = {},
+  query: { limit?: number; pageToken?: string; staffId?: string; categoryId?: string } = {},
 ): Promise<ActionResult> {
   return run(providerId, conn, 'listServices', query);
 }
@@ -287,9 +406,102 @@ export function callListServices(
 export function callListStaff(
   providerId: string,
   conn: Connection,
-  query: { limit?: number; pageToken?: string } = {},
+  query: { limit?: number; pageToken?: string; serviceId?: string } = {},
 ): Promise<ActionResult> {
   return run(providerId, conn, 'listStaff', query);
+}
+
+/* ── Staff & services writes. `fields` are the form's raw values; dispatch.ts
+   turns them into the library's inputs, so both transports agree. ── */
+export type CatalogFields = Record<string, string | boolean | undefined>;
+
+export function callGetService(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getService', { id });
+}
+export function callGetStaff(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getStaff', { id });
+}
+export function callCreateService(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createService', fields);
+}
+export function callUpdateService(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateService', { ...fields, id });
+}
+export function callDeleteService(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteService', { id });
+}
+export function callCreateStaff(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createStaff', fields);
+}
+export function callUpdateStaff(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateStaff', { ...fields, id });
+}
+export function callDeleteStaff(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteStaff', { id });
+}
+export function callAssignStaff(
+  p: string,
+  conn: Connection,
+  serviceId: string,
+  staffId: string,
+): Promise<ActionResult> {
+  return run(p, conn, 'assignStaff', { serviceId, staffId });
+}
+export function callUnassignStaff(
+  p: string,
+  conn: Connection,
+  serviceId: string,
+  staffId: string,
+): Promise<ActionResult> {
+  return run(p, conn, 'unassignStaff', { serviceId, staffId });
+}
+
+/* ── Client records ── */
+export function callListCustomers(
+  p: string,
+  conn: Connection,
+  query: { limit?: number; pageToken?: string; email?: string; phone?: string } = {},
+): Promise<ActionResult> {
+  return run(p, conn, 'listCustomers', query);
+}
+export function callGetCustomer(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'getCustomer', { id });
+}
+export function callCreateCustomer(
+  p: string,
+  conn: Connection,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'createCustomer', fields);
+}
+export function callUpdateCustomer(
+  p: string,
+  conn: Connection,
+  id: string,
+  fields: CatalogFields,
+): Promise<ActionResult> {
+  return run(p, conn, 'updateCustomer', { ...fields, id });
+}
+export function callDeleteCustomer(p: string, conn: Connection, id: string): Promise<ActionResult> {
+  return run(p, conn, 'deleteCustomer', { id });
 }
 
 export function callFindOrCreateCustomer(

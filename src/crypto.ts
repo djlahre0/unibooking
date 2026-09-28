@@ -23,7 +23,7 @@ export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   return bytesOf(bin);
 }
 
-/** As `base64ToBytes`, but `undefined` instead of throwing on invalid base64 —
+/** As `base64ToBytes`, but `undefined` instead of throwing on invalid base64:
  *  for call sites where a bad value is a verification failure, not a crash. */
 export function tryBase64ToBytes(b64: unknown): Uint8Array<ArrayBuffer> | undefined {
   if (typeof b64 !== 'string' || b64 === '') return undefined;
@@ -46,7 +46,7 @@ function base64UrlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
   return base64ToBytes(b64 + pad);
 }
 
-/** SHA-256 of a string, lowercase hex. Not a signature — used to derive stable,
+/** SHA-256 of a string, lowercase hex. Not a signature: used to derive stable,
  *  bounded-length keys from arbitrary input (e.g. a deterministic idempotency
  *  key from a customer's email). */
 export async function sha256Hex(message: string): Promise<string> {
@@ -81,7 +81,7 @@ export async function hmacSha256Hex(key: string, message: string): Promise<strin
   return toHex(new Uint8Array(sig));
 }
 
-/** HMAC-SHA256 (base64 output) with a raw-bytes key — for providers whose signing
+/** HMAC-SHA256 (base64 output) with a raw-bytes key, for providers whose signing
  *  key is not the literal string but its decoded bytes (e.g. Boulevard signs with
  *  the base64-decoded API secret). */
 export async function hmacSha256BytesBase64(
@@ -158,7 +158,7 @@ async function importRsaPublicKey(pem: string): Promise<CryptoKey> {
  *  equal-length inputs are compared without early exit.
  *
  *  A non-string input is `false`, not a throw. The value being compared is a
- *  request header — `string | undefined` in every Node framework — and a
+ *  request header, `string | undefined` in every Node framework, and a
  *  verifier that throws on a missing header turns an unsigned request into a
  *  500 rather than the 401 the caller wrote, while handing anyone who omits the
  *  header a different code path from anyone who gets it wrong. */

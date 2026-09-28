@@ -89,6 +89,48 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     ...(client.listStaff
       ? { listStaff: (query) => run(() => client.listStaff!(query), true) }
       : {}),
+    // Reads, so safe to retry.
+    ...(client.listCalendars
+      ? { listCalendars: (query) => run(() => client.listCalendars!(query), true) }
+      : {}),
+    ...(client.listCategories
+      ? { listCategories: () => run(() => client.listCategories!(), true) }
+      : {}),
+    ...(client.getBusinessHours
+      ? { getBusinessHours: () => run(() => client.getBusinessHours!(), true) }
+      : {}),
+    ...(client.listClasses
+      ? { listClasses: (query) => run(() => client.listClasses!(query), true) }
+      : {}),
+    ...(client.getClass ? { getClass: (id) => run(() => client.getClass!(id), true) } : {}),
+    // An enrollment is a booking create: same rule as createBooking.
+    ...(client.enrollInClass
+      ? {
+          enrollInClass: (input) =>
+            run(
+              () => client.enrollInClass!(input),
+              options.unsafeRetryCreates === true || input.idempotencyKey !== undefined,
+            ),
+        }
+      : {}),
+    // A sync page is a read: re-asking with the same token returns the same
+    // changes, so it is safe to retry.
+    ...(client.syncBookings
+      ? { syncBookings: (query) => run(() => client.syncBookings!(query), true) }
+      : {}),
+    // Creating (or, on Google, renewing = re-creating) a watch is not
+    // idempotent: a retry after a watch that actually registered leaves a
+    // second channel delivering duplicate notifications until it expires.
+    ...(client.watchBookings
+      ? { watchBookings: (input) => run(() => client.watchBookings!(input), false) }
+      : {}),
+    ...(client.renewWatch
+      ? { renewWatch: (watch, input) => run(() => client.renewWatch!(watch, input), false) }
+      : {}),
+    // Stopping twice ends in the same state.
+    ...(client.stopWatch
+      ? { stopWatch: (watch) => run(() => client.stopWatch!(watch), true) }
+      : {}),
     // Creates are NOT auto-retried: neither provider write takes an idempotency
     // key from the caller, so a network retry after a create that actually
     // succeeded would duplicate the service or staff member. Same reasoning as
@@ -113,6 +155,29 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
     ...(client.setStaffActive
       ? { setStaffActive: (id, active) => run(() => client.setStaffActive!(id, active), true) }
       : {}),
+    // By-id reads, so safe to retry.
+    ...(client.getService ? { getService: (id) => run(() => client.getService!(id), true) } : {}),
+    ...(client.getStaff ? { getStaff: (id) => run(() => client.getStaff!(id), true) } : {}),
+    // Deleting twice ends in the same state (same rule as cancelBooking), and
+    // assignment is idempotent by contract: already (un)assigned is not an error.
+    ...(client.deleteService
+      ? { deleteService: (id) => run(() => client.deleteService!(id), true) }
+      : {}),
+    ...(client.deleteStaff
+      ? { deleteStaff: (id) => run(() => client.deleteStaff!(id), true) }
+      : {}),
+    ...(client.assignStaffToService
+      ? {
+          assignStaffToService: (serviceId, staffId) =>
+            run(() => client.assignStaffToService!(serviceId, staffId), true),
+        }
+      : {}),
+    ...(client.unassignStaffFromService
+      ? {
+          unassignStaffFromService: (serviceId, staffId) =>
+            run(() => client.unassignStaffFromService!(serviceId, staffId), true),
+        }
+      : {}),
     ...(client.customers
       ? {
           customers: {
@@ -120,8 +185,39 @@ export function withRetry(client: BookingClient, options: RetryOptions = {}): Bo
             // after a create that actually succeeded would duplicate the
             // customer), so it is NOT auto-retried.
             findOrCreate: (customer) => run(() => client.customers!.findOrCreate(customer), false),
+            // Reads, updates and deletes end in the same state when repeated;
+            // a plain create does not (it always creates), so it is not retried.
+            ...(client.customers.list
+              ? { list: (query) => run(() => client.customers!.list!(query), true) }
+              : {}),
+            ...(client.customers.get
+              ? { get: (id) => run(() => client.customers!.get!(id), true) }
+              : {}),
+            ...(client.customers.create
+              ? { create: (input) => run(() => client.customers!.create!(input), false) }
+              : {}),
+            ...(client.customers.update
+              ? { update: (id, input) => run(() => client.customers!.update!(id, input), true) }
+              : {}),
+            ...(client.customers.delete
+              ? { delete: (id) => run(() => client.customers!.delete!(id), true) }
+              : {}),
           },
         }
+      : {}),
+    ...(client.getCalendar
+      ? { getCalendar: (id) => run(() => client.getCalendar!(id), true) }
+      : {}),
+    // Creating a calendar twice makes two calendars, so it is not retried;
+    // renaming and deleting end in the same state when repeated.
+    ...(client.createCalendar
+      ? { createCalendar: (input) => run(() => client.createCalendar!(input), false) }
+      : {}),
+    ...(client.updateCalendar
+      ? { updateCalendar: (id, input) => run(() => client.updateCalendar!(id, input), true) }
+      : {}),
+    ...(client.deleteCalendar
+      ? { deleteCalendar: (id) => run(() => client.deleteCalendar!(id), true) }
       : {}),
   };
   return wrapped;

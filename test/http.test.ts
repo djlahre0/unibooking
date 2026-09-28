@@ -24,7 +24,7 @@ describe('codeForStatus mapping', () => {
     [410, 'NOT_FOUND'],
     [409, 'CONFLICT'],
     // 412 Precondition Failed = an If-Match/If-None-Match failure (CalDAV
-    // optimistic-concurrency / create-only), i.e. a version conflict — and it
+    // optimistic-concurrency / create-only), i.e. a version conflict, and it
     // must be non-retryable so withRetry can't clobber a concurrent edit.
     [412, 'CONFLICT'],
     [429, 'RATE_LIMIT'],
@@ -96,7 +96,7 @@ describe('http client', () => {
       provider: 'boulevard',
       baseUrl: 'https://api.test/v1/',
       creds: { token: 'secret' },
-      // An async AuthFn — Boulevard computes an HMAC token per request.
+      // An async AuthFn: Boulevard computes an HMAC token per request.
       auth: async (c) => ({ headers: { authorization: `Signed ${c.token}` } }),
       options: {
         fetch: async (_url, init) => {
@@ -134,5 +134,20 @@ describe('http client', () => {
     const second = await http.request(await http.resolve(), { path: 'b' });
     expect(first.auth).toBe('Bearer t1');
     expect(second.auth).toBe('Bearer t2');
+  });
+
+  it('reports the response URL to onResponse, falling back to the requested one', async () => {
+    // A hand-built Response has an empty `url`; the requested URL stands in, so
+    // CalDAV discovery can always resolve relative hrefs against something.
+    const http = httpWith(async () => new Response('{}', { status: 200 }));
+    let seen = '';
+    await http.request(await http.resolve(), {
+      path: 'calendars/home/',
+      query: { depth: 1 },
+      onResponse: (meta) => {
+        seen = meta.url;
+      },
+    });
+    expect(seen).toBe('https://api.test/v1/calendars/home/?depth=1');
   });
 });

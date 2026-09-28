@@ -15,10 +15,28 @@ const CAPS: Capabilities = {
   webhooks: false,
   idempotency: false,
   customers: false,
+  customerDirectory: false,
+  customerWrite: false,
+  customerDelete: false,
   serviceCatalog: false,
   staffDirectory: false,
   serviceCatalogWrite: false,
   staffDirectoryWrite: false,
+  staffDeactivate: false,
+  staffDelete: false,
+  serviceDelete: false,
+  staffServiceAssignmentWrite: false,
+  calendarList: false,
+  calendarWrite: false,
+  staffServiceAssignment: false,
+  serviceCategories: false,
+  businessHours: false,
+  classCatalog: false,
+  classEnrollment: false,
+  classWaitlist: false,
+  changeFeed: false,
+  changeNotifications: false,
+  versionedWrites: false,
 };
 
 function fakeBooking(id: string): Booking {
@@ -93,7 +111,7 @@ describe('defineAdapter: canonical guarantees applied to every adapter', () => {
 
     const confirmed = await client.listBookings({ range: RANGE, status: 'confirmed' });
     expect(confirmed.bookings.map((b) => b.id)).toEqual(['a', 'c']);
-    // Filtering a page must not end pagination — the next page may hold matches.
+    // Filtering a page must not end pagination: the next page may hold matches.
     expect(confirmed.nextPageToken).toBe('p2');
   });
 
@@ -328,8 +346,25 @@ describe('withRetry preserves the whole client surface', () => {
         staffDirectory: true,
         serviceCatalogWrite: true,
         staffDirectoryWrite: true,
+        calendarList: true,
+        serviceCategories: true,
+        businessHours: true,
+        classCatalog: true,
+        classEnrollment: true,
+        changeFeed: true,
+        changeNotifications: true,
       },
       listServices: track('listServices'),
+      listCalendars: track('listCalendars'),
+      listCategories: track('listCategories'),
+      getBusinessHours: track('getBusinessHours'),
+      listClasses: track('listClasses'),
+      getClass: track('getClass'),
+      enrollInClass: track('enrollInClass'),
+      syncBookings: track('syncBookings'),
+      watchBookings: track('watchBookings'),
+      renewWatch: track('renewWatch'),
+      stopWatch: track('stopWatch'),
       listStaff: track('listStaff'),
       createService: track('createService'),
       updateService: track('updateService'),
@@ -337,7 +372,24 @@ describe('withRetry preserves the whole client surface', () => {
       createStaff: track('createStaff'),
       updateStaff: track('updateStaff'),
       setStaffActive: track('setStaffActive'),
-      customers: { findOrCreate: track('findOrCreate') },
+      getService: track('getService'),
+      getStaff: track('getStaff'),
+      deleteService: track('deleteService'),
+      deleteStaff: track('deleteStaff'),
+      assignStaffToService: track('assignStaffToService'),
+      unassignStaffFromService: track('unassignStaffFromService'),
+      getCalendar: track('getCalendar'),
+      createCalendar: track('createCalendar'),
+      updateCalendar: track('updateCalendar'),
+      deleteCalendar: track('deleteCalendar'),
+      customers: {
+        findOrCreate: track('findOrCreate'),
+        list: track('list'),
+        get: track('get'),
+        create: track('create'),
+        update: track('update'),
+        delete: track('delete'),
+      },
     } as unknown as BookingClient;
 
     const wrapped = withRetry(full, { sleep: async () => {} });
@@ -358,12 +410,35 @@ describe('withRetry preserves the whole client surface', () => {
       'createStaff',
       'updateStaff',
       'setStaffActive',
+      'getService',
+      'getStaff',
+      'deleteService',
+      'deleteStaff',
+      'assignStaffToService',
+      'unassignStaffFromService',
+      'listCalendars',
+      'listCategories',
+      'getBusinessHours',
+      'listClasses',
+      'getClass',
+      'enrollInClass',
+      'syncBookings',
+      'watchBookings',
+      'renewWatch',
+      'stopWatch',
     ] as const;
 
     for (const name of expected) {
       expect(typeof (wrapped as any)[name], name + ' survives withRetry').toBe('function');
     }
     expect(typeof wrapped.customers?.findOrCreate).toBe('function');
+    expect(typeof wrapped.getCalendar).toBe('function');
+    for (const m of ['createCalendar', 'updateCalendar', 'deleteCalendar'] as const) {
+      expect(typeof wrapped[m], `${m} survives withRetry`).toBe('function');
+    }
+    for (const m of ['list', 'get', 'create', 'update', 'delete'] as const) {
+      expect(typeof wrapped.customers?.[m], `customers.${m} survives withRetry`).toBe('function');
+    }
   });
 
   it('drops optional methods the wrapped client does not have', () => {
@@ -373,5 +448,149 @@ describe('withRetry preserves the whole client surface', () => {
     expect(wrapped.listServices).toBeUndefined();
     expect(wrapped.createService).toBeUndefined();
     expect(wrapped.setStaffActive).toBeUndefined();
+    expect(wrapped.getService).toBeUndefined();
+    expect(wrapped.deleteStaff).toBeUndefined();
+    expect(wrapped.assignStaffToService).toBeUndefined();
+    expect(wrapped.listCalendars).toBeUndefined();
+    expect(wrapped.listClasses).toBeUndefined();
+    expect(wrapped.syncBookings).toBeUndefined();
+    expect(wrapped.watchBookings).toBeUndefined();
+  });
+
+  it('never retries a watch it may already have created, but retries a sync', async () => {
+    let watches = 0;
+    let syncs = 0;
+    const transient = () =>
+      new UnibookingError({ provider: 'google', code: 'UPSTREAM', message: 'blip' });
+    const client = {
+      ...fakeClient({}),
+      capabilities: { ...CAPS, changeFeed: true, changeNotifications: true },
+      watchBookings: async () => {
+        watches++;
+        throw transient();
+      },
+      syncBookings: async () => {
+        syncs++;
+        if (syncs === 1) throw transient();
+        return { changes: [], syncToken: 't' };
+      },
+    } as unknown as BookingClient;
+    const wrapped = withRetry(client, { sleep: async () => {} });
+    await expect(wrapped.watchBookings!({ address: 'https://x', token: 't' })).rejects.toThrow();
+    expect(watches).toBe(1);
+    expect(await wrapped.syncBookings!()).toEqual({ changes: [], syncToken: 't' });
+    expect(syncs).toBe(2);
+  });
+});
+
+describe('defineAdapter: update*(id, { active }) sets status in the same call', () => {
+  const svc = (active: boolean) => ({ id: 's1', name: 'Cut', active, raw: {} });
+  const staff = (active: boolean) => ({ id: 'm1', name: 'Ana', active, raw: {} });
+  const { id: _id, capabilities: _caps, ...methods } = fakeClient({});
+  const make = (withStaffActive: boolean) => {
+    const calls: string[] = [];
+    const client = defineAdapter({
+      id: 'square',
+      capabilities: {
+        ...CAPS,
+        serviceCatalog: true,
+        serviceCatalogWrite: true,
+        staffDirectory: true,
+        staffDirectoryWrite: true,
+        staffDeactivate: withStaffActive,
+      },
+      baseUrl: 'https://example.invalid/',
+      auth: () => ({}),
+      build: () => ({
+        ...methods,
+        listServices: async () => ({ services: [] }),
+        listStaff: async () => ({ staff: [] }),
+        createService: async () => svc(true),
+        updateService: async (_i: string, input: Record<string, unknown>) => {
+          calls.push(`updateService ${JSON.stringify(input)}`);
+          return svc(true);
+        },
+        setServiceActive: async (_i: string, active: boolean) => {
+          calls.push(`setServiceActive ${active}`);
+          return svc(active);
+        },
+        createStaff: async () => staff(true),
+        updateStaff: async (_i: string, input: Record<string, unknown>) => {
+          calls.push(`updateStaff ${JSON.stringify(input)}`);
+          return staff(true);
+        },
+        ...(withStaffActive
+          ? {
+              setStaffActive: async (_i: string, active: boolean) => {
+                calls.push(`setStaffActive ${active}`);
+                return staff(active);
+              },
+            }
+          : {}),
+      }),
+    })({});
+    return { client, calls };
+  };
+
+  it('writes the other fields first, then the status', async () => {
+    const { client, calls } = make(true);
+    const s = await client.updateService!('s1', { name: 'Trim', active: false });
+    expect(calls).toEqual(['updateService {"name":"Trim"}', 'setServiceActive false']);
+    expect(s.active).toBe(false);
+  });
+
+  it('only the status: no empty update is sent', async () => {
+    const { client, calls } = make(true);
+    const m = await client.updateStaff!('m1', { active: false });
+    expect(calls).toEqual(['setStaffActive false']);
+    expect(m.active).toBe(false);
+  });
+
+  it('without active the adapter update is called untouched', async () => {
+    const { client, calls } = make(true);
+    await client.updateService!('s1', { name: 'Trim' });
+    expect(calls).toEqual(['updateService {"name":"Trim"}']);
+  });
+
+  it('refuses active where staff have no inactive state, before writing anything', async () => {
+    const { client, calls } = make(false);
+    await expect(client.updateStaff!('m1', { name: 'Ana B', active: false })).rejects.toMatchObject(
+      {
+        code: 'UNSUPPORTED',
+      },
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('defineAdapter: listCalendars limit backstop', () => {
+  // Same terminal-page rule as listServices/listStaff: trimming a page that
+  // carries a cursor would hide the entries between the cut and the next page.
+  const cal = (id: string) => ({ id, name: id, primary: false, readOnly: false, raw: {} });
+  const { id: _id, capabilities: _caps, ...methods } = fakeClient({});
+  const make = (nextPageToken?: string) =>
+    defineAdapter({
+      id: 'google',
+      capabilities: { ...CAPS, calendarList: true },
+      baseUrl: 'https://example.invalid/',
+      auth: () => ({}),
+      build: () => ({
+        ...methods,
+        listCalendars: async () => ({
+          calendars: [cal('a'), cal('b'), cal('c')],
+          ...(nextPageToken ? { nextPageToken } : {}),
+        }),
+      }),
+    })({});
+
+  it('trims a terminal page to limit', async () => {
+    const r = await make().listCalendars!({ limit: 2 });
+    expect(r.calendars.map((c) => c.id)).toEqual(['a', 'b']);
+  });
+
+  it('leaves a page with a cursor alone', async () => {
+    const r = await make('p2').listCalendars!({ limit: 2 });
+    expect(r.calendars).toHaveLength(3);
+    expect(r.nextPageToken).toBe('p2');
   });
 });

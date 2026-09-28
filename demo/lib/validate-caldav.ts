@@ -4,7 +4,7 @@
  * would fetch any attacker-chosen host with attacker-supplied auth headers.
  *
  * We check the PARSED `url.hostname` (not the raw string) so credential-in-URL
- * tricks like `https://p01-caldav.icloud.com@evil.com/` are rejected — the
+ * tricks like `https://p01-caldav.icloud.com@evil.com/` are rejected: the
  * parser assigns `evil.com` to hostname. Allowlisting *.icloud.com has no
  * DNS-rebinding hole: nobody else can register a subdomain of icloud.com.
  */

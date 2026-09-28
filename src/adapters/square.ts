@@ -1,4 +1,16 @@
-import type { Booking, BookingStatus, Customer, Service, Staff } from '../types';
+import type {
+  Booking,
+  BookingStatus,
+  CreateCustomerInput,
+  Customer,
+  CustomerRecord,
+  HoursPeriod,
+  UpdateCustomerInput,
+  Service,
+  ServiceCategory,
+  Staff,
+  Weekday,
+} from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { sha256Hex } from '../crypto';
 import { UnibookingError, type ErrorCode } from '../errors';
@@ -30,7 +42,7 @@ function segmentsDuration(segments: any[]): number {
 
 /** End instant from a start + the summed segment durations. Throws UPSTREAM when
  *  there is no positive duration to derive from (Square returns per-segment
- *  durations, so a zero total means the response is unusable — better than
+ *  durations, so a zero total means the response is unusable: better than
  *  silently emitting a zero-length range that violates `end > start`). */
 function deriveEnd(start: string, segments: any[], ctx: string): string {
   const mins = segmentsDuration(segments);
@@ -105,16 +117,16 @@ function toBooking(raw: unknown): Booking {
 
 /**
  * Two Square failures are about the seller's **Appointments plan**, not their
- * credentials — both observed live:
+ * credentials, both observed live:
  *
- * - `401 UNAUTHORIZED — "Merchant not onboarded to Appointments"` on every
+ * - `401 UNAUTHORIZED: "Merchant not onboarded to Appointments"` on every
  *   Bookings call, when the seller has no Appointments subscription at all.
- * - `403 FORBIDDEN — "Merchant subscription does not support write operations."`
+ * - `403 FORBIDDEN: "Merchant subscription does not support write operations."`
  *   on createBooking/updateBooking/cancelBooking, when the seller is on the
  *   **Free** plan. Reads (availability search, listBookings) still succeed;
  *   Square gates only booking writes behind a paid plan.
  *
- * In both cases the token is perfectly valid — the catalog, team and customer
+ * In both cases the token is perfectly valid: the catalog, team and customer
  * endpoints keep working on the very same credentials, and on the Free plan even
  * the booking *reads* do.
  *
@@ -147,7 +159,7 @@ function planLimitation(status: number, errors: any[]): { remedy: string } | und
   ) {
     return {
       remedy:
-        "this Square account's Appointments plan is read-only for the Bookings API — the free plan allows availability and booking reads but not creates, updates or cancels. The credentials are valid; the merchant needs a paid Appointments plan (Plus or Premium) to write bookings.",
+        "this Square account's Appointments plan is read-only for the Bookings API: the free plan allows availability and booking reads but not creates, updates or cancels. The credentials are valid; the merchant needs a paid Appointments plan (Plus or Premium) to write bookings.",
     };
   }
   return undefined;
@@ -165,7 +177,7 @@ function parseSquareError(
     .join('; ');
   const plan = planLimitation(status, errors);
   return {
-    ...(message ? { message: plan ? `${message} — ${plan.remedy}` : message } : {}),
+    ...(message ? { message: plan ? `${message}: ${plan.remedy}` : message } : {}),
     ...(errors[0]?.code ? { providerCode: errors[0].code } : {}),
     // Narrow on purpose: if Square ever reworded these, the match fails and the
     // status-derived AUTH/FORBIDDEN stands, which is exactly today's behaviour.
@@ -178,9 +190,54 @@ function splitName(name: string): { given_name: string; family_name?: string } {
   return { given_name: given ?? name, ...(rest.length ? { family_name: rest.join(' ') } : {}) };
 }
 
+/** A Square Customer -> a canonical client record. */
+function toCustomerRecord(raw: unknown): CustomerRecord {
+  const r = asRecord(raw, 'square', 'customer');
+  const name =
+    [r.given_name, r.family_name].filter((x) => typeof x === 'string' && x).join(' ') ||
+    (typeof r.company_name === 'string' ? r.company_name : '');
+  return {
+    id: reqString(r.id, 'square', 'customer.id'),
+    ...(name ? { name } : {}),
+    ...(typeof r.email_address === 'string' ? { email: r.email_address } : {}),
+    ...(typeof r.phone_number === 'string' ? { phone: r.phone_number } : {}),
+    ...(typeof r.note === 'string' ? { note: r.note } : {}),
+    ...(typeof r.created_at === 'string' ? { createdAt: r.created_at } : {}),
+    ...(typeof r.updated_at === 'string' ? { updatedAt: r.updated_at } : {}),
+    raw: r,
+  };
+}
+
+/** Canonical client fields -> a Square Customer body. On update a one-word
+ *  name sends `family_name: null`, which Square's sparse update reads as
+ *  "clear", so renaming "Ana Silva" to "Ana" does not leave "Silva" behind. */
+function customerBody(
+  input: CreateCustomerInput | UpdateCustomerInput,
+  clearMissing: boolean,
+): Record<string, unknown> {
+  const name = input.name?.trim();
+  const split = name ? splitName(name) : undefined;
+  return {
+    ...(split
+      ? {
+          given_name: split.given_name,
+          ...(split.family_name
+            ? { family_name: split.family_name }
+            : clearMissing
+              ? { family_name: null }
+              : {}),
+        }
+      : {}),
+    ...(input.email !== undefined ? { email_address: input.email } : {}),
+    ...(input.phone !== undefined ? { phone_number: input.phone } : {}),
+    ...(input.note !== undefined ? { note: input.note } : {}),
+    ...input.providerOptions,
+  };
+}
+
 /**
  * The identity a customer is deduped on, as both a search filter and a stable
- * key. Deriving both from one expression keeps them provably in step — they are
+ * key. Deriving both from one expression keeps them provably in step: they are
  * two halves of the same dedup decision.
  *
  * Email wins over phone so a customer who supplies both is matched on the
@@ -203,7 +260,7 @@ function customerDedupe(
 /**
  * A CreateCustomer idempotency key derived from the customer's identity.
  *
- * Square's customer search index is **eventually consistent** — a record
+ * Square's customer search index is **eventually consistent**: a record
  * created now is not findable by `customers/search` for a second or two
  * (measured: a miss at 0.9s, a hit at 2.3s against live Square). So the
  * search-then-create below has a real race: two calls for the same person close
@@ -215,14 +272,14 @@ function customerDedupe(
  * duplicate is prevented server-side, where the race actually lives, rather
  * than by a client-side re-check that would still be racing.
  *
- * These keys expire upstream after 24 hours — by which time the search index
+ * These keys expire upstream after 24 hours, by which time the search index
  * has long since caught up and the lookup path handles the dedup instead. The
  * two mechanisms cover each other's window.
  *
  * Only used when there IS an identity to key on. A name-only customer keeps a
  * random key: "John Smith" is not an identity, and collapsing two distinct
  * walk-ins of that name into one record would attach a booking to the wrong
- * person — a worse failure than the duplicate this avoids.
+ * person: a worse failure than the duplicate this avoids.
  */
 async function customerCreateKey(dedupeKey: string | undefined): Promise<string> {
   if (dedupeKey === undefined) return globalThis.crypto.randomUUID();
@@ -315,7 +372,7 @@ function findVariation(item: Record<string, any>, variationId: string): Record<s
  * The reply envelope is `catalog_object`, NOT the `object` that
  * RetrieveCatalogObject answers with. Reading `object` here made every catalog
  * write fail against live Square with "expected an object, got undefined", even
- * though the write itself had already succeeded upstream — so the caller both
+ * though the write itself had already succeeded upstream, so the caller both
  * saw an error and had no id for the service Square had just created.
  */
 async function upsertItem(
@@ -331,8 +388,8 @@ async function upsertItem(
   });
   const saved = asRecord(res?.catalog_object, 'square', 'catalog.catalog_object');
   const services = itemToServices(saved);
-  // On a create the caller has no variation id yet — the '#variation'
-  // placeholder they sent is not what comes back — so fall through to the sole
+  // On a create the caller has no variation id yet: the '#variation'
+  // placeholder they sent is not what comes back, so fall through to the sole
   // variation of the item just written.
   const match = variationId ? services.find((s) => s.id === variationId) : services[0];
   if (!match) {
@@ -346,6 +403,37 @@ async function upsertItem(
 }
 
 /**
+ * Add or remove one team member on a service variation's `team_member_ids`,
+ * the list Square consults for who performs it. Read-modify-write against the
+ * item's current version, like updateService; a no-op change is still written
+ * back so the caller always gets the service as Square now holds it.
+ */
+async function setAssignment(
+  http: HttpContext<SquareCredentials>,
+  c: SquareCredentials,
+  serviceId: string,
+  staffId: string,
+  assigned: boolean,
+): Promise<Service> {
+  const { item } = await readServiceItem(http, c, serviceId);
+  const variation = findVariation(item, serviceId);
+  const vd = variation.item_variation_data ?? {};
+  const current: string[] = Array.isArray(vd.team_member_ids)
+    ? vd.team_member_ids.filter((t: unknown): t is string => typeof t === 'string')
+    : [];
+  const next = assigned
+    ? current.includes(staffId)
+      ? current
+      : [...current, staffId]
+    : current.filter((t) => t !== staffId);
+  variation.item_variation_data = { ...vd, team_member_ids: next };
+  const saved = await upsertItem(http, c, item, serviceId);
+  // Square omits `team_member_ids` from the reply once the list is empty, which
+  // would read as "did not say". We just wrote it, so report what we wrote.
+  return saved.staffIds === undefined ? { ...saved, staffIds: next } : saved;
+}
+
+/**
  * Flatten one catalog ITEM into one `Service` per ITEM_VARIATION.
  *
  * This is the round-trip invariant in action: Square's booking API takes the
@@ -353,6 +441,22 @@ async function upsertItem(
  * variation id, not the item id. Returning the item id would enumerate fine and
  * then fail at booking time with an opaque rejection.
  */
+/** Monday-first, matching `HoursPeriod` ordering and Square's own day codes. */
+const WEEKDAYS: Weekday[] = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
+/** Square sends `HH:MM:SS` (occasionally `HH:MM`); the canonical form is `HH:MM`.
+ *  Returns undefined for anything else so a malformed period is dropped rather
+ *  than emitted as a window nobody can place on a calendar. */
+function hhmm(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(v.trim());
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return undefined;
+  return `${m[1]}:${m[2]}`;
+}
+
 function itemToServices(raw: unknown): Service[] {
   const obj = asRecord(raw, 'square', 'catalog.item');
   const data = asRecord(obj.item_data ?? {}, 'square', 'catalog.item_data');
@@ -393,6 +497,16 @@ function itemToServices(raw: unknown): Service[] {
           // services as active. Compared against `false` rather than truth-
           // tested so a variation that simply omits the flag is unaffected.
           active: !deleted && variation.is_deleted !== true && vd.available_for_booking !== false,
+          // Square puts the staff link on the VARIATION, which is what
+          // `Service.id` already is -- so the two join up directly. Undefined
+          // when Square omits the field (it did not say), vs [] (it said none).
+          ...(Array.isArray(vd.team_member_ids)
+            ? {
+                staffIds: vd.team_member_ids.filter(
+                  (t: unknown): t is string => typeof t === 'string',
+                ),
+              }
+            : {}),
           // The owning item stays reachable for consumers that need to regroup.
           raw: { item: obj, variation },
         },
@@ -423,10 +537,28 @@ export const square = defineAdapter<SquareCredentials>({
     webhooks: true,
     idempotency: true,
     customers: true,
+    customerDirectory: true,
+    customerWrite: true,
+    customerDelete: true,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: true,
     staffDirectoryWrite: true,
+    staffDeactivate: true,
+    staffDelete: false,
+    serviceDelete: true,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: true,
+    staffServiceAssignmentWrite: true,
+    serviceCategories: true,
+    businessHours: true,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({
@@ -460,7 +592,7 @@ export const square = defineAdapter<SquareCredentials>({
       assertValidRange(input.range, 'square');
       const c = await http.resolve();
       let customerId = input.customer?.id;
-      // Resolve/attach a customer whenever we have anything to identify them by —
+      // Resolve/attach a customer whenever we have anything to identify them by:
       // name, email, or phone. `findOrCreateCustomer` handles the name-only case
       // (no dedup filter, straight create), so gating on email/phone alone
       // silently dropped a name-only customer.
@@ -483,7 +615,7 @@ export const square = defineAdapter<SquareCredentials>({
       // that names the field.
       //
       // A caller supplying `appointment_segments` has replaced the segment
-      // wholesale — a documented escape hatch — so validating the fields they
+      // wholesale, a documented escape hatch, so validating the fields they
       // deliberately overrode would break working code.
       if (bookingOptions.appointment_segments === undefined) {
         requireCreateField(
@@ -494,10 +626,24 @@ export const square = defineAdapter<SquareCredentials>({
           input.staffId,
           'Square createBooking requires a staffId (team_member_id)',
         );
+      }
+      // The segment must pin the service variation's catalog version. A caller
+      // who has it (e.g. from a searchAvailability slot's
+      // raw.appointment_segments[0].service_variation_version) passes it and
+      // saves a request; otherwise it is read from the catalog here, since
+      // demanding it made the plain canonical createBooking unusable.
+      let segmentVersion = service_variation_version;
+      if (
+        segmentVersion === undefined &&
+        bookingOptions.appointment_segments === undefined &&
+        input.serviceId
+      ) {
+        const obj = await http.request(c, { path: `catalog/object/${enc(input.serviceId)}` });
+        segmentVersion = obj?.object?.version;
         requireCreateField(
-          service_variation_version,
-          'Square createBooking requires providerOptions.service_variation_version — ' +
-            "read it from a searchAvailability slot's raw.appointment_segments[0].service_variation_version",
+          segmentVersion,
+          `Square createBooking could not read the catalog version of service ${input.serviceId}; ` +
+            'pass providerOptions.service_variation_version',
         );
       }
       const res = await http.request(c, {
@@ -519,7 +665,9 @@ export const square = defineAdapter<SquareCredentials>({
               {
                 ...(input.staffId ? { team_member_id: input.staffId } : {}),
                 ...(input.serviceId ? { service_variation_id: input.serviceId } : {}),
-                ...(service_variation_version !== undefined ? { service_variation_version } : {}),
+                ...(segmentVersion !== undefined
+                  ? { service_variation_version: segmentVersion }
+                  : {}),
               },
             ],
             ...bookingOptions,
@@ -551,7 +699,7 @@ export const square = defineAdapter<SquareCredentials>({
       }
       const c = await http.resolve();
       // Square PUT requires the current version for optimistic concurrency, and
-      // replaces appointment_segments wholesale — so to change staff/service we
+      // replaces appointment_segments wholesale, so to change staff/service we
       // must merge onto the current segment.
       const needSegment = input.staffId !== undefined || input.serviceId !== undefined;
       let version = input.providerOptions?.version;
@@ -568,11 +716,30 @@ export const square = defineAdapter<SquareCredentials>({
           : [];
         curSeg = segs[0];
       }
+      // A segment pins its service's catalog version and duration. Swapping the
+      // service onto the current segment kept the OLD service's
+      // `service_variation_version`, which Square rejects for the new variation
+      // (and its old `duration_minutes`), so a service change could never land.
+      // Pin the new service's version instead and let its own duration apply.
+      const serviceChanged =
+        input.serviceId !== undefined && input.serviceId !== curSeg?.service_variation_id;
+      let newVersion: unknown;
+      if (serviceChanged) {
+        const obj = await http.request(c, { path: `catalog/object/${enc(input.serviceId!)}` });
+        newVersion = obj?.object?.version;
+        requireCreateField(
+          newVersion,
+          `Square updateBooking could not read the catalog version of service ${input.serviceId}`,
+        );
+      }
+      const { service_variation_version: _v, duration_minutes: _d, ...kept } = curSeg ?? {};
       const segment = needSegment
         ? {
-            ...(curSeg ?? {}),
+            ...(serviceChanged ? kept : (curSeg ?? {})),
             ...(input.staffId ? { team_member_id: input.staffId } : {}),
-            ...(input.serviceId ? { service_variation_id: input.serviceId } : {}),
+            ...(serviceChanged
+              ? { service_variation_id: input.serviceId, service_variation_version: newVersion }
+              : {}),
           }
         : undefined;
       const res = await http.request(c, {
@@ -596,7 +763,7 @@ export const square = defineAdapter<SquareCredentials>({
       const c = await http.resolve();
       // Square's CancelBooking body is { idempotency_key, booking_version }. There
       // is no field for a cancellation reason (seller_note is not a CancelBooking
-      // field — to set one you'd UpdateBooking first) and `notify` isn't
+      // field, to set one you'd UpdateBooking first) and `notify` isn't
       // controllable here. `booking_version` gives optimistic concurrency (cancel
       // only if the version you saw is still current); pass it via
       // `providerOptions: { booking_version }`.
@@ -672,6 +839,62 @@ export const square = defineAdapter<SquareCredentials>({
       });
     },
 
+    async listCategories() {
+      const c = await http.resolve();
+      const res = await http.request(c, {
+        method: 'POST',
+        // SearchCatalogObjects is POST /v2/catalog/search. (There is no
+        // `search-catalog-objects` path; that 404s on every account.)
+        path: 'catalog/search',
+        body: { object_types: ['CATEGORY'], include_deleted_objects: false },
+      });
+      const categories = asArray(res?.objects ?? [], 'square', 'catalog.objects').flatMap(
+        (raw): ServiceCategory[] => {
+          const o = asRecord(raw, 'square', 'catalog.category');
+          const data = asRecord(o.category_data ?? {}, 'square', 'catalog.category_data');
+          const id = typeof o.id === 'string' ? o.id : '';
+          const name = typeof data.name === 'string' ? data.name : '';
+          if (!id) return [];
+          return [{ id, name: name || id, provider: 'square' as const, raw: o }];
+        },
+      );
+      return {
+        categories,
+        ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+      };
+    },
+
+    async getBusinessHours() {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: `locations/${encodeURIComponent(c.locationId)}` });
+      const location = asRecord(res?.location, 'square', 'location');
+      const hours = asRecord(location.business_hours ?? {}, 'square', 'location.business_hours');
+      const periods = asArray(hours.periods ?? [], 'square', 'business_hours.periods')
+        .flatMap((raw): HoursPeriod[] => {
+          const p = asRecord(raw, 'square', 'business_hours.period');
+          const day = WEEKDAYS.find((d) => d === String(p.day_of_week ?? '').toUpperCase());
+          const start = hhmm(p.start_local_time);
+          const end = hhmm(p.end_local_time);
+          // A period missing any of the three cannot be placed on a calendar;
+          // drop it rather than emit a half-formed window. It stays in `raw`.
+          if (!day || start === undefined || end === undefined) return [];
+          return [{ dayOfWeek: day, start, end }];
+        })
+        .sort(
+          (a, b) =>
+            WEEKDAYS.indexOf(a.dayOfWeek) - WEEKDAYS.indexOf(b.dayOfWeek) ||
+            a.start.localeCompare(b.start),
+        );
+      return {
+        provider: 'square' as const,
+        ...(typeof location.timezone === 'string' && location.timezone
+          ? { timezone: location.timezone }
+          : {}),
+        periods,
+        raw: location,
+      };
+    },
+
     async listServices(query) {
       const c = await http.resolve();
       const res = await http.request(c, {
@@ -686,7 +909,18 @@ export const square = defineAdapter<SquareCredentials>({
           ...(query?.pageToken ? { cursor: query.pageToken } : {}),
         },
       });
-      const services = asArray(res?.items, 'square', 'catalog.items').flatMap(itemToServices);
+      let services = asArray(res?.items, 'square', 'catalog.items').flatMap(itemToServices);
+      // Filtered here rather than upstream: search-catalog-items has no
+      // team-member filter, and its category filter keys on the ITEM while
+      // `Service.categoryId` is carried per variation.
+      if (query?.staffId) {
+        const want = query.staffId;
+        services = services.filter((sv) => sv.staffIds?.includes(want) ?? false);
+      }
+      if (query?.categoryId) {
+        const want = query.categoryId;
+        services = services.filter((sv) => sv.categoryId === want);
+      }
       return {
         services,
         ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
@@ -707,7 +941,25 @@ export const square = defineAdapter<SquareCredentials>({
           ...(query?.pageToken ? { cursor: query.pageToken } : {}),
         },
       });
-      const staff = asArray(res?.team_members, 'square', 'team_members').map(toStaff);
+      let staff = asArray(res?.team_members, 'square', 'team_members').map(toStaff);
+      if (query?.serviceId) {
+        // Square models the link on the catalog variation, not the team member,
+        // so answering "who performs this service" means reading it from there.
+        // One extra call, and only when the filter is actually used.
+        const svc = await http.request(c, {
+          path: `catalog/object/${enc(query.serviceId)}`,
+        });
+        const variation = asRecord(svc?.object ?? {}, 'square', 'catalog.object');
+        const vd = asRecord(
+          variation.item_variation_data ?? {},
+          'square',
+          'catalog.item_variation_data',
+        );
+        const ids = Array.isArray(vd.team_member_ids)
+          ? vd.team_member_ids.filter((t: unknown): t is string => typeof t === 'string')
+          : [];
+        staff = staff.filter((m) => ids.includes(m.id));
+      }
       return {
         staff,
         ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
@@ -745,7 +997,7 @@ export const square = defineAdapter<SquareCredentials>({
               item_variation_data: {
                 // "Regular" is Square's default variation name, and
                 // `itemToServices` deliberately does not append it to the
-                // service name — so a single-variation service reads cleanly.
+                // service name, so a single-variation service reads cleanly.
                 name: 'Regular',
                 pricing_type: input.price ? 'FIXED_PRICING' : 'VARIABLE_PRICING',
                 available_for_booking: true,
@@ -807,8 +1059,7 @@ export const square = defineAdapter<SquareCredentials>({
       const variation = findVariation(item, id);
       // `available_for_booking` is the honest lever: it makes the variation
       // unbookable while leaving it, its history and its past bookings intact.
-      // Square's actual delete cascades from the item down through every
-      // variation, which is why no `deleteService` exists.
+      // (`deleteService` removes it outright instead.)
       variation.item_variation_data = {
         ...(variation.item_variation_data ?? {}),
         available_for_booking: active,
@@ -871,10 +1122,126 @@ export const square = defineAdapter<SquareCredentials>({
       return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
     },
 
+    async getService(id) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      const found = itemToServices(item).find((sv) => sv.id === id);
+      if (!found) {
+        throw new UnibookingError({
+          provider: 'square',
+          code: 'NOT_FOUND',
+          message: `service ${id} not found`,
+        });
+      }
+      return found;
+    },
+
+    async getStaff(id) {
+      const c = await http.resolve();
+      const res = await http.request(c, { path: `team-members/${enc(id)}` });
+      return toStaff(asRecord(res?.team_member, 'square', 'team_member'));
+    },
+
+    async deleteService(id) {
+      const c = await http.resolve();
+      const { item } = await readServiceItem(http, c, id);
+      // Deleting an ITEM cascades to every variation under it, and each
+      // variation is its own Service. So delete just this variation, unless it
+      // is the item's last one -- then the item goes too, rather than leaving
+      // an empty item behind that no listing would ever show.
+      const variations = Array.isArray(item.item_data?.variations)
+        ? item.item_data.variations.filter((v: any) => v?.is_deleted !== true)
+        : [];
+      const target = variations.length > 1 ? id : String(item.id);
+      await http.request(c, { method: 'DELETE', path: `catalog/object/${enc(target)}` });
+    },
+
+    async assignStaffToService(serviceId, staffId) {
+      return setAssignment(http, await http.resolve(), serviceId, staffId, true);
+    },
+
+    async unassignStaffFromService(serviceId, staffId) {
+      return setAssignment(http, await http.resolve(), serviceId, staffId, false);
+    },
+
     customers: {
       findOrCreate: async (customer) => {
         const c = await http.resolve();
         return findOrCreateCustomer(http, c, customer);
+      },
+
+      // Email/phone filters use SearchCustomers (server-side, exact match);
+      // otherwise ListCustomers. Both page by `cursor`, at most 100.
+      list: async (query) => {
+        const c = await http.resolve();
+        const limit = Math.min(query?.limit ?? 100, 100);
+        const filter = query?.email
+          ? { email_address: { exact: query.email } }
+          : query?.phone
+            ? { phone_number: { exact: query.phone } }
+            : undefined;
+        const res = filter
+          ? await http.request(c, {
+              method: 'POST',
+              path: 'customers/search',
+              body: {
+                query: { filter },
+                limit,
+                ...(query?.pageToken ? { cursor: query.pageToken } : {}),
+              },
+            })
+          : await http.request(c, {
+              path: 'customers',
+              query: { limit, ...(query?.pageToken ? { cursor: query.pageToken } : {}) },
+            });
+        const customers = asArray(res?.customers ?? [], 'square', 'customers').map(
+          toCustomerRecord,
+        );
+        return {
+          customers,
+          ...(typeof res?.cursor === 'string' && res.cursor ? { nextPageToken: res.cursor } : {}),
+        };
+      },
+
+      get: async (id) => {
+        const c = await http.resolve();
+        const res = await http.request(c, { path: `customers/${enc(id)}` });
+        return toCustomerRecord(res?.customer);
+      },
+
+      create: async (input) => {
+        if (!input.name?.trim() && !input.email && !input.phone) {
+          throw new UnibookingError({
+            provider: 'square',
+            code: 'INVALID_INPUT',
+            message: 'A customer needs at least a name, email or phone',
+          });
+        }
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'customers',
+          body: {
+            idempotency_key: globalThis.crypto.randomUUID(),
+            ...customerBody(input, false),
+          },
+        });
+        return toCustomerRecord(res?.customer);
+      },
+
+      update: async (id, input) => {
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          method: 'PUT',
+          path: `customers/${enc(id)}`,
+          body: customerBody(input, true),
+        });
+        return toCustomerRecord(res?.customer);
+      },
+
+      delete: async (id) => {
+        const c = await http.resolve();
+        await http.request(c, { method: 'DELETE', path: `customers/${enc(id)}` });
       },
     },
   }),

@@ -1,7 +1,7 @@
 import { defineOAuth, type OAuthClient, type OAuthConfig } from './core';
 
 /**
- * Calendly OAuth2. **Server-only** — takes a client secret.
+ * Calendly OAuth2. **Server-only**: takes a client secret.
  *
  * Authorization codes expire after **10 minutes**, so the callback must
  * exchange promptly rather than queueing the work.

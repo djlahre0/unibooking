@@ -17,15 +17,15 @@ import { localToInstant } from '../tz';
 
 /**
  * Setmore (Booking API). Gated beta: a paid Setmore Pro account plus manual
- * access approval (email api@setmore.com). Bring your own bearer access token —
+ * access approval (email api@setmore.com). Bring your own bearer access token:
  * exchange your long-lived refresh token for one yourself via
- * `GET api/v1/o/oauth2/token?refreshToken=…` (access tokens last 7200 seconds —
- * two hours — so a long-lived process must refresh, not cache).
+ * `GET api/v1/o/oauth2/token?refreshToken=…` (access tokens last 7200 seconds:
+ * two hours, so a long-lived process must refresh, not cache).
  *
  * ## Two API generations, and you need both
  *
  * Setmore serves `api/v1/bookingapi` and `api/v2/bookingapi` side by side on the
- * same host, and they are **not** interchangeable — neither is a superset of the
+ * same host, and they are **not** interchangeable, neither is a superset of the
  * other, so this adapter pins each operation to the generation that actually
  * routes it:
  *
@@ -37,7 +37,7 @@ import { localToInstant } from '../tz';
  * | `PUT /appointments/{id}/label`| ✅    | ✅    | v1   |
  * | `PUT /appointments/{id}`      | 405   | ✅    | v2   |
  * | `DELETE /appointments/{id}`   | ✅    | ✅    | v2   |
- * | `GET /appointments/{id}`      | 405   | 405   | —    |
+ * | `GET /appointments/{id}`      | 405   | 405   | -    |
  *
  * Availability is the reason the whole adapter can't simply move to v2: `slots`
  * exists only on v1. Reschedule is the reason it can't stay on v1: `PUT` on the
@@ -45,19 +45,19 @@ import { localToInstant } from '../tz';
  * routing alone can't settle it; it is pinned to v2 to sit on the same
  * generation as reschedule (and because that is the generation reported to work
  * in practice), overridable per call with `providerOptions: { apiVersion: 'v1' }`.
- * Nothing "documents" v2 — see below.
+ * Nothing "documents" v2: see below.
  *
  * The published OpenAPI spec (developers.setmore.com) describes only the ten v1
  * routes and omits the v2 generation entirely, so `PUT`/`DELETE` on the
  * appointment resource are **verified to route** (401 with no token vs 404 for
  * an unrouted path) but their request/response bodies are inferred from the
- * create endpoint's shape. There is no sandbox — confirm against a throwaway
+ * create endpoint's shape. There is no sandbox: confirm against a throwaway
  * account before relying on them.
  *
  * `getBooking` remains genuinely absent: `GET /appointments/{id}` answers 405 on
  * both generations, so it still throws UNSUPPORTED.
  *
- * Three different day-first date encodings are in play — `dd-mm-yyyy` when
+ * Three different day-first date encodings are in play: `dd-mm-yyyy` when
  * listing, `DD/MM/YYYY` for slots, and `yyyy-MM-ddTHH:mm` on create. They are not
  * interchangeable.
  */
@@ -75,7 +75,7 @@ export type SetmoreCredentials = {
 const BASE = 'https://developer.setmore.com/';
 
 /** The two generations. Every path below is written against one of these
- *  explicitly — there is no "current version" default, because picking one
+ *  explicitly, there is no "current version" default, because picking one
  *  wrongly is exactly the bug this split exists to prevent. */
 const V1 = 'api/v1/bookingapi';
 const V2 = 'api/v2/bookingapi';
@@ -115,7 +115,7 @@ function enc(id: string): string {
 }
 
 /** Setmore wraps every payload as `{ response, data, msg }` and signals failure
- *  with `response: false` — sometimes alongside a 2xx status, so the HTTP layer
+ *  with `response: false`: sometimes alongside a 2xx status, so the HTTP layer
  *  alone can't be trusted to surface it. */
 function assertOk(res: unknown): unknown {
   const envelope = res as any;
@@ -134,7 +134,7 @@ function dataOf(res: unknown): Record<string, any> {
   return asRecord(assertOk(res), 'setmore', 'response.data');
 }
 
-/** `data` unwrapped without asserting object-ness — the slots endpoint may
+/** `data` unwrapped without asserting object-ness: the slots endpoint may
  *  legitimately return a bare array (see `slotValues`). */
 function rawDataOf(res: unknown): unknown {
   return assertOk(res);
@@ -150,20 +150,20 @@ function localParts(iso: string): { y: number; m: number; d: number } {
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 
-/** `dd-mm-yyyy` — the list endpoint's format. */
+/** `dd-mm-yyyy`: the list endpoint's format. */
 function toDashDate(iso: string): string {
   const { y, m, d } = localParts(iso);
   return `${pad(d)}-${pad(m)}-${y}`;
 }
 
-/** `DD/MM/YYYY` — the slots endpoint's format. Same ordering, different separator. */
+/** `DD/MM/YYYY`: the slots endpoint's format. Same ordering, different separator. */
 function toSlashDate(y: number, m: number, d: number): string {
   return `${pad(d)}/${pad(m)}/${y}`;
 }
 
-/** `yyyy-MM-ddTHH:mmZ` — create/response format. Setmore documents no seconds,
+/** `yyyy-MM-ddTHH:mmZ`: create/response format. Setmore documents no seconds,
  *  so this conversion is lossy by design: `09:00:45Z` goes out as `09:00Z`. It
- *  truncates rather than rounds, which can only move a bound earlier — never
+ *  truncates rather than rounds, which can only move a bound earlier, never
  *  past an instant the caller excluded. */
 function toSetmoreInstant(iso: string): string {
   const ms = Date.parse(iso);
@@ -177,7 +177,7 @@ function toSetmoreInstant(iso: string): string {
   return `${new Date(ms).toISOString().slice(0, 16)}Z`;
 }
 
-/** Each calendar day the range touches, each endpoint read in its OWN offset —
+/** Each calendar day the range touches, each endpoint read in its OWN offset:
  *  RFC3339 lets `end` carry a different one (e.g. across a DST change), and
  *  reusing the start's offset shifts the last day. */
 function datesInRange(
@@ -195,7 +195,7 @@ function datesInRange(
     ),
   );
   // `range.end` is exclusive, so a day that begins exactly at it is not touched
-  // by the range — `<=` here spent a request on the day after a whole-day query
+  // by the range: `<=` here spent a request on the day after a whole-day query
   // and returned that day's slots as if they were in range.
   while (cursor.getTime() < endMs) {
     // An over-wide range is a caller error, not something to quietly truncate.
@@ -212,7 +212,7 @@ function datesInRange(
   return out;
 }
 
-/** The docs' slots response sample is not valid JSON — a bare array sits inside
+/** The docs' slots response sample is not valid JSON: a bare array sits inside
  *  an object with no key, so it's genuinely ambiguous whether the wire format is
  *  `data: [...]` or `data: { slots: [...] }`. Accept either. */
 function slotValues(data: unknown): unknown[] {
@@ -279,7 +279,7 @@ function toBooking(raw: unknown): Booking {
           },
         }
       : {}),
-    // Setmore returns no status field on any documented appointment shape —
+    // Setmore returns no status field on any documented appointment shape:
     // every appointment it hands back is implicitly active.
     status: 'confirmed',
     raw: a,
@@ -317,7 +317,7 @@ async function findOrCreateCustomer(
 ): Promise<string> {
   if (customer.id) return customer.id;
   const [first, ...rest] = (customer.name ?? '').trim().split(/\s+/).filter(Boolean);
-  // Lookup requires `firstname` — Setmore offers no email-only search, so a
+  // Lookup requires `firstname`: Setmore offers no email-only search, so a
   // nameless customer can only ever be created, never matched.
   if (first) {
     const res = await http.request(c, {
@@ -358,7 +358,7 @@ function toService(raw: unknown, categories: Map<string, string>, currency?: str
     ...(amount !== undefined && currency ? { price: { amount, currency } } : {}),
     ...(categoryKey ? { categoryId: categoryKey } : {}),
     ...(categoryName ? { categoryName } : {}),
-    // Setmore's service payload carries no active/inactive flag — everything it
+    // Setmore's service payload carries no active/inactive flag: everything it
     // returns is bookable.
     active: true,
     raw: s,
@@ -388,10 +388,28 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     webhooks: false,
     idempotency: false,
     customers: true,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ headers: { authorization: `Bearer ${c.accessToken}` } }),
@@ -437,17 +455,17 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     getBooking: async () =>
       unsupported(
         'setmore',
-        'getBooking (neither API generation exposes a fetch-by-id — GET on the appointment resource is 405 on both; use listBookings over a date range)',
+        'getBooking (neither API generation exposes a fetch-by-id: GET on the appointment resource is 405 on both; use listBookings over a date range)',
       ),
 
     async updateBooking(id, input) {
       // An appointment carries no status field, so a status change can't be
-      // expressed as an edit. Reject it here — otherwise it falls through to the
+      // expressed as an edit. Reject it here, otherwise it falls through to the
       // label path and surfaces as a bogus "requires a title".
       if (input.status !== undefined) {
         return unsupported(
           'setmore',
-          'updateBooking of status (an appointment carries no status field — use cancelBooking to cancel one)',
+          'updateBooking of status (an appointment carries no status field: use cancelBooking to cancel one)',
         );
       }
 
@@ -457,7 +475,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       // A title-only edit stays on the documented v1 label sub-resource: it is
       // the narrower call, and it can't disturb the booking's time or staffing.
       // `/label` routes on both generations, so `apiVersion` is honored here too
-      // — otherwise the same option would work on one branch of this method and
+      // otherwise the same option would work on one branch of this method and
       // be silently ignored on the other.
       if (!reschedules) {
         const label = requireField(
@@ -475,7 +493,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       }
 
       if (input.range) assertValidRange(input.range, 'setmore');
-      // v2 only — v1 answers 405 on PUT against the appointment resource.
+      // v2 only: v1 answers 405 on PUT against the appointment resource.
       const { prefix, rest } = takeApiVersion(input.providerOptions, 'v2');
       const c = await http.resolve();
       const res = await http.request(c, {
@@ -498,7 +516,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     },
 
     async cancelBooking(id, options) {
-      // Setmore deletes rather than cancels — there is no status to move an
+      // Setmore deletes rather than cancels, there is no status to move an
       // appointment into, so the appointment is removed outright. The endpoint
       // takes no documented reason or notify field, so `options.reason` and
       // `options.notify` are ignored.
@@ -512,7 +530,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
           path: `${prefix}/appointments/${enc(id)}`,
           // `CancelOptions.providerOptions` is contractually shallow-merged into
           // the body, so anything left after `apiVersion` is forwarded rather
-          // than dropped. Omit the body entirely when there is nothing to send —
+          // than dropped. Omit the body entirely when there is nothing to send:
           // a bare `{}` on a DELETE is a needless deviation from the plain call.
           ...(Object.keys(rest).length > 0 ? { body: rest } : {}),
         }),
@@ -534,19 +552,23 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       });
       const data = dataOf(res);
       // startDate/endDate are whole dates (dd-mm-yyyy), so Setmore returns both
-      // entire end days regardless of the times asked for. Trim to the instants,
-      // then apply `limit` — the endpoint takes no page-size parameter, so
-      // ignoring it silently returned the whole day to a caller who asked for
-      // three bookings.
+      // entire end days regardless of the times asked for. Trim to the instants.
       let bookings = bookingsWithinRange(
         asArray(data?.appointments, 'setmore', 'appointments').map(toBooking),
         query.range,
       );
-      if (query.limit !== undefined && query.limit >= 0) bookings = bookings.slice(0, query.limit);
       const cursor = data?.cursor;
       // Docs never specify how the final page is signalled; treat an absent,
       // empty, or unchanged cursor as terminal.
       const isTerminal = typeof cursor !== 'string' || cursor === '' || cursor === query.pageToken;
+      // The endpoint takes no page-size parameter, so ignoring `limit` silently
+      // returned the whole day to a caller who asked for three bookings. But
+      // only a TERMINAL page may be cut: slicing one that carries a cursor drops
+      // the bookings between the cut and the next page, and a caller paging
+      // forward never sees them (same rule as defineAdapter's `capPage`).
+      if (isTerminal && query.limit !== undefined && query.limit >= 0) {
+        bookings = bookings.slice(0, query.limit);
+      }
       return {
         bookings,
         ...(isTerminal ? {} : { nextPageToken: cursor }),
@@ -573,7 +595,7 @@ export const setmore = defineAdapter<SetmoreCredentials>({
       // caller's range offset would silently misplace every slot across DST.
       const timezone = requireField(
         query.range.timezone,
-        'range.timezone (IANA) for availability — slot times carry no offset',
+        'range.timezone (IANA) for availability: slot times carry no offset',
       );
       const durationMinutes = query.durationMinutes;
       const c = await http.resolve();
@@ -618,11 +640,11 @@ export const setmore = defineAdapter<SetmoreCredentials>({
     async listServices() {
       const c = await http.resolve();
       // Categories arrive as a separate flat list keyed by `category_key`. One
-      // extra request for the whole set — never one per service.
+      // extra request for the whole set, never one per service.
       const [servicesRes, categoriesRes] = await Promise.all([
         http.request(c, { path: `${V1}/services` }),
         // `categoryName` is decorative. A categories failure (a narrower token,
-        // an outage on that route) must not sink the whole catalog read — the
+        // an outage on that route) must not sink the whole catalog read: the
         // services still carry `categoryId`, and the raw payload is intact.
         http.request(c, { path: `${V1}/services/categories` }).catch(() => undefined),
       ]);

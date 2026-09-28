@@ -10,7 +10,7 @@ import { hmacSha256Hex, timingSafeEqual } from '../crypto';
  * Calendly's docs recommend rejecting deliveries whose `t=` timestamp is older
  * than a small tolerance (they suggest 3 minutes) to blunt replay attacks. Pass
  * `toleranceMs` to enable that check (off by default so a caller with clock
- * skew isn't silently locked out) — same opt-in shape as the Bookeo helper.
+ * skew isn't silently locked out): same opt-in shape as the Bookeo helper.
  */
 export interface CalendlyWebhookInput {
   signingKey: string;
@@ -38,7 +38,7 @@ function parseHeader(header: string): { t?: string; v1?: string } {
 }
 
 export async function verifyCalendlySignature(input: CalendlyWebhookInput): Promise<boolean> {
-  // A missing header is an unsigned request, not a crash — see `timingSafeEqual`.
+  // A missing header is an unsigned request, not a crash: see `timingSafeEqual`.
   if (typeof input.signatureHeader !== 'string' || input.signatureHeader === '') return false;
   const { t, v1 } = parseHeader(input.signatureHeader);
   if (!t || !v1) return false;

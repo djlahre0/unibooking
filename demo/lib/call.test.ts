@@ -5,7 +5,7 @@ import type { Connection } from './result';
 /**
  * `run()` in call.ts is the single point both transports (direct + proxy) pass
  * through, so this is where a baseUrl override must be validated for the 7
- * "direct" providers too — they never touch the demo's server, so the proxy
+ * "direct" providers too: they never touch the demo's server, so the proxy
  * route's guard can't help them. These tests exercise `run()` via a direct
  * provider (google, phorest) end-to-end; a real network call would mean the
  * guard didn't fire, so fetch is always stubbed, per the idiom in
@@ -47,9 +47,9 @@ const FAKE_PHOREST_APPOINTMENT = {
   confirmed: true,
 };
 
-describe('run() — baseUrl guard shared by direct and proxy transports', () => {
+describe('run(): baseUrl guard shared by direct and proxy transports', () => {
   it('rejects a disallowed base URL for a direct provider without ever calling fetch', async () => {
-    // Never stub with data that would resolve — fetch must not be reached at all.
+    // Never stub with data that would resolve: fetch must not be reached at all.
     stubFetch(FAKE_GOOGLE_EVENT);
     const conn: Connection = {
       creds: { accessToken: 'tok', calendarId: 'primary' },
@@ -71,7 +71,7 @@ describe('run() — baseUrl guard shared by direct and proxy transports', () => 
         businessId: 'biz1',
         branchId: 'branch1',
       },
-      // Phorest's sandbox host — a genuinely separate hostname from prod.
+      // Phorest's sandbox host: a genuinely separate hostname from prod.
       baseUrl: 'https://api-gateway-dev.phorest.com/third-party-api-server/api/',
     };
     const result = await callGetBooking('phorest', conn, 'A1');

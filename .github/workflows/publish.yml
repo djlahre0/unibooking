@@ -1,7 +1,7 @@
 name: Publish to npm
 
 # Publishes the package whenever a GitHub Release is published, or on manual
-# dispatch. The version that ships is whatever is in package.json — npm rejects
+# dispatch. The version that ships is whatever is in package.json: npm rejects
 # re-publishing an existing version, so bump + tag + release for each release.
 on:
   release:
@@ -37,7 +37,7 @@ jobs:
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           if npm view "unibooking@${VERSION}" version >/dev/null 2>&1; then
-            echo "unibooking@${VERSION} is already published — skipping."
+            echo "unibooking@${VERSION} is already published: skipping."
           else
             npm publish --provenance --access public
           fi

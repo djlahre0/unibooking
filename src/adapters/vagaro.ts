@@ -16,7 +16,7 @@ import { slotsWithinRange } from '../availability';
 /**
  * Vagaro Enterprise Business API V2. Public docs, enterprise-gated access.
  *
- * Auth is an `accessToken` header (an apiKey scheme) — **not** `Authorization:
+ * Auth is an `accessToken` header (an apiKey scheme), **not** `Authorization:
  * Bearer`. Mint one with
  * `POST /{region}/api/v2/merchants/generate-access-token` (clientId +
  * clientSecretKey + scope); tokens last one hour and there is no refresh token,
@@ -35,7 +35,7 @@ import { slotsWithinRange } from '../availability';
  *    emit the wall-clock time as written in the caller's own offset.
  *  - **There is no date-range list.** `POST /appointments` requires
  *    `appointmentId` or `customerId`, so `listBookings` is only supported when a
- *    `customerId` is supplied — and since it returns that customer's whole
+ *    `customerId` is supplied, and since it returns that customer's whole
  *    history, `query.range` is applied client-side.
  */
 export type VagaroCredentials = {
@@ -52,14 +52,14 @@ function enc(id: string): string {
   return encodeURIComponent(id);
 }
 
-/** Vagaro ids are opaque base64-ish strings containing `=`, `+`, `~` — they must
+/** Vagaro ids are opaque base64-ish strings containing `=`, `+`, `~`: they must
  *  be percent-encoded in path position. */
 function apiPath(c: VagaroCredentials, sub: string): string {
   return `${enc(c.region)}/api/v2/${sub}`;
 }
 
 /** Wall-clock time as written in an offset-bearing RFC3339 string, with the
- *  offset dropped — Vagaro's write format ("in local time", no zone). */
+ *  offset dropped: Vagaro's write format ("in local time", no zone). */
 function toVagaroLocal(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) {
@@ -83,14 +83,24 @@ function toVagaroDate(iso: string): string {
  *  fan out unboundedly (see MAX_AVAILABILITY_DAYS). */
 const MAX_AVAILABILITY_DAYS = 31;
 
-/** The `yyyy-mm-dd` dates (in `range.start`'s offset) that a window overlaps. */
+/** The `yyyy-mm-dd` dates (in `range.start`'s offset) that a window overlaps.
+ *  Past the cap this throws. A window of at most 31 days can still touch 32
+ *  dates (10:00 on the 1st to 09:00 on the 1st a month later), and stopping
+ *  the loop at the cap answered for 31 of them with no sign the last was cut. */
 function datesInRange(startIso: string, endIso: string): string[] {
   const offset = /([+-]\d{2}:\d{2}|Z)$/i.exec(startIso)?.[1] ?? 'Z';
   const endMs = Date.parse(endIso);
   const dates: string[] = [];
   let dateStr = toVagaroDate(startIso);
-  for (let i = 0; i < MAX_AVAILABILITY_DAYS; i++) {
+  for (;;) {
     if (Date.parse(`${dateStr}T00:00:00${offset}`) >= endMs) break;
+    if (dates.length >= MAX_AVAILABILITY_DAYS) {
+      throw new UnibookingError({
+        provider: 'vagaro',
+        code: 'INVALID_INPUT',
+        message: `Vagaro availability is queried one day at a time; ranges may not touch more than ${MAX_AVAILABILITY_DAYS} dates`,
+      });
+    }
     dates.push(dateStr);
     const d = new Date(`${dateStr}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() + 1);
@@ -205,10 +215,28 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     idempotency: false,
     // Vagaro exposes /customers CRUD, but this adapter does not model it yet.
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: false,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   // apiKey scheme: a raw `accessToken` header, not `Authorization: Bearer`.
@@ -235,7 +263,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         'a staffId (serviceProviderId) to book',
       );
       const customerId = requireField(input.customer?.id, 'a customer id to book');
-      // The create endpoint takes a top-level array — it is a batch endpoint.
+      // The create endpoint takes a top-level array: it is a batch endpoint.
       const res = await http.request(c, {
         method: 'POST',
         path: apiPath(c, 'appointments/create'),
@@ -274,7 +302,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'vagaro');
       // The PUT has no status field, and cancelBooking deletes rather than
-      // transitions — so a status here would look applied and change nothing.
+      // transitions, so a status here would look applied and change nothing.
       if (input.status !== undefined) {
         throw new UnibookingError({
           provider: 'vagaro',
@@ -300,11 +328,11 @@ export const vagaro = defineAdapter<VagaroCredentials>({
           businessId: c.businessId,
           serviceId: requireField(
             input.serviceId ?? current.serviceId,
-            'a serviceId to update — the current appointment carries none to fall back on',
+            'a serviceId to update: the current appointment carries none to fall back on',
           ),
           serviceProviderId: requireField(
             input.staffId ?? current.staffId,
-            'a staffId (serviceProviderId) to update — the current appointment carries none to fall back on',
+            'a staffId (serviceProviderId) to update: the current appointment carries none to fall back on',
           ),
           appointmentType:
             typeof raw.eventType === 'string' && raw.eventType.toLowerCase() === 'class'
@@ -317,7 +345,7 @@ export const vagaro = defineAdapter<VagaroCredentials>({
           ...(input.title !== undefined ? { appointmentNote: input.title.slice(0, 500) } : {}),
           ...input.providerOptions,
         },
-        // Update returns `data: ""` — nothing useful to parse.
+        // Update returns `data: ""`: nothing useful to parse.
         parse: 'none',
       });
       return fetchAppointment(http, c, id);
@@ -359,10 +387,10 @@ export const vagaro = defineAdapter<VagaroCredentials>({
         body: { businessId: c.businessId, customerId: query.customerId },
       });
       const rows = asArray((res as any)?.data, 'vagaro', 'appointments');
-      // The endpoint takes no date window — it returns the customer's whole
-      // history — so trim to the instants the caller actually asked for.
+      // The endpoint takes no date window: it returns the customer's whole
+      // history, so trim to the instants the caller actually asked for.
       const bookings = bookingsWithinRange(rows.map(toBooking), query.range);
-      // No pagination envelope exists — page numerically until a short page, and
+      // No pagination envelope exists: page numerically until a short page, and
       // only when a real page size was asked for. Falling back to `rows.length`
       // made `rows.length >= pageSize` true on every non-empty page, so a caller
       // looping to exhaustion never terminated.

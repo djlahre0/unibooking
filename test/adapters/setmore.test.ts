@@ -72,7 +72,7 @@ runConformance({
 
 describe('setmore: operations the API genuinely lacks', () => {
   it('getBooking throws UNSUPPORTED', async () => {
-    // GET /appointments/{id} answers 405 on BOTH v1 and v2 — the path is routed
+    // GET /appointments/{id} answers 405 on BOTH v1 and v2: the path is routed
     // (it backs DELETE) but no generation exposes a fetch-by-id.
     const err = await makeClient()
       .getBooking('A1')
@@ -133,7 +133,7 @@ describe('setmore wire format', () => {
       range: { start: '2026-02-12T00:00:00Z', end: '2026-03-12T00:00:00Z' },
     });
 
-    // dd-mm-yyyy for the list endpoint — not the slots endpoint's DD/MM/YYYY.
+    // dd-mm-yyyy for the list endpoint, not the slots endpoint's DD/MM/YYYY.
     expect(seen.path).toContain('startDate=12-02-2026');
     expect(seen.path).toContain('endDate=12-03-2026');
   });
@@ -369,7 +369,7 @@ describe('setmore wire format', () => {
     expect(err?.message).toContain('62');
   });
 
-  it('requires an IANA timezone for availability — slot times carry no offset', async () => {
+  it('requires an IANA timezone for availability: slot times carry no offset', async () => {
     const err = await makeClient()
       .searchAvailability({
         range: { start: '2026-07-20T00:00:00Z', end: '2026-07-20T23:00:00Z' },
@@ -606,7 +606,7 @@ describe('setmore wire format', () => {
       title: 'Moved',
     });
 
-    // PUT /appointments/{id} is 405 on v1 — reschedule exists only on v2.
+    // PUT /appointments/{id} is 405 on v1: reschedule exists only on v2.
     expect(seen.path).toContain('/api/v2/bookingapi/appointments/A1');
     const body = JSON.parse(seen.body);
     expect(body.start_time).toBe('2026-07-20T10:00Z');

@@ -1,7 +1,7 @@
 import { defineAdapter, unsupported } from '../adapter-kit';
 
 /**
- * Mangomint — NOT YET IMPLEMENTED. Mangomint has no public API documentation; the
+ * Mangomint, NOT YET IMPLEMENTED. Mangomint has no public API documentation; the
  * API host is live but every detail (auth, paths, fields, status enum, errors) is
  * gated behind sales/support, so a correct adapter can't be built from public sources.
  */
@@ -9,7 +9,7 @@ export type MangomintCredentials = {
   apiKey: string;
 };
 
-const NOT_IMPL = 'not yet implemented — Mangomint publishes no public API documentation';
+const NOT_IMPL = 'not yet implemented: Mangomint publishes no public API documentation';
 
 export const mangomint = defineAdapter<MangomintCredentials>({
   id: 'mangomint',
@@ -20,10 +20,28 @@ export const mangomint = defineAdapter<MangomintCredentials>({
     webhooks: false,
     idempotency: false,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: false,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: 'https://api.mangomint.com/',
   auth: () => ({}),

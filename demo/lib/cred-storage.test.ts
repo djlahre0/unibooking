@@ -9,7 +9,7 @@ import {
   storageAvailable,
 } from './cred-storage';
 
-/** Minimal in-memory Storage — vitest runs in node, where localStorage is absent. */
+/** Minimal in-memory Storage: vitest runs in node, where localStorage is absent. */
 function fakeStorage(seed: Record<string, string> = {}): Storage {
   const map = new Map(Object.entries(seed));
   return {
@@ -64,22 +64,22 @@ beforeEach(() => {
 });
 
 describe('loadState', () => {
-  it('returns empty state when nothing is stored', () => {
-    expect(loadState(s)).toEqual({ remember: false, providers: {} });
+  it('returns empty state, remembering by default, when nothing is stored', () => {
+    expect(loadState(s)).toEqual({ remember: true, providers: {} });
   });
 
   it('discards corrupt JSON rather than throwing', () => {
     const bad = fakeStorage({ [STORAGE_KEY]: '{not json' });
-    expect(loadState(bad)).toEqual({ remember: false, providers: {} });
+    expect(loadState(bad)).toEqual({ remember: true, providers: {} });
   });
 
   it('discards a structurally wrong payload', () => {
     const bad = fakeStorage({ [STORAGE_KEY]: '["an","array"]' });
-    expect(loadState(bad)).toEqual({ remember: false, providers: {} });
+    expect(loadState(bad)).toEqual({ remember: true, providers: {} });
   });
 
   it('degrades to empty state when storage throws', () => {
-    expect(loadState(hostileStorage())).toEqual({ remember: false, providers: {} });
+    expect(loadState(hostileStorage())).toEqual({ remember: true, providers: {} });
   });
 
   it('does not share a providers reference across separate empty loads', () => {
@@ -168,14 +168,37 @@ describe('saveProvider', () => {
     expect(loadState(s).providers.phorest.baseUrl).toBe('https://platform-us.phorest.com/x/');
   });
 
-  it('does not write when remember is off', () => {
-    // The opt-in is a real gate, not just a UI affordance.
+  it('saves by default, with nothing chosen yet', () => {
+    saveProvider('square', { creds: { accessToken: 'tok' }, env: 'prod' }, s);
+    expect(loadState(s).providers.square?.creds.accessToken).toBe('tok');
+  });
+
+  it('does not write once the visitor turned remember off', () => {
+    // Unticking is a real gate, not just a UI affordance.
+    setRemember(false, s);
     saveProvider('square', { creds: { accessToken: 'tok' }, env: 'prod' }, s);
     expect(loadState(s).providers.square).toBeUndefined();
   });
 
+  it('an explicit "off" survives a reload; an old unchosen false does not', () => {
+    setRemember(false, s);
+    expect(loadState(s).remember).toBe(false);
+    // Earlier versions wrote remember:false on every Clear without the visitor
+    // choosing it, so that alone must not keep saving switched off.
+    const legacy = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify({ remember: false, providers: {} }),
+    });
+    expect(loadState(legacy).remember).toBe(true);
+  });
+
+  it('clearing credentials does not turn remembering off', () => {
+    saveProvider('square', { creds: { accessToken: 'tok' }, env: 'prod' }, s);
+    clearAll(s);
+    expect(loadState(s)).toMatchObject({ remember: true, providers: {} });
+  });
+
   it('does not throw when the write itself throws', () => {
-    // remember must already be true in the *stored* state — using hostileStorage
+    // remember must already be true in the *stored* state: using hostileStorage
     // here would make getItem throw too, so loadState would report
     // remember: false and saveProvider would short-circuit before ever calling
     // write(), passing even if write()'s try/catch were deleted.
@@ -261,7 +284,7 @@ describe('setRemember', () => {
   });
 
   it('returns the resulting state', () => {
-    expect(setRemember(true, s)).toEqual({ remember: true, providers: {} });
+    expect(setRemember(true, s)).toEqual({ remember: true, providers: {}, chosen: true });
   });
 
   it('does not throw when storage throws', () => {

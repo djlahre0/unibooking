@@ -26,7 +26,10 @@
     "paths": {
       "unibooking": ["./src/index.ts"],
       "unibooking/adapters/*": ["./src/adapters/*.ts"],
-      "unibooking/webhooks/*": ["./src/webhooks/*.ts"]
+      "unibooking/webhooks/*": ["./src/webhooks/*.ts"],
+      "unibooking/connections": ["./src/connections.ts"],
+      "unibooking/oauth": ["./src/oauth/index.ts"],
+      "unibooking/oauth/*": ["./src/oauth/*.ts"]
     }
   },
   "include": ["src", "test", "examples"]

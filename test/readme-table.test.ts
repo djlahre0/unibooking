@@ -11,6 +11,7 @@ import { calendly } from '../src/adapters/calendly';
 import { wix } from '../src/adapters/wix';
 import { acuity } from '../src/adapters/acuity';
 import { bookeo } from '../src/adapters/bookeo';
+import { booker } from '../src/adapters/booker';
 import { mindbody } from '../src/adapters/mindbody';
 import { setmore } from '../src/adapters/setmore';
 import { vagaro } from '../src/adapters/vagaro';
@@ -24,7 +25,7 @@ import { boulevard } from '../src/adapters/boulevard';
  * it silently drifted from the adapters twice before this test existed. Rather
  * than re-checking it by hand, assert it against the real `capabilities` objects.
  *
- * Only the five capability columns are machine-checkable — Read/Create/Update/
+ * Only the five capability columns are machine-checkable: Read/Create/Update/
  * Cancel describe method behaviour, not a flag, so those stay a human call.
  */
 
@@ -40,6 +41,7 @@ const ROWS: Array<[string, { id: ProviderId; capabilities: Capabilities }]> = [
   ['Wix Bookings', wix],
   ['Acuity', acuity],
   ['Bookeo', bookeo],
+  ['Booker', booker],
   ['Mindbody', mindbody],
   ['Setmore', setmore],
   ['Vagaro', vagaro],
@@ -49,9 +51,9 @@ const ROWS: Array<[string, { id: ProviderId; capabilities: Capabilities }]> = [
   ['Boulevard', boulevard],
 ];
 
-// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory |
+// | Provider | Read | Create | Update | Cancel | Availability | Customers | Staff | Services | Webhooks | Catalog | Directory | Catalog RW | Directory RW | Calendars | Classes | Assign | Categories | Hours | Sync | Push | Versions |
 // Enumeration columns are appended rather than inserted so the existing indices
-// stay put — a shifted index here silently checks the wrong column.
+// stay put: a shifted index here silently checks the wrong column.
 const COLUMNS: Array<[keyof Capabilities, number]> = [
   ['availability', 4],
   ['customers', 5],
@@ -62,11 +64,19 @@ const COLUMNS: Array<[keyof Capabilities, number]> = [
   ['staffDirectory', 10],
   ['serviceCatalogWrite', 11],
   ['staffDirectoryWrite', 12],
+  ['calendarList', 13],
+  ['classCatalog', 14],
+  ['staffServiceAssignment', 15],
+  ['serviceCategories', 16],
+  ['businessHours', 17],
+  ['changeFeed', 18],
+  ['changeNotifications', 19],
+  ['versionedWrites', 20],
 ];
 
 const YES = '✅';
 const PARTIAL = '⚠️';
-const NO = '—';
+const NO = '-';
 
 function tableCells(label: string): string[] {
   const escaped = label.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
@@ -84,7 +94,7 @@ describe('README provider table matches the adapters', () => {
       const cell = cells[idx];
       expect(cell, `${label}.${key}: missing cell`).toBeDefined();
       expect([YES, PARTIAL, NO], `${label}.${key}: unexpected marker ${cell}`).toContain(cell);
-      // ⚠️ means supported with caveats — still a supported capability.
+      // ⚠️ means supported with caveats, still a supported capability.
       const claimed = cell === YES || cell === PARTIAL;
       expect(
         claimed,
@@ -96,7 +106,7 @@ describe('README provider table matches the adapters', () => {
   it('links every shipped provider except the unimplemented stub', () => {
     for (const [label] of ROWS) expect(() => tableCells(label)).not.toThrow();
     // MangoMint publishes no public API reference, so it is intentionally
-    // unlinked — but it must still appear, flagged as planned.
+    // unlinked, but it must still appear, flagged as planned.
     expect(README).toMatch(/\|\s*MangoMint\s*\|\s*🚧 Planned/);
   });
 

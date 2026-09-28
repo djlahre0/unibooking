@@ -16,7 +16,7 @@ import { hmacSha256Hex, timingSafeEqual } from '../crypto';
  * that check (it is off by default so a caller with clock skew isn't silently
  * locked out).
  *
- * Pass the EXACT raw request body — never a re-serialized object — and the exact
+ * Pass the EXACT raw request body, never a re-serialized object, and the exact
  * webhook URL you registered with Bookeo.
  */
 export interface BookeoWebhookInput {

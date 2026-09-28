@@ -1,5 +1,10 @@
 'use client';
 
+import { clearUiState, persistenceEnabled } from '../lib/ui-state';
+import { SAMPLE_KEY } from '../lib/sample/store';
+import { clearProject } from '../lib/project';
+import { clearRecords } from '../lib/record-sync';
+
 export type PersistenceControlsProps = {
   remember: boolean;
   onToggleRemember: (on: boolean) => void;
@@ -13,6 +18,21 @@ export type PersistenceControlsProps = {
 const UNAVAILABLE_NOTE_ID = 'persistence-unavailable-note';
 const SAVED_NOTE_ID = 'persistence-saved-note';
 
+/* Named what it actually does, in the order a tester loses it. clearAll()
+   empties `providers` wholesale, so this is never just the provider on
+   screen -- saying "every provider" is the difference between a warning and
+   a surprise. The second paragraph is the other half of the answer: the
+   operator's Google/Microsoft app lives in a server-side file and the
+   session lives in a cookie, so neither is touched here, and a tester who
+   doesn't know that will assume the worst and avoid the button. */
+const CLEAR_ALL_CONFIRM = [
+  'Clear everything this demo saved in this browser?',
+  '',
+  'This removes the credentials you pasted for EVERY provider, what you were doing, the demo project (staff, services, bookings, calendar links), and the sample data. You will have to enter them all again.',
+  '',
+  'Your saved Google/Microsoft sign-in setup is not affected, and this does not sign you out of My Calendar.',
+].join('\n');
+
 export default function PersistenceControls({
   remember,
   onToggleRemember,
@@ -24,14 +44,8 @@ export default function PersistenceControls({
   const describedBy = !available ? UNAVAILABLE_NOTE_ID : remember ? SAVED_NOTE_ID : undefined;
 
   return (
-    <div
-      style={{
-        marginTop: '1rem',
-        paddingTop: '0.8rem',
-        borderTop: '1px solid var(--border, #2a2a3a)',
-      }}
-    >
-      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem' }}>
+    <section className="persistence-bar" aria-label="Saved on this device">
+      <label className="persistence-label">
         <input
           type="checkbox"
           checked={remember}
@@ -41,39 +55,34 @@ export default function PersistenceControls({
         />
         Remember credentials on this device
       </label>
+      <p className="persistence-help">
+        {`On by default: what you enter for ${providerLabel} (token, ids and environment) is kept
+        in this browser, so a reload doesn't lose it. Untick to stop saving and wipe what's
+        saved, or use the buttons below.`}
+      </p>
 
       {!available && (
-        <p
-          id={UNAVAILABLE_NOTE_ID}
-          role="note"
-          style={{ fontSize: '0.75rem', color: 'var(--text-muted, #8888a0)', marginTop: '0.4rem' }}
-        >
+        <p id={UNAVAILABLE_NOTE_ID} role="note" className="persistence-note">
           This browser is blocking local storage (private mode, or disabled by policy), so
           credentials can&apos;t be remembered here. Everything else still works.
         </p>
       )}
 
       {remember && available && (
-        <div
-          id={SAVED_NOTE_ID}
-          role="note"
-          style={{
-            marginTop: '0.6rem',
-            borderRadius: '8px',
-            padding: '0.6rem 0.75rem',
-            fontSize: '0.76rem',
-            lineHeight: 1.6,
-            border: '1px solid #6b5a2f',
-            background: '#241f0f',
-            color: '#fcd34d',
-          }}
-        >
-          ⚠ <strong>Saved on this device.</strong> These credentials sit in this browser&apos;s
+        <div id={SAVED_NOTE_ID} role="note" className="persistence-warning">
+          <strong>Saved on this device.</strong> These credentials sit in this browser&apos;s
           localStorage until you clear them. Don&apos;t use this on a shared computer.
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+      {available && !persistenceEnabled() && (
+        <p role="note" className="persistence-note">
+          This browser&apos;s storage is full or unavailable, so nothing you do here will be
+          remembered after a reload. The demo keeps working for this session.
+        </p>
+      )}
+
+      <div className="persistence-actions">
         <button
           className="btn btn-sm btn-secondary"
           onClick={onClearProvider}
@@ -81,10 +90,28 @@ export default function PersistenceControls({
         >
           Clear {providerLabel}
         </button>
-        <button className="btn btn-sm btn-secondary" onClick={onClearAll} disabled={!available}>
+        <button
+          className="btn btn-sm btn-danger"
+          onClick={() => {
+            // ONE confirmation covering all three stores. The confirm lives
+            // here rather than in the caller so the wording can name
+            // everything that is actually about to go.
+            if (!confirm(CLEAR_ALL_CONFIRM)) return;
+            clearUiState();
+            try {
+              localStorage.removeItem(SAMPLE_KEY);
+            } catch {
+              // Blocked storage: there was nothing saved to clear.
+            }
+            clearProject();
+            clearRecords();
+            onClearAll();
+          }}
+          disabled={!available}
+        >
           Clear all saved
         </button>
       </div>
-    </div>
+    </section>
   );
 }

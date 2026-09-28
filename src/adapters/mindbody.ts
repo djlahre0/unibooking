@@ -1,4 +1,12 @@
-import type { AvailabilitySlot, Booking, BookingStatus, Service, Staff } from '../types';
+import type {
+  AvailabilitySlot,
+  Booking,
+  BookingStatus,
+  ClassSession,
+  ClassStatus,
+  Service,
+  Staff,
+} from '../types';
 import { asArray, asRecord, defineAdapter, probeConnection, reqString } from '../adapter-kit';
 import { UnibookingError } from '../errors';
 import { addMinutes, assertValidRange, formatWithOffset, parseOffsetMinutes } from '../time';
@@ -8,14 +16,14 @@ import { localToInstant, zoneOffsetMinutes } from '../tz';
 /**
  * Mindbody (public API v6). Auth is three headers: `Api-Key`, `SiteId`, and a
  * staff/user token as `Authorization` (obtain it via `/usertoken/issue` and pass
- * it in — this package never stores it).
+ * it in: this package never stores it).
  *
  * IMPORTANT: Mindbody returns site-LOCAL datetimes without an offset. Provide
  * either the site's IANA `timezone` (e.g. `America/Los_Angeles`, DST-correct) or
  * a fixed `utcOffset` (e.g. `-08:00`) so this adapter can produce correct
  * canonical instants; without either, times are treated as UTC. `timezone` is
- * preferred — a fixed offset is wrong for half the year in DST-observing zones.
- * Cancellation has no dedicated path — it is an action on the update endpoint
+ * preferred: a fixed offset is wrong for half the year in DST-observing zones.
+ * Cancellation has no dedicated path: it is an action on the update endpoint
  * (`updateappointment` with `Execute: 'cancel'`), which is what `cancelBooking`
  * calls. Validate endpoint shapes against a live sandbox before relying on this
  * in production.
@@ -163,7 +171,7 @@ function required(value: string | undefined, name: string): string {
 }
 
 /** Mindbody types AppointmentId as an int. `Number(id)` on a non-numeric string
- *  yields NaN, which serializes to `null` and reaches the API as "no id" — so
+ *  yields NaN, which serializes to `null` and reaches the API as "no id", so
  *  reject it here instead, and send the same numeric form on every write. */
 function appointmentId(id: string): number {
   const n = Number(id);
@@ -177,14 +185,125 @@ function appointmentId(id: string): number {
   return n;
 }
 
+// --- Classes ---------------------------------------------------------------
+//
+// `RemoveClientFromClass` identifies an enrollment by ClassId + ClientId, not by
+// the visit id the enrollment returns. `cancelBooking` takes one opaque string,
+// so the enrollment's `Booking.id` carries both, tagged so `cancelBooking` can
+// tell a class enrollment from an appointment. This is the same contract the
+// `Service.id` doc-comment states: the canonical id is whatever that provider's
+// write path accepts.
+const ENROLLMENT_PREFIX = 'class:';
+
+function enrollmentId(classId: string, clientId: string): string {
+  return `${ENROLLMENT_PREFIX}${classId}:${clientId}`;
+}
+
+/** Split a tagged enrollment id, or undefined when `id` is an appointment id. */
+function parseEnrollmentId(id: string): { classId: string; clientId: string } | undefined {
+  if (!id.startsWith(ENROLLMENT_PREFIX)) return undefined;
+  const rest = id.slice(ENROLLMENT_PREFIX.length);
+  // ClientId may itself contain a colon, so split once from the left only.
+  const cut = rest.indexOf(':');
+  if (cut <= 0 || cut === rest.length - 1) {
+    throw new UnibookingError({
+      provider: 'mindbody',
+      code: 'INVALID_INPUT',
+      message: `malformed class enrollment id: "${id}"`,
+    });
+  }
+  return { classId: rest.slice(0, cut), clientId: rest.slice(cut + 1) };
+}
+
+function classStatus(raw: Record<string, unknown>): ClassStatus {
+  if (raw.IsCanceled === true) return 'cancelled';
+  const end = raw.EndDateTime;
+  if (typeof end === 'string') {
+    const ms = Date.parse(end);
+    // Offset-less site-local strings parse as local time here, which is close
+    // enough to decide "already over": a few hours either way cannot flip a
+    // class that ended last week.
+    if (!Number.isNaN(ms) && ms < now()) return 'completed';
+  }
+  return 'scheduled';
+}
+
+function toClassSession(raw: unknown, tz: SiteTz): ClassSession {
+  const k = asRecord(raw, 'mindbody', 'class');
+  const start = toInstant(k.StartDateTime, tz);
+  const end = toInstant(k.EndDateTime, tz);
+  if (start === undefined || end === undefined) {
+    throw new UnibookingError({
+      provider: 'mindbody',
+      code: 'UPSTREAM',
+      message: 'class is missing StartDateTime/EndDateTime',
+    });
+  }
+  const description = asRecord(k.ClassDescription ?? {}, 'mindbody', 'class.ClassDescription');
+  const staff = asRecord(k.Staff ?? {}, 'mindbody', 'class.Staff');
+  const location = asRecord(k.Location ?? {}, 'mindbody', 'class.Location');
+  const capacity = num(k.MaxCapacity);
+  const booked = num(k.TotalBooked);
+  const waitlistCapacity = num(k.WebCapacity);
+  const waitlistCount = num(k.TotalBookedWaitlist);
+  const name = typeof description.Name === 'string' ? description.Name : undefined;
+  return {
+    id: reqString(String(k.Id ?? ''), 'mindbody', 'class.Id'),
+    provider: 'mindbody',
+    ...(description.Id !== undefined ? { serviceId: String(description.Id) } : {}),
+    title: name && name.trim() ? name : 'Class',
+    ...(typeof description.Description === 'string' && description.Description
+      ? { description: description.Description }
+      : {}),
+    range: { start, end },
+    ...(staff.Id !== undefined ? { staffId: String(staff.Id) } : {}),
+    ...(typeof location.Name === 'string' && location.Name ? { location: location.Name } : {}),
+    ...(capacity !== undefined ? { capacity } : {}),
+    ...(booked !== undefined ? { booked } : {}),
+    ...(capacity !== undefined && booked !== undefined
+      ? { available: Math.max(0, capacity - booked) }
+      : {}),
+    // Mindbody reports bookability directly. Prefer it over arithmetic: a class
+    // can be closed to booking while spots remain (cancelled, already started,
+    // staff-only), and `IsAvailable` is the only field that knows.
+    full:
+      k.IsAvailable === false ||
+      (capacity !== undefined && booked !== undefined ? booked >= capacity : false),
+    status: classStatus(k),
+    ...(waitlistCapacity !== undefined ? { waitlistCapacity } : {}),
+    ...(waitlistCount !== undefined ? { waitlistCount } : {}),
+    raw: k,
+  };
+}
+
+function num(v: unknown): number | undefined {
+  const n = Number(v);
+  return v === undefined || v === null || v === '' || !Number.isFinite(n) ? undefined : n;
+}
+
 const now = (): number => Date.now();
+
+/** The next `offset` page token, from Mindbody's `PaginationResponse`. Every
+ *  list endpoint pages (100 by default) and says how many results exist in
+ *  total; without this token the rest were silently unreachable: a site with
+ *  120 staff listed 100 and `getStaff` could never find the other 20. */
+function nextOffsetToken(
+  res: any,
+  pageToken: string | undefined,
+  count: number,
+): string | undefined {
+  const offset = pageToken ? Number(pageToken) : 0;
+  const total = res?.PaginationResponse?.TotalResults;
+  const next = (Number.isFinite(offset) ? offset : 0) + count;
+  return typeof total === 'number' && count > 0 && next < total ? String(next) : undefined;
+}
 
 /** Days either side of `now` covered by the `getBooking` lookup window. */
 const LOOKUP_WINDOW_DAYS = 730;
 
 /** StaffAppointments defaults StartDate to TODAY (and EndDate to StartDate), so
  *  querying by AppointmentIds alone can only ever find an appointment happening
- *  today — anything else comes back empty and looks like a 404. Send a wide
+ *  today: anything else comes back empty and looks like a 404. Send a wide
  *  window around the current instant so a lookup by id works in both directions. */
 function lookupWindow(tz: SiteTz): { StartDate: string; EndDate: string } {
   const span = LOOKUP_WINDOW_DAYS * 24 * 60 * 60 * 1000;
@@ -205,294 +324,430 @@ export const mindbody = defineAdapter<MindbodyCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: true,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: true,
+    classEnrollment: true,
+    classWaitlist: true,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({
     headers: { 'Api-Key': c.apiKey, SiteId: c.siteId, authorization: c.accessToken },
   }),
   parseError: parseMindbodyError,
-  build: (http) => ({
-    async listServices(query) {
-      const c = await http.resolve();
-      // createBooking sends serviceId as SessionTypeId, so session types -- not
-      // the retail `sale/services` catalog -- are what must be enumerated.
-      const res = await http.request(c, {
-        path: 'site/sessiontypes',
-        query: {
-          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
-          ...(query?.pageToken ? { offset: query.pageToken } : {}),
-        },
-      });
-      const services = asArray(res?.SessionTypes, 'mindbody', 'SessionTypes').map(
-        (raw): Service => {
-          const s = asRecord(raw, 'mindbody', 'sessionType');
-          const duration = Number(s.DefaultTimeLength);
-          return {
-            id: reqString(String(s.Id ?? ''), 'mindbody', 'sessionType.Id'),
-            name: reqString(String(s.Name ?? ''), 'mindbody', 'sessionType.Name'),
-            ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
-            ...(s.ProgramId !== undefined ? { categoryId: String(s.ProgramId) } : {}),
-            // SessionType carries no price and no active flag; pricing lives in
-            // separate pricing options.
-            active: true,
-            raw: s,
-          };
-        },
-      );
-      return { services };
-    },
-
-    async listStaff(query) {
-      const c = await http.resolve();
-      const res = await http.request(c, {
-        path: 'staff/staff',
-        query: {
-          ...(query?.limit !== undefined ? { limit: query.limit } : {}),
-          ...(query?.pageToken ? { offset: query.pageToken } : {}),
-        },
-      });
-      const staff = asArray(res?.StaffMembers, 'mindbody', 'StaffMembers').map((raw): Staff => {
-        const s = asRecord(raw, 'mindbody', 'staffMember');
-        const name = [s.FirstName, s.LastName].filter(Boolean).join(' ') || String(s.Name ?? '');
-        return {
-          id: reqString(String(s.Id ?? ''), 'mindbody', 'staffMember.Id'),
-          name: reqString(name, 'mindbody', 'staffMember.Name'),
-          ...(s.Email ? { email: String(s.Email) } : {}),
-          ...(s.MobilePhone ? { phone: String(s.MobilePhone) } : {}),
-          // Mindbody flags staff as isActive on some endpoints; absent means active.
-          active: s.isActive !== false && s.Active !== false,
-          raw: s,
-        };
-      });
-      return { staff };
-    },
-
-    async checkConnection() {
-      const c = await http.resolve();
-      return probeConnection('mindbody', async () => {
-        const res = await http.request(c, { path: 'site/sites' });
-        const first = asArray(res?.Sites, 'mindbody', 'Sites')[0];
-        return {
-          ...(first
-            ? {
-                account: {
-                  ...(first.Id !== undefined ? { id: String(first.Id) } : {}),
-                  ...(first.Name ? { name: String(first.Name) } : {}),
-                },
-              }
-            : {}),
-          raw: res,
-        };
-      });
-    },
-    async createBooking(input) {
-      assertValidRange(input.range, 'mindbody');
+  build: (http) => {
+    // Shared by `getClass` and `enrollInClass`. A standalone binding rather
+    // than `this.getClass` so the methods keep working when a caller
+    // destructures them off the client.
+    const fetchClass = async (id: string): Promise<ClassSession> => {
       const c = await http.resolve();
       const tz = siteTz(c);
+      // There is no get-one path; `class/classes` filters by ClassIds. The
+      // window is required for the same reason `lookupWindow` exists for
+      // appointments, without it the search only covers today.
       const res = await http.request(c, {
-        method: 'POST',
-        path: 'appointment/addappointment',
-        body: {
-          ClientId: required(input.customer?.id, 'customer.id (ClientId)'),
-          StaffId: required(input.staffId, 'staffId (StaffId)'),
-          SessionTypeId: required(input.serviceId, 'serviceId (SessionTypeId)'),
-          // LocationId is REQUIRED by AddAppointment (not optional).
-          LocationId: required(c.locationId, 'locationId (LocationId)'),
-          StartDateTime: toSiteLocal(input.range.start, tz),
-          // Without EndDateTime the staff default duration is used, silently
-          // ignoring the requested range.
-          EndDateTime: toSiteLocal(input.range.end, tz),
-          // Mindbody has no title field; `Notes` is what `toBooking` reads back
-          // as the title, so write the caller's there too.
-          ...(input.title ? { Notes: input.title } : {}),
-          ...(input.notify !== undefined ? { SendEmail: input.notify } : {}),
-          ...input.providerOptions,
-        },
+        path: 'class/classes',
+        query: { ClassIds: id, ...lookupWindow(tz) },
       });
-      return toBooking(res?.Appointment ?? res, tz);
-    },
-
-    async getBooking(id) {
-      const c = await http.resolve();
-      const tz = siteTz(c);
-      const res = await http.request(c, {
-        path: 'appointment/staffappointments',
-        query: { AppointmentIds: id, ...lookupWindow(tz) },
-      });
-      const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
-      if (appts.length === 0) {
+      const found = asArray(res?.Classes, 'mindbody', 'Classes')[0];
+      if (found === undefined) {
         throw new UnibookingError({
           provider: 'mindbody',
           code: 'NOT_FOUND',
-          message: `appointment ${id} not found`,
+          message: `class ${id} not found`,
         });
       }
-      return toBooking(appts[0], tz);
-    },
-
-    async updateBooking(id, input) {
-      if (input.range) assertValidRange(input.range, 'mindbody');
-      // UpdateAppointment only moves a status through its `Execute` actions, and
-      // cancellation is `cancelBooking`'s job — so reject a status the plain
-      // update cannot apply rather than silently dropping it.
-      if (input.status !== undefined) {
-        throw new UnibookingError({
-          provider: 'mindbody',
-          code: 'INVALID_INPUT',
-          message:
-            input.status === 'cancelled'
-              ? 'Mindbody appointment status is not writable here; use cancelBooking() to cancel'
-              : `Mindbody appointment status is not writable (cannot set "${input.status}")`,
-        });
-      }
-      const appointment = appointmentId(id);
-      const c = await http.resolve();
-      const tz = siteTz(c);
-      // Mindbody's UpdateAppointment is a POST (there is no PUT form).
-      const res = await http.request(c, {
-        method: 'POST',
-        path: 'appointment/updateappointment',
-        body: {
-          AppointmentId: appointment,
-          ...(input.range
-            ? {
-                StartDateTime: toSiteLocal(input.range.start, tz),
-                // EndDateTime defaults to the staff member's default duration,
-                // so omitting it turns every reschedule into a resize.
-                EndDateTime: toSiteLocal(input.range.end, tz),
-              }
-            : {}),
-          ...(input.staffId ? { StaffId: input.staffId } : {}),
-          ...(input.serviceId ? { SessionTypeId: input.serviceId } : {}),
-          ...(input.title !== undefined ? { Notes: input.title } : {}),
-          ...input.providerOptions,
-        },
-      });
-      return toBooking(res?.Appointment ?? res, tz);
-    },
-
-    async cancelBooking(id, options) {
-      const appointment = appointmentId(id);
-      const c = await http.resolve();
-      // There is no dedicated cancel *path*, but cancellation is a documented
-      // action on the update endpoint: `Execute` accepts confirm, unconfirm,
-      // arrive, unarrive, cancel, latecancel, complete.
-      await http.request(c, {
-        method: 'POST',
-        path: 'appointment/updateappointment',
-        body: {
-          AppointmentId: appointment,
-          Execute: 'cancel',
-          ...(options?.notify !== undefined ? { SendEmail: options.notify } : {}),
-        },
-      });
-    },
-
-    async listBookings(query) {
-      assertValidRange(query.range, 'mindbody');
-      const c = await http.resolve();
-      const tz = siteTz(c);
-      const requestedOffset = query.pageToken ? Number(query.pageToken) : 0;
-      const limit = query.limit ?? 100;
-      const res = await http.request(c, {
-        path: 'appointment/staffappointments',
-        query: {
-          // Mindbody treats these as site-local; forward the site wall clock
-          // (matching the write paths) so an offset doesn't shift the window.
-          StartDate: toSiteLocal(query.range.start, tz),
-          EndDate: toSiteLocal(query.range.end, tz),
-          StaffIds: query.staffId,
-          ClientId: query.customerId,
-          ...(c.locationId ? { LocationIds: c.locationId } : {}),
-          Offset: requestedOffset,
-          Limit: limit,
-        },
-      });
-      const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
-      const bookings = appts.map((a) => toBooking(a, tz));
-      const total = res?.PaginationResponse?.TotalResults;
-      const nextOffset = requestedOffset + bookings.length;
-      const hasMore = typeof total === 'number' && nextOffset < total && bookings.length > 0;
-      return { bookings, ...(hasMore ? { nextPageToken: String(nextOffset) } : {}) };
-    },
-
-    async searchAvailability(query): Promise<AvailabilitySlot[]> {
-      assertValidRange(query.range, 'mindbody');
-      const c = await http.resolve();
-      const tz = siteTz(c);
-      // bookableitems paginates (default limit 100). Reading only the first page
-      // silently truncated availability with no way for the caller to notice.
-      const items: unknown[] = [];
-      const PAGE = 100;
-      for (let offset = 0, page = 0; page < 50; page++, offset += PAGE) {
+      return toClassSession(found, tz);
+    };
+    return {
+      async listServices(query) {
+        const c = await http.resolve();
+        // createBooking sends serviceId as SessionTypeId, so session types -- not
+        // the retail `sale/services` catalog -- are what must be enumerated.
         const res = await http.request(c, {
-          path: 'appointment/bookableitems',
+          path: 'site/sessiontypes',
           query: {
-            SessionTypeIds: required(query.serviceId, 'serviceId (SessionTypeIds)'),
+            ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+            ...(query?.pageToken ? { offset: query.pageToken } : {}),
+          },
+        });
+        const services = asArray(res?.SessionTypes, 'mindbody', 'SessionTypes').map(
+          (raw): Service => {
+            const s = asRecord(raw, 'mindbody', 'sessionType');
+            const duration = Number(s.DefaultTimeLength);
+            return {
+              id: reqString(String(s.Id ?? ''), 'mindbody', 'sessionType.Id'),
+              name: reqString(String(s.Name ?? ''), 'mindbody', 'sessionType.Name'),
+              ...(Number.isFinite(duration) && duration > 0 ? { durationMinutes: duration } : {}),
+              ...(s.ProgramId !== undefined ? { categoryId: String(s.ProgramId) } : {}),
+              // SessionType carries no price and no active flag; pricing lives in
+              // separate pricing options.
+              active: true,
+              raw: s,
+            };
+          },
+        );
+        const next = nextOffsetToken(res, query?.pageToken, services.length);
+        return { services, ...(next ? { nextPageToken: next } : {}) };
+      },
+
+      async listClasses(query) {
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        const res = await http.request(c, {
+          path: 'class/classes',
+          query: {
+            ...(query?.range
+              ? {
+                  StartDateTime: toSiteLocal(query.range.start, tz),
+                  EndDateTime: toSiteLocal(query.range.end, tz),
+                }
+              : {}),
+            ...(query?.staffId ? { StaffIds: query.staffId } : {}),
+            ...(query?.serviceId ? { ClassDescriptionIds: query.serviceId } : {}),
+            ...(c.locationId ? { LocationIds: c.locationId } : {}),
+            ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+            ...(query?.pageToken ? { offset: query.pageToken } : {}),
+          },
+        });
+        const classes = asArray(res?.Classes, 'mindbody', 'Classes').map((raw) =>
+          toClassSession(raw, tz),
+        );
+        const next = nextOffsetToken(res, query?.pageToken, classes.length);
+        return { classes, ...(next ? { nextPageToken: next } : {}) };
+      },
+
+      getClass: fetchClass,
+
+      async enrollInClass(input) {
+        const c = await http.resolve();
+        const clientId = required(input.customer?.id, 'customer.id (ClientId)');
+        // Check capacity before writing. Mindbody will happily waitlist a client
+        // when `Waitlist: true`, so without this a caller who did not ask for a
+        // waitlist could silently get one; and when they did ask, we must fail
+        // loudly rather than enroll them into a class that is closed outright.
+        const session = await fetchClass(input.classId);
+        if (session.status === 'cancelled') {
+          throw new UnibookingError({
+            provider: 'mindbody',
+            code: 'CONFLICT',
+            message: `class ${input.classId} is cancelled`,
+          });
+        }
+        const waitlist = session.full && input.allowWaitlist === true;
+        if (session.full && !waitlist) {
+          throw new UnibookingError({
+            provider: 'mindbody',
+            code: 'CONFLICT',
+            message: `class ${input.classId} is full; pass allowWaitlist to join the waitlist`,
+          });
+        }
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'class/addclienttoclass',
+          body: {
+            ClientId: clientId,
+            ClassId: Number(input.classId),
+            Waitlist: waitlist,
+            ...(input.notes ? { Notes: input.notes } : {}),
+          },
+        });
+        const raw = res?.Class ?? res;
+        return {
+          id: enrollmentId(input.classId, clientId),
+          provider: 'mindbody',
+          title: session.title,
+          range: session.range,
+          classId: input.classId,
+          customer: { ...input.customer, id: clientId },
+          ...(session.serviceId !== undefined ? { serviceId: session.serviceId } : {}),
+          ...(session.staffId !== undefined ? { staffId: session.staffId } : {}),
+          status: waitlist ? 'waitlisted' : 'confirmed',
+          raw,
+        };
+      },
+
+      async listStaff(query) {
+        const c = await http.resolve();
+        const res = await http.request(c, {
+          path: 'staff/staff',
+          query: {
+            ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+            ...(query?.pageToken ? { offset: query.pageToken } : {}),
+          },
+        });
+        const staff = asArray(res?.StaffMembers, 'mindbody', 'StaffMembers').map((raw): Staff => {
+          const s = asRecord(raw, 'mindbody', 'staffMember');
+          const name = [s.FirstName, s.LastName].filter(Boolean).join(' ') || String(s.Name ?? '');
+          return {
+            id: reqString(String(s.Id ?? ''), 'mindbody', 'staffMember.Id'),
+            name: reqString(name, 'mindbody', 'staffMember.Name'),
+            ...(s.Email ? { email: String(s.Email) } : {}),
+            ...(s.MobilePhone ? { phone: String(s.MobilePhone) } : {}),
+            // Mindbody flags staff as isActive on some endpoints; absent means active.
+            active: s.isActive !== false && s.Active !== false,
+            raw: s,
+          };
+        });
+        const next = nextOffsetToken(res, query?.pageToken, staff.length);
+        return { staff, ...(next ? { nextPageToken: next } : {}) };
+      },
+
+      async checkConnection() {
+        const c = await http.resolve();
+        return probeConnection('mindbody', async () => {
+          const res = await http.request(c, { path: 'site/sites' });
+          const first = asArray(res?.Sites, 'mindbody', 'Sites')[0];
+          return {
+            ...(first
+              ? {
+                  account: {
+                    ...(first.Id !== undefined ? { id: String(first.Id) } : {}),
+                    ...(first.Name ? { name: String(first.Name) } : {}),
+                  },
+                }
+              : {}),
+            raw: res,
+          };
+        });
+      },
+      async createBooking(input) {
+        assertValidRange(input.range, 'mindbody');
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'appointment/addappointment',
+          body: {
+            ClientId: required(input.customer?.id, 'customer.id (ClientId)'),
+            StaffId: required(input.staffId, 'staffId (StaffId)'),
+            SessionTypeId: required(input.serviceId, 'serviceId (SessionTypeId)'),
+            // LocationId is REQUIRED by AddAppointment (not optional).
+            LocationId: required(c.locationId, 'locationId (LocationId)'),
+            StartDateTime: toSiteLocal(input.range.start, tz),
+            // Without EndDateTime the staff default duration is used, silently
+            // ignoring the requested range.
+            EndDateTime: toSiteLocal(input.range.end, tz),
+            // Mindbody has no title field; `Notes` is what `toBooking` reads back
+            // as the title, so write the caller's there too.
+            ...(input.title ? { Notes: input.title } : {}),
+            ...(input.notify !== undefined ? { SendEmail: input.notify } : {}),
+            ...input.providerOptions,
+          },
+        });
+        return toBooking(res?.Appointment ?? res, tz);
+      },
+
+      async getBooking(id) {
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        const res = await http.request(c, {
+          path: 'appointment/staffappointments',
+          query: { AppointmentIds: id, ...lookupWindow(tz) },
+        });
+        const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
+        if (appts.length === 0) {
+          throw new UnibookingError({
+            provider: 'mindbody',
+            code: 'NOT_FOUND',
+            message: `appointment ${id} not found`,
+          });
+        }
+        return toBooking(appts[0], tz);
+      },
+
+      async updateBooking(id, input) {
+        if (input.range) assertValidRange(input.range, 'mindbody');
+        // UpdateAppointment only moves a status through its `Execute` actions, and
+        // cancellation is `cancelBooking`'s job, so reject a status the plain
+        // update cannot apply rather than silently dropping it.
+        if (input.status !== undefined) {
+          throw new UnibookingError({
+            provider: 'mindbody',
+            code: 'INVALID_INPUT',
+            message:
+              input.status === 'cancelled'
+                ? 'Mindbody appointment status is not writable here; use cancelBooking() to cancel'
+                : `Mindbody appointment status is not writable (cannot set "${input.status}")`,
+          });
+        }
+        const appointment = appointmentId(id);
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        // Mindbody's UpdateAppointment is a POST (there is no PUT form).
+        const res = await http.request(c, {
+          method: 'POST',
+          path: 'appointment/updateappointment',
+          body: {
+            AppointmentId: appointment,
+            ...(input.range
+              ? {
+                  StartDateTime: toSiteLocal(input.range.start, tz),
+                  // EndDateTime defaults to the staff member's default duration,
+                  // so omitting it turns every reschedule into a resize.
+                  EndDateTime: toSiteLocal(input.range.end, tz),
+                }
+              : {}),
+            ...(input.staffId ? { StaffId: input.staffId } : {}),
+            ...(input.serviceId ? { SessionTypeId: input.serviceId } : {}),
+            ...(input.title !== undefined ? { Notes: input.title } : {}),
+            ...input.providerOptions,
+          },
+        });
+        return toBooking(res?.Appointment ?? res, tz);
+      },
+
+      async cancelBooking(id, options) {
+        const enrollment = parseEnrollmentId(id);
+        if (enrollment) {
+          // A class enrollment is removed by ClassId + ClientId, not by visit id.
+          const cc = await http.resolve();
+          await http.request(cc, {
+            method: 'POST',
+            path: 'class/removeclientfromclass',
+            body: {
+              ClassId: Number(enrollment.classId),
+              ClientId: enrollment.clientId,
+              ...(options?.notify !== undefined ? { SendEmail: options.notify } : {}),
+            },
+          });
+          return;
+        }
+        const appointment = appointmentId(id);
+        const c = await http.resolve();
+        // There is no dedicated cancel *path*, but cancellation is a documented
+        // action on the update endpoint: `Execute` accepts confirm, unconfirm,
+        // arrive, unarrive, cancel, latecancel, complete.
+        await http.request(c, {
+          method: 'POST',
+          path: 'appointment/updateappointment',
+          body: {
+            AppointmentId: appointment,
+            Execute: 'cancel',
+            ...(options?.notify !== undefined ? { SendEmail: options.notify } : {}),
+          },
+        });
+      },
+
+      async listBookings(query) {
+        assertValidRange(query.range, 'mindbody');
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        const requestedOffset = query.pageToken ? Number(query.pageToken) : 0;
+        const limit = query.limit ?? 100;
+        const res = await http.request(c, {
+          path: 'appointment/staffappointments',
+          query: {
+            // Mindbody treats these as site-local; forward the site wall clock
+            // (matching the write paths) so an offset doesn't shift the window.
             StartDate: toSiteLocal(query.range.start, tz),
             EndDate: toSiteLocal(query.range.end, tz),
             StaffIds: query.staffId,
+            ClientId: query.customerId,
             ...(c.locationId ? { LocationIds: c.locationId } : {}),
-            limit: PAGE,
-            offset,
+            Offset: requestedOffset,
+            Limit: limit,
           },
         });
-        const batch = asArray(res?.Availabilities, 'mindbody', 'Availabilities');
-        items.push(...batch);
+        const appts = asArray(res?.Appointments, 'mindbody', 'Appointments');
+        const bookings = appts.map((a) => toBooking(a, tz));
         const total = res?.PaginationResponse?.TotalResults;
-        const done =
-          batch.length === 0 ||
-          batch.length < PAGE ||
-          (typeof total === 'number' && offset + batch.length >= total);
-        if (done) break;
-      }
-      // An `Availabilities[]` entry is a staff availability WINDOW, not a slot —
-      // emitting it verbatim turned a 9-to-5 shift into a single 8h "slot". Slice
-      // it into bookable starts using the requested duration, else the session
-      // type's default length. With neither we keep the window: it is coarse but
-      // still truthful, and throwing would hide real availability.
-      //
-      // A returned window is any shift that OVERLAPS the query, so it routinely
-      // extends past it on both sides — a 12:00–14:00 question came back as the
-      // whole 09:00–17:00 shift. The slices below stay anchored to the shift's
-      // own start (that is where the real bookable grid begins, and re-anchoring
-      // on `range.start` would invent starts the provider never offers); the
-      // range is applied afterwards, by `slotsWithinRange`.
-      const winStart = Date.parse(query.range.start);
-      const winEnd = Date.parse(query.range.end);
-      const out = items.flatMap((a: any): AvailabilitySlot[] => {
-        const start = toInstant(a.StartDateTime, tz);
-        const end = toInstant(a.EndDateTime, tz);
-        if (start === undefined || end === undefined) return [];
-        const staff = a.Staff?.Id !== undefined ? { staffId: String(a.Staff.Id) } : {};
-        const size = query.durationMinutes ?? a.SessionType?.DefaultTimeLength;
-        if (typeof size !== 'number' || size <= 0) {
-          // No slot size, so there is no grid to filter against. Report the
-          // shift's overlap with the query instead of the whole shift — still
-          // coarse, still truthful, but never wider than what was asked for.
-          const from = Date.parse(start) < winStart ? query.range.start : start;
-          const to = Date.parse(end) > winEnd ? query.range.end : end;
-          if (Date.parse(to) <= Date.parse(from)) return [];
-          return [{ start: from, end: to, ...staff, raw: a }];
+        const nextOffset = requestedOffset + bookings.length;
+        const hasMore = typeof total === 'number' && nextOffset < total && bookings.length > 0;
+        return { bookings, ...(hasMore ? { nextPageToken: String(nextOffset) } : {}) };
+      },
+
+      async searchAvailability(query): Promise<AvailabilitySlot[]> {
+        assertValidRange(query.range, 'mindbody');
+        const c = await http.resolve();
+        const tz = siteTz(c);
+        // bookableitems paginates (default limit 100). Reading only the first page
+        // silently truncated availability with no way for the caller to notice.
+        const items: unknown[] = [];
+        const PAGE = 100;
+        for (let offset = 0, page = 0; page < 50; page++, offset += PAGE) {
+          const res = await http.request(c, {
+            path: 'appointment/bookableitems',
+            query: {
+              SessionTypeIds: required(query.serviceId, 'serviceId (SessionTypeIds)'),
+              StartDate: toSiteLocal(query.range.start, tz),
+              EndDate: toSiteLocal(query.range.end, tz),
+              StaffIds: query.staffId,
+              ...(c.locationId ? { LocationIds: c.locationId } : {}),
+              limit: PAGE,
+              offset,
+            },
+          });
+          const batch = asArray(res?.Availabilities, 'mindbody', 'Availabilities');
+          items.push(...batch);
+          const total = res?.PaginationResponse?.TotalResults;
+          const done =
+            batch.length === 0 ||
+            batch.length < PAGE ||
+            (typeof total === 'number' && offset + batch.length >= total);
+          if (done) break;
         }
-        // BookableEndDateTime is "the time of day that the last appointment can
-        // start" — a start cap, not an end cap.
-        const lastStart = toInstant(a.BookableEndDateTime, tz);
-        const latestStart = lastStart !== undefined ? Date.parse(lastStart) : Infinity;
-        const windowEnd = Date.parse(end);
-        const slots: AvailabilitySlot[] = [];
-        for (let s = start; Date.parse(s) <= latestStart; s = addMinutes(s, size)) {
-          const slotEnd = addMinutes(s, size);
-          if (Date.parse(slotEnd) > windowEnd) break;
-          slots.push({ start: s, end: slotEnd, ...staff, raw: a });
-        }
-        return slots;
-      });
-      return slotsWithinRange(out, query.range);
-    },
-  }),
+        // An `Availabilities[]` entry is a staff availability WINDOW, not a slot:
+        // emitting it verbatim turned a 9-to-5 shift into a single 8h "slot". Slice
+        // it into bookable starts using the requested duration, else the session
+        // type's default length. With neither we keep the window: it is coarse but
+        // still truthful, and throwing would hide real availability.
+        //
+        // A returned window is any shift that OVERLAPS the query, so it routinely
+        // extends past it on both sides: a 12:00–14:00 question came back as the
+        // whole 09:00–17:00 shift. The slices below stay anchored to the shift's
+        // own start (that is where the real bookable grid begins, and re-anchoring
+        // on `range.start` would invent starts the provider never offers); the
+        // range is applied afterwards, by `slotsWithinRange`.
+        const winStart = Date.parse(query.range.start);
+        const winEnd = Date.parse(query.range.end);
+        const out = items.flatMap((a: any): AvailabilitySlot[] => {
+          const start = toInstant(a.StartDateTime, tz);
+          const end = toInstant(a.EndDateTime, tz);
+          if (start === undefined || end === undefined) return [];
+          const staff = a.Staff?.Id !== undefined ? { staffId: String(a.Staff.Id) } : {};
+          const size = query.durationMinutes ?? a.SessionType?.DefaultTimeLength;
+          if (typeof size !== 'number' || size <= 0) {
+            // No slot size, so there is no grid to filter against. Report the
+            // shift's overlap with the query instead of the whole shift, still
+            // coarse, still truthful, but never wider than what was asked for.
+            const from = Date.parse(start) < winStart ? query.range.start : start;
+            const to = Date.parse(end) > winEnd ? query.range.end : end;
+            if (Date.parse(to) <= Date.parse(from)) return [];
+            return [{ start: from, end: to, ...staff, raw: a }];
+          }
+          // BookableEndDateTime is "the time of day that the last appointment can
+          // start": a start cap, not an end cap.
+          const lastStart = toInstant(a.BookableEndDateTime, tz);
+          const latestStart = lastStart !== undefined ? Date.parse(lastStart) : Infinity;
+          const windowEnd = Date.parse(end);
+          const slots: AvailabilitySlot[] = [];
+          for (let s = start; Date.parse(s) <= latestStart; s = addMinutes(s, size)) {
+            const slotEnd = addMinutes(s, size);
+            if (Date.parse(slotEnd) > windowEnd) break;
+            slots.push({ start: s, end: slotEnd, ...staff, raw: a });
+          }
+          return slots;
+        });
+        return slotsWithinRange(out, query.range);
+      },
+    };
+  },
 });

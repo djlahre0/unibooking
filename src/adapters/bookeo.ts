@@ -13,7 +13,7 @@ import { assertValidRange } from '../time';
 /**
  * Bookeo. Auth is an API key + secret key passed as query params. Products are
  * services. Booking pagination is modeled (see `listBookings`); availability
- * paging and the async availability operations are not — pass extra fields
+ * paging and the async availability operations are not: pass extra fields
  * through `providerOptions` when needed.
  */
 export type BookeoCredentials = {
@@ -50,7 +50,7 @@ function toBooking(raw: unknown): Booking {
     ...(b.productId ? { serviceId: String(b.productId) } : {}),
     ...(customer ? { customer } : {}),
     // `noShow` rides on top of `canceled`, and `accepted: false` is a booking
-    // still awaiting approval — check the most specific flag first, or the
+    // still awaiting approval: check the most specific flag first, or the
     // narrower statuses become unreachable on real data.
     status:
       b.noShow === true
@@ -92,7 +92,7 @@ function requireProduct(serviceId: string | undefined): string {
 }
 
 /** `PeopleNumber` requires a `peopleCategoryId`, and the valid ids are defined
- *  per account/product — there is no safe default to invent, and a number-only
+ *  per account/product, there is no safe default to invent, and a number-only
  *  block is rejected upstream. Make the caller supply it. */
 function requireParticipants(providerOptions: Record<string, unknown> | undefined): void {
   if (providerOptions?.participants !== undefined) return;
@@ -101,7 +101,7 @@ function requireParticipants(providerOptions: Record<string, unknown> | undefine
     code: 'INVALID_INPUT',
     message:
       'Bookeo requires providerOptions.participants with a peopleCategoryId, e.g. ' +
-      '{ numbers: [{ peopleCategoryId: "Cadults", number: 2 }] } — ' +
+      '{ numbers: [{ peopleCategoryId: "Cadults", number: 2 }] }: ' +
       'list the ids for your account via GET /settings/peoplecategories',
   });
 }
@@ -135,10 +135,28 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     webhooks: true,
     idempotency: false,
     customers: false,
+    customerDirectory: false,
+    customerWrite: false,
+    customerDelete: false,
     serviceCatalog: true,
     staffDirectory: false,
     serviceCatalogWrite: false,
     staffDirectoryWrite: false,
+    staffDeactivate: false,
+    staffDelete: false,
+    serviceDelete: false,
+    calendarList: false,
+    calendarWrite: false,
+    staffServiceAssignment: false,
+    staffServiceAssignmentWrite: false,
+    serviceCategories: false,
+    businessHours: false,
+    classCatalog: false,
+    classEnrollment: false,
+    classWaitlist: false,
+    changeFeed: false,
+    changeNotifications: false,
+    versionedWrites: false,
   },
   baseUrl: BASE,
   auth: (c) => ({ query: { apiKey: c.apiKey, secretKey: c.secretKey } }),
@@ -226,7 +244,7 @@ export const bookeo = defineAdapter<BookeoCredentials>({
     async updateBooking(id, input) {
       if (input.range) assertValidRange(input.range, 'bookeo');
       // Bookeo cancels via DELETE, and its PUT is not a documented partial-update
-      // contract — so only the times are safe to send. Reject the rest rather
+      // contract, so only the times are safe to send. Reject the rest rather
       // than accept a field this call will quietly discard.
       if (input.status !== undefined) {
         throw new UnibookingError({
@@ -339,7 +357,7 @@ export const bookeo = defineAdapter<BookeoCredentials>({
       const slots = asArray(res?.data, 'bookeo', 'availability.slots');
       return slots.flatMap((s: any) => {
         if (typeof s.startTime !== 'string' || typeof s.endTime !== 'string') return [];
-        // `raw` carries eventId — required to actually book a fixed-product slot.
+        // `raw` carries eventId: required to actually book a fixed-product slot.
         return [{ start: s.startTime, end: s.endTime, raw: s }];
       });
     },
@@ -348,7 +366,7 @@ export const bookeo = defineAdapter<BookeoCredentials>({
 
 function nameFields(name: string): { firstName: string; lastName?: string } {
   const [first, ...rest] = name.trim().split(/\s+/);
-  // Omit lastName rather than sending '' — an explicit empty surname overwrites
+  // Omit lastName rather than sending '': an explicit empty surname overwrites
   // whatever the customer record already has.
   return { firstName: first ?? name, ...(rest.length ? { lastName: rest.join(' ') } : {}) };
 }
